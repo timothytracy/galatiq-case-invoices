@@ -38,6 +38,7 @@ from models import (
 from parsers import parse_file
 from pipeline import audit
 from pipeline.approval import reasoning_output_failed
+from scripts.eval import print_bad_reasoning
 from rules import (
     APPROVAL_THRESHOLD_USD,
     CRITIQUE_CAP,
@@ -505,7 +506,19 @@ def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
     assert status(result) == "paid"
     assert result["agent_error"] is None
     assert result["attempts"] == [
-        {"attempt": 1, "error_type": "bad_reasoning", "backoff_seconds": 1.0, "retryable": True}
+        {
+            "attempt": 1,
+            "error_type": "bad_reasoning",
+            "backoff_seconds": 1.0,
+            "retryable": True,
+            "matched": "invalid input",
+            "conclusion": "Invalid input - unable to process or approve.",
+            "risks_considered": [
+                "The provided input string is not valid JSON and cannot be parsed.",
+                "The task requires returning only a JSON object matching the specified schema.",
+                "No vendor, total, currency, evidence, or findings data can be reliably extracted.",
+            ],
+        }
     ]
     assert result["decision"].reasoning.conclusion == "The checks passed."
     assert "payment" in stages(result)
@@ -526,6 +539,71 @@ def test_bad_reasoning_every_time_is_unpaid_manual_review(tmp_path, db_path):
     assert result["agent_error"] == f"agent step failed after {max_attempts} attempts: bad_reasoning"
     assert "payment" not in stages(result)
     assert stages(result)[-1] == "reject_log"
+
+
+def test_bad_reasoning_attempt_log_contains_the_rejected_text(tmp_path, db_path, capsys):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA 2\nTotal: 500.00\n")
+    long_conclusion = "A" * 600
+    long_risk = "B" * 600
+    phrase_reply = json.dumps(
+        {
+            "risks_considered": ["The input is unparseable.", long_risk],
+            "conclusion": long_conclusion,
+        }
+    )
+    handler, counts = scripted(extraction(), reasons=[phrase_reply, _GOOD_REASON])
+    result = run(path, db_path, handler, clock=FakeClock())
+    assert counts["reason"] == 2
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+    assert result["decision"].reasoning.conclusion == "The checks passed."
+
+    entry = result["attempts"][0]
+    assert entry["attempt"] == 1
+    assert entry["error_type"] == "bad_reasoning"
+    assert entry["matched"] == "unparseable"
+    assert entry["conclusion"] == "A" * 500
+    assert entry["risks_considered"] == ["The input is unparseable.", "B" * 500]
+    assert set(entry) == {
+        "attempt",
+        "error_type",
+        "backoff_seconds",
+        "retryable",
+        "matched",
+        "conclusion",
+        "risks_considered",
+    }
+    approval = next(row for row in result["logs"] if row["stage"] == "approval")
+    assert approval["invoice_file"] == "clean.txt"
+    assert approval["result"]["attempts"][0] == entry
+
+    contradict = json.dumps(
+        {
+            "risks_considered": ["stock is fine"],
+            "conclusion": "Unable to approve this invoice.",
+        }
+    )
+    handler, _counts = scripted(extraction(), reasons=[contradict])
+    stopped = run(path, db_path, handler, clock=FakeClock(), max_attempts=1)
+    assert stopped["outcome"] == "manual_review"
+    assert status(stopped) == "not_paid"
+    rejected = stopped["attempts"][0]
+    assert rejected["matched"] == "approve-contradiction"
+    assert rejected["conclusion"] == "Unable to approve this invoice."
+    assert rejected["risks_considered"] == ["stock is fine"]
+    stopped_log = next(row for row in stopped["logs"] if row["stage"] == "approval")
+    assert stopped_log["result"]["attempts"][0] == rejected
+
+    print_bad_reasoning(path.name, [rejected])
+    printed = capsys.readouterr().out
+    assert '"matched": "unparseable"' in printed
+    assert "A" * 500 in printed
+    line = (
+        f"{path.name}\tbad_reasoning\tattempt=1\tmatched=approve-contradiction\t"
+        f"conclusion=Unable to approve this invoice.\t"
+        f"risks={json.dumps(['stock is fine'])}"
+    )
+    assert line in printed
 
 
 def test_reasoning_output_failed_covers_refusal_and_normal_wording():

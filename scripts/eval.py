@@ -23,6 +23,21 @@ LABELS = ROOT / "data" / "labels.json"
 SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 
 
+def print_bad_reasoning(filename: str, attempts: list) -> None:
+    """One readable line per rejected wording: invoice, attempt, phrase, text."""
+
+    for row in attempts:
+        if row.get("error_type") != "bad_reasoning":
+            continue
+        print(
+            f"{filename}\tbad_reasoning\tattempt={row.get('attempt')}\t"
+            f"matched={row.get('matched')}\t"
+            f"conclusion={row.get('conclusion')}\t"
+            f"risks={json.dumps(row.get('risks_considered'))}",
+            flush=True,
+        )
+
+
 def main() -> int:
     try:
         GrokClient()
@@ -44,6 +59,7 @@ def main() -> int:
     correct = 0
     for path in files:
         result = run_invoice(path, db_path, GrokClient())
+        print_bad_reasoning(path.name, result.get("attempts") or [])
         actual = result.get("outcome")
         expected = labels.get(path.name)
         ok = actual == expected

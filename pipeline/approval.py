@@ -3,7 +3,8 @@
 rules_applied and evidence are filled here from the real findings, so the
 model cannot invent the facts. A second pass after critique appends the
 previous reasoning. A reply that says the input is invalid, or that refuses
-an approve decision, is a failed attempt and is retried.
+an approve decision, is a failed attempt and is retried. That attempt's
+log keeps the conclusion, the risks, and the phrase that matched.
 """
 
 import json
@@ -13,6 +14,9 @@ from llm_client import AgentStepFailed, LLMError, call_with_retries
 from models import ApprovalDecision, ApprovalReasoning, PipelineState, ReasoningDraft
 from pipeline.stage_log import _stopped, stage_log
 from rules import PASSED_RULES, evidence_lines
+
+# Long enough to read the flagged sentence. Short enough to keep a log line small.
+_LOG_LIMIT = 500
 
 
 def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> dict:
@@ -29,8 +33,18 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     decision_name = "manual_review" if state.critique_stricter else "approve"
 
     def reject_bad_wording(draft: ReasoningDraft) -> None:
-        if reasoning_output_failed(draft, decision_name):
-            raise LLMError("bad_reasoning", True)
+        matched = reasoning_rejection(draft, decision_name)
+        if matched is None:
+            return
+        raise LLMError(
+            "bad_reasoning",
+            True,
+            log={
+                "matched": matched,
+                "conclusion": draft.conclusion[:_LOG_LIMIT],
+                "risks_considered": [item[:_LOG_LIMIT] for item in draft.risks_considered],
+            },
+        )
 
     try:
         draft = call_with_retries(
@@ -102,17 +116,31 @@ _NOT_APPROVE = (
 )
 
 
-def reasoning_output_failed(draft: ReasoningDraft, decision: str) -> bool:
-    """True when the wording refuses the input or contradicts an approve decision."""
+def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
+    """The phrase that tripped the detector, or None when the wording is fine.
+
+    A not-approve phrase on an approve decision is 'approve-contradiction'.
+    Any other hit is the matched phrase. Conclusion is checked first, then
+    each risk, and phrases are checked in list order.
+    """
 
     phrases = _BAD_INPUT
     if decision == "approve":
         phrases = _BAD_INPUT + _NOT_APPROVE
     for text in (draft.conclusion, *draft.risks_considered):
         lowered = text.lower()
-        if any(phrase in lowered for phrase in phrases):
-            return True
-    return False
+        for phrase in phrases:
+            if phrase in lowered:
+                if phrase in _NOT_APPROVE:
+                    return "approve-contradiction"
+                return phrase
+    return None
+
+
+def reasoning_output_failed(draft: ReasoningDraft, decision: str) -> bool:
+    """True when the wording refuses the input or contradicts an approve decision."""
+
+    return reasoning_rejection(draft, decision) is not None
 
 
 def _reason_messages(state, invoice, report, evidence) -> list[dict]:
