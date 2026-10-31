@@ -1,0 +1,221 @@
+{
+  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "not_wired_into_eval": true,
+  "invoices": {
+    "data/invoices/invoice_1001.txt": {
+      "invoice_number": "INV-1001",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 10 (stock 15) and WidgetB 5 (stock 10) are in stock and the lines add up to the $5,000.00 total.",
+      "next_step": "None (paid).",
+      "source": "README"
+    },
+    "data/invoices/invoice_1002.txt": {
+      "invoice_number": "1002",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [],
+      "reason": "GadgetX quantity 20 is more than the 5 in stock; the line math ($15,000.00) is correct.",
+      "next_step": "Resend for the quantity in stock, or amend the PO.",
+      "source": "README"
+    },
+    "data/invoices/invoice_1003.txt": {
+      "invoice_number": "INV-1003",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [
+        "Fraud signal: urgency pressure (\"URGENT - Pay immediately to avoid penalties!!!\", terms Immediate)",
+        "Fraud signal: wire transfer (\"Wire transfer preferred\")",
+        "Due date reads \"yesterday\", not a date"
+      ],
+      "reason": "FakeItem quantity 100 is more than the 0 in stock; the invoice also pushes urgent payment and a wire transfer, which are recorded as fraud signals.",
+      "next_step": "Resend for the quantity in stock, or amend the PO. (Fraud signals recorded for the reviewer.)",
+      "source": "README + captain's call"
+    },
+    "data/invoices/invoice_1004.json": {
+      "invoice_number": "INV-1004",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [
+        "Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address"
+      ],
+      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the captain's call.",
+      "next_step": "None (paid).",
+      "source": "README + captain's call"
+    },
+    "data/invoices/invoice_1004_revised.json": {
+      "invoice_number": "INV-1004 (R1)",
+      "outcome": "HOLD",
+      "primary_reason": "Revised invoice",
+      "warnings": [
+        "Same vendor address as 1004 (noted, not held, on 1004)"
+      ],
+      "reason": "This is revision R1 of INV-1004 (\"Revised invoice - additional items added per PO amendment\"); stock (GadgetX 5 of 5) and math ($5,500.00 + 8% = $5,940.00) pass.",
+      "next_step": "Confirm it replaces the original INV-1004 and that the original was not paid.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1005.json": {
+      "invoice_number": "INV-1005",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [
+        "Hold finding recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500)"
+      ],
+      "reason": "GadgetX quantity 8 is more than the 5 in stock; the vendor address is also non-commercial, recorded as a finding.",
+      "next_step": "Resend for the quantity in stock, or amend the PO. (Address finding recorded for the reviewer.)",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1006.csv": {
+      "invoice_number": "INV-1006",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 5 and WidgetB 3 are in stock and the lines add up to the $2,750.00 total.",
+      "next_step": "None (paid).",
+      "source": "README"
+    },
+    "data/invoices/invoice_1007.csv": {
+      "invoice_number": "INV-1007",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [
+        "Also a reject finding: total mismatch (14,750.00 + 885.00 = 15,635.00, printed 15,525.00)"
+      ],
+      "reason": "WidgetA 20 (stock 15) and WidgetB 15 (stock 10) are short, and the printed total is $110.00 less than subtotal plus tax.",
+      "next_step": "Resend for the quantity in stock, or amend the PO. Also resend with corrected totals.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1008.txt": {
+      "invoice_number": "INV-1008",
+      "outcome": "REJECT",
+      "primary_reason": "Unknown item",
+      "warnings": [
+        "Total $9,900.00 is within 2% under the $10,000 threshold"
+      ],
+      "reason": "SuperGizmo and MegaSprocket are not in the inventory database.",
+      "next_step": "Resend with the correct item names (no confident \"likely meant\" match).",
+      "source": "README"
+    },
+    "data/invoices/invoice_1009.json": {
+      "invoice_number": "INV-1009",
+      "outcome": "REJECT",
+      "primary_reason": "Quantity that is zero, negative, or not a number",
+      "warnings": [
+        "Also reject findings: missing vendor, missing due date, line sum -250.00 vs printed subtotal 1,000.00, negative total -250.00 not labeled a credit note"
+      ],
+      "reason": "WidgetA quantity is -5, the vendor and due date are blank, and the totals do not reconcile.",
+      "next_step": "Resend with corrected quantities, the missing vendor and due date filled in, and corrected totals.",
+      "source": "README"
+    },
+    "data/invoices/invoice_1010.txt": {
+      "invoice_number": "INV-1010",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [
+        "Descriptor on item name: \"WidgetA (rush order)\" matched as WidgetA, \"rush order\" kept as a note",
+        "Unit price $300.00 for the rush WidgetA line differs from $250.00 (see reference-price note)"
+      ],
+      "reason": "WidgetA 12 in total (8 + 4 rush, stock 15), WidgetB 4 and GadgetX 2 are in stock, and $6,700.00 + $335.00 tax + $150.00 shipping = $7,185.00.",
+      "next_step": "None (paid).",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1011.pdf": {
+      "invoice_number": "INV-1011",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 6 and WidgetB 3 are in stock and the lines add up to the $3,000.00 total (no subtotal or tax lines printed).",
+      "next_step": "None (paid).",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1011.txt": {
+      "invoice_number": "INV-1011",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 6 and WidgetB 3 are in stock and the lines add up to the $3,000.00 total (subtotal and 0% tax printed).",
+      "next_step": "None (paid).",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1012.pdf": {
+      "invoice_number": "INV 1012",
+      "outcome": "HOLD",
+      "primary_reason": "Renamed vendor",
+      "warnings": [
+        "Total $9,975.00 is within 2% under the $10,000 threshold",
+        "OCR fixes \"2O26\" and \"$3,500.O0\" allowed because the math reconciles ($9,500.00 + 5% = $9,975.00)"
+      ],
+      "reason": "The vendor is \"QuickShip Distributers (formerly FastShip Ltd.)\"; stock (Widget A 12, WidgetB 7, Gadget X 4) and math pass.",
+      "next_step": "Verify it is the same company.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1012.txt": {
+      "invoice_number": "INV 1012",
+      "outcome": "HOLD",
+      "primary_reason": "Renamed vendor",
+      "warnings": [
+        "Total $9,975.00 is within 2% under the $10,000 threshold",
+        "OCR fixes \"2O26\" and \"$3,500.O0\" allowed because the math reconciles ($9,500.00 + 5% = $9,975.00)"
+      ],
+      "reason": "The vendor is \"QuickShip Distributers (formerly FastShip Ltd.)\"; stock (Widget A 12, WidgetB 7, Gadget X 4) and math pass.",
+      "next_step": "Verify it is the same company.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1013.json": {
+      "invoice_number": "INV-1013",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [
+        "Also a reject finding: total mismatch (21,040.00 + 1,472.80 = 22,512.80, printed 22,562.80)",
+        "Unit prices $240.00 and $480.00 (volume discount) differ from $250.00 and $500.00 (see reference-price note)"
+      ],
+      "reason": "Summed per item, WidgetA 22 (stock 15), WidgetB 18 (stock 10) and GadgetX 9 (stock 5) are short, and the printed total is $50.00 more than subtotal plus tax.",
+      "next_step": "Resend for the quantity in stock, or amend the PO. Also resend with corrected totals.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1013.pdf": {
+      "invoice_number": "INV-1013",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [
+        "Also a reject finding: total mismatch (21,040.00 + 1,472.80 = 22,512.80, printed 22,562.80)",
+        "Unit prices $240.00 and $480.00 (volume discount) differ from $250.00 and $500.00 (see reference-price note)"
+      ],
+      "reason": "Summed per item, WidgetA 22 (stock 15), WidgetB 18 (stock 10) and GadgetX 9 (stock 5) are short, and the printed total is $50.00 more than subtotal plus tax.",
+      "next_step": "Resend for the quantity in stock, or amend the PO. Also resend with corrected totals.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1014.xml": {
+      "invoice_number": "INV-1014",
+      "outcome": "HOLD",
+      "primary_reason": "Non-USD currency",
+      "warnings": [],
+      "reason": "The invoice is in EUR (4,125.00); stock and math pass, but non-USD is never paid or converted.",
+      "next_step": "Finance confirms the currency and amount. Nothing is converted and nothing is paid.",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1015.csv": {
+      "invoice_number": "INV-1015",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 10, WidgetB 5 and GadgetX 2 are in stock and the lines add up to the $6,500.00 total.",
+      "next_step": "None (paid).",
+      "source": "Policy judgment"
+    },
+    "data/invoices/invoice_1016.json": {
+      "invoice_number": "INV-1016",
+      "outcome": "REJECT",
+      "primary_reason": "Unknown item",
+      "warnings": [],
+      "reason": "WidgetC is not in the inventory database; the other lines and the $3,233.00 total are correct.",
+      "next_step": "Resend with the correct item name (no confident \"likely meant\" match).",
+      "source": "README"
+    }
+  },
+  "notes": [
+    "The policy names findings (for example 'Stock shortfall') but defines no reason-code identifiers. The primary reason column uses the policy's finding names.",
+    "No reference price table exists (inventory.db holds only item and stock). Price warnings compare against the price the other sample invoices use for the item ($250 WidgetA, $500 WidgetB, $750 GadgetX). They change no outcome."
+  ]
+}
