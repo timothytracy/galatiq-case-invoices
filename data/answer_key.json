@@ -35,26 +35,21 @@
     },
     "data/invoices/invoice_1004.json": {
       "invoice_number": "INV-1004",
-      "outcome": "NEEDS CAPTAIN CALL",
-      "primary_reason": "Non-commercial vendor address? (else none)",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
       "warnings": [
         "Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address"
       ],
-      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00), but the vendor address looks residential, which the policy treats as a Hold.",
-      "next_step": "If HOLD: verify the vendor. If APPROVE: none.",
-      "source": "README (passes validation); outcome is a policy judgment",
-      "captain_call": {
-        "option_a": "APPROVE: README says 1004 passes validation, and the address is an ordinary-looking street address. Nothing in the repo can check whether it is commercial.",
-        "option_b": "HOLD (non-commercial vendor address): 742 Evergreen Terrace is a famous fictional home address, and the policy says a non-commercial address is held so someone can verify the vendor.",
-        "recommendation": "APPROVE. Keep the README's clean trio (1001, 1004, 1006) and record the address as a note. Making it a Hold would rest on pop-culture knowledge that no deterministic check can repeat."
-      }
+      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the captain's call.",
+      "next_step": "None (paid).",
+      "source": "README + captain's call"
     },
     "data/invoices/invoice_1004_revised.json": {
       "invoice_number": "INV-1004 (R1)",
       "outcome": "HOLD",
       "primary_reason": "Revised invoice",
       "warnings": [
-        "Same vendor address as 1004 (see captain call on 1004)"
+        "Same vendor address as 1004 (noted, not held, on 1004)"
       ],
       "reason": "This is revision R1 of INV-1004 (\"Revised invoice - additional items added per PO amendment\"); stock (GadgetX 5 of 5) and math ($5,500.00 + 8% = $5,940.00) pass.",
       "next_step": "Confirm it replaces the original INV-1004 and that the original was not paid.",

@@ -76,6 +76,8 @@ We keep the README's groupings:
 
 The captain's call: **1003 is a Reject (stock shortfall).** Its urgency and wire-transfer signals are recorded as findings and named in the reason.
 
+The captain's call: **a non-commercial address flagged on an otherwise clean invoice that the README lists as passing is noted, not held.** So 1004 (742 Evergreen Terrace) is an Approve with the address recorded as a warning.
+
 ## Known follow-ups
 
 - The agents must be given today's date. Dates in April 2026 are not in the future, but the audit has treated them as if they were.

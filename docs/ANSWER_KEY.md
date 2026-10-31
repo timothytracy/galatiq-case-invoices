@@ -17,8 +17,8 @@ Notes on the columns:
 | invoice_1001.txt | INV-1001 | APPROVE | None (all checks pass) | None | WidgetA 10 (stock 15) and WidgetB 5 (stock 10) are in stock and the lines add up to the $5,000.00 total. | None (paid). | README |
 | invoice_1002.txt | 1002 | REJECT | Stock shortfall | None | GadgetX quantity 20 is more than the 5 in stock; the line math ($15,000.00) is correct. | Resend for the quantity in stock, or amend the PO. | README |
 | invoice_1003.txt | INV-1003 | REJECT | Stock shortfall | Fraud signal: urgency pressure ("URGENT - Pay immediately to avoid penalties!!!", terms Immediate); Fraud signal: wire transfer ("Wire transfer preferred"); Due date reads "yesterday", not a date | FakeItem quantity 100 is more than the 0 in stock; the invoice also pushes urgent payment and a wire transfer, which are recorded as fraud signals. | Resend for the quantity in stock, or amend the PO. (Fraud signals recorded for the reviewer.) | README + captain's call |
-| invoice_1004.json | INV-1004 | NEEDS CAPTAIN CALL | Non-commercial vendor address? (else none) | Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address | Stock and math pass ($1,750.00 + 8% tax = $1,890.00), but the vendor address looks residential, which the policy treats as a Hold. | If HOLD: verify the vendor. If APPROVE: none. | README (passes validation); outcome is a policy judgment |
-| invoice_1004_revised.json | INV-1004 (R1) | HOLD | Revised invoice | Same vendor address as 1004 (see captain call on 1004) | This is revision R1 of INV-1004 ("Revised invoice - additional items added per PO amendment"); stock (GadgetX 5 of 5) and math ($5,500.00 + 8% = $5,940.00) pass. | Confirm it replaces the original INV-1004 and that the original was not paid. | Policy judgment |
+| invoice_1004.json | INV-1004 | APPROVE | None (all checks pass) | Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address | Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the captain's call. | None (paid). | README + captain's call |
+| invoice_1004_revised.json | INV-1004 (R1) | HOLD | Revised invoice | Same vendor address as 1004 (noted, not held, on 1004) | This is revision R1 of INV-1004 ("Revised invoice - additional items added per PO amendment"); stock (GadgetX 5 of 5) and math ($5,500.00 + 8% = $5,940.00) pass. | Confirm it replaces the original INV-1004 and that the original was not paid. | Policy judgment |
 | invoice_1005.json | INV-1005 | REJECT | Stock shortfall | Hold finding recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500) | GadgetX quantity 8 is more than the 5 in stock; the vendor address is also non-commercial, recorded as a finding. | Resend for the quantity in stock, or amend the PO. (Address finding recorded for the reviewer.) | Policy judgment |
 | invoice_1006.csv | INV-1006 | APPROVE | None (all checks pass) | None | WidgetA 5 and WidgetB 3 are in stock and the lines add up to the $2,750.00 total. | None (paid). | README |
 | invoice_1007.csv | INV-1007 | REJECT | Stock shortfall | Also a reject finding: total mismatch (14,750.00 + 885.00 = 15,635.00, printed 15,525.00) | WidgetA 20 (stock 15) and WidgetB 15 (stock 10) are short, and the printed total is $110.00 less than subtotal plus tax. | Resend for the quantity in stock, or amend the PO. Also resend with corrected totals. | Policy judgment |
@@ -35,18 +35,11 @@ Notes on the columns:
 | invoice_1015.csv | INV-1015 | APPROVE | None (all checks pass) | None | WidgetA 10, WidgetB 5 and GadgetX 2 are in stock and the lines add up to the $6,500.00 total. | None (paid). | Policy judgment |
 | invoice_1016.json | INV-1016 | REJECT | Unknown item | None | WidgetC is not in the inventory database; the other lines and the $3,233.00 total are correct. | Resend with the correct item name (no confident "likely meant" match). | README |
 
-**Counts:** APPROVE 6, REJECT 9, HOLD 4, NEEDS CAPTAIN CALL 1 (20 files).
+**Counts:** APPROVE 7, REJECT 9, HOLD 4 (20 files).
 
 The "clean invoice over $10,000 with a new bank account" Hold doesn't apply to any file here, because no sample invoice has bank or remittance details. Every invoice over $10,000 (1002, 1003, 1005, 1007, 1013) is rejected for stock, so the critique-over-$10K follow-up changes no outcome in this set.
-
-## Needs captain call
-
-**invoice_1004.json: is 742 Evergreen Terrace a non-commercial vendor address?**
-- Option A, APPROVE: The README says 1004 passes validation. Stock and math pass, and the address looks like an ordinary street address. Nothing in the repo can check whether an address is commercial.
-- Option B, HOLD (Non-commercial vendor address, so someone verifies the vendor): 742 Evergreen Terrace, Springfield is a famous fictional home address.
-- **Recommendation: APPROVE**, with the address recorded as a note. This keeps the README's clean trio (1001, 1004, 1006) as approvals. A Hold here would depend on pop-culture knowledge that no deterministic check can repeat.
-- invoice_1004_revised.json is a HOLD either way, because it is a revised invoice.
 
 ## Resolved by the captain
 
 - **1003:** REJECT for a stock shortfall (FM-GC13 precedence rule). The urgency and wire-transfer signals are recorded as findings. This replaces the earlier HOLD call.
+- **1004:** APPROVE. A non-commercial address on an otherwise clean invoice that the README lists as passing is noted, not held (FM-GC14). invoice_1004_revised.json stays a HOLD because it is a revised invoice.
