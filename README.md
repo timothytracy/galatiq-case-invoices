@@ -120,7 +120,7 @@ Submit your solution as a link to a public GitHub repository — GitHub only (gi
 
 ## This prototype
 
-The brief above is unchanged. The runnable system is a LangGraph workflow. Stage logic is ordinary Python in `pipeline.py`. `graph.py` only wires the nodes and edges. The diagram is `docs/graph.md`.
+The brief above is unchanged. The runnable system is a LangGraph workflow. Stage logic is ordinary Python, one module per stage under `pipeline/`. Each invoice format has its own reader under `parsers/`. `graph.py` only wires the nodes and edges. The diagram is `docs/graph.md`.
 
 ```bash
 python3 -m venv .venv

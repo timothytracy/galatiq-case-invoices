@@ -6,7 +6,7 @@ The README above the implementation notes is the brief. This file is the set of 
 
 The workflow is a short state machine with two cycles. Critique returns to approval. The audit can return to ingestion with field notes. LangGraph's `StateGraph` is that picture: each stage is a node, and a conditional edge is a routing rule. The library also draws the diagram in `docs/graph.md`.
 
-CrewAI and AutoGen add role-play around the same steps. This flow does not need that. A hand-rolled loop would hide the same routes inside `if` statements. The stage bodies stay ordinary functions in `pipeline.py`. `graph.py` only wires nodes and edges.
+CrewAI and AutoGen add role-play around the same steps. This flow does not need that. A hand-rolled loop would hide the same routes inside `if` statements. The stage bodies stay ordinary functions, one module per stage under `pipeline/`. Each invoice format has its own reader under `parsers/`. `graph.py` only wires nodes and edges.
 
 ## How to run
 

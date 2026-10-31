@@ -1,4 +1,4 @@
-"""LangGraph wiring. Stage behavior lives in pipeline.py.
+"""LangGraph wiring. Stage behavior lives in the pipeline package.
 
 Cycles: critique goes back to approval, and the audit can go back to ingestion.
 Conditional edges are the routing rules. This file does not decide an invoice.
