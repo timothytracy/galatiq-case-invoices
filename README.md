@@ -117,3 +117,19 @@ Output should include structured logs and results.
 ## Submission
 
 Submit your solution as a link to a public GitHub repository — GitHub only (github.com).
+
+## Phase 1 implementation
+
+The brief above is unchanged. This branch adds a runnable foundation. Validation and approval are stubs; they do not apply the answer key.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+python3 setup_db.py
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt --offline
+python3 main.py --invoice_path=data/invoices --offline
+```
+
+Use `python3` when `python` is not on PATH. `--invoice_path` also accepts a folder. `--batch` does the same. `main.py` creates `inventory.db` if it is missing. Stage logs are written under `logs/`.
+
+Decisions, including the stock snapshot, duplicate, and EUR rules, are in `docs/DECISIONS.md`. Expected outcomes for all 20 sample invoices are in `data/labels.json`. The Grok client reads `XAI_API_KEY` and calls `https://api.x.ai/v1` (see `.env.example`). With no key, or with `--offline`, the pipeline stays local.
