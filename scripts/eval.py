@@ -17,6 +17,7 @@ from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from llm_client import GrokClient, MissingAPIKey  # noqa: E402
 from main import payment_status  # noqa: E402
+from rules import result_codes  # noqa: E402
 
 INVOICES = ROOT / "data" / "invoices"
 LABELS = ROOT / "data" / "labels.json"
@@ -64,9 +65,10 @@ def main() -> int:
         expected = labels.get(path.name)
         ok = actual == expected
         correct += int(ok)
+        codes = ",".join(result_codes(result))
         print(
             f"{path.name}\toutcome={actual}\texpected={expected}\t"
-            f"payment={payment_status(result)}\t{'ok' if ok else 'MISS'}",
+            f"payment={payment_status(result)}\tcodes={codes}\t{'ok' if ok else 'MISS'}",
             flush=True,
         )
     print(f"score {correct}/{len(files)}", flush=True)

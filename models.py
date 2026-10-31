@@ -72,14 +72,34 @@ class ExtractedInvoice(BaseModel):
 
 
 class Finding(BaseModel):
-    """One rule observation. code stays an open string."""
+    """One problem a stage raised.
+
+    code is a stable short name such as STOCK_SHORTFALL.
+    severity is info, warning, or blocking.
+    item is the line or invoice field this finding is about, or null.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     code: str
     message: str
-    severity: Literal["error", "warning"] = "error"
+    severity: Literal["info", "warning", "blocking"] = "blocking"
     item: str | None = None
+
+
+class PaymentAuthorization(BaseModel):
+    """Sign-off produced only by a PASS audit. Payment refuses to run without one.
+
+    key is one-time for this process. The audit builds it from the invoice
+    file path and a hash of the file text.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vendor: str
+    amount: Decimal
+    currency: str
+    key: str = Field(min_length=1)
 
 
 class ValidationReport(BaseModel):
@@ -250,3 +270,5 @@ class PipelineState(BaseModel):
     logs: list[dict] = Field(default_factory=list)
     attempts: list[dict] = Field(default_factory=list)
     agent_error: str | None = None
+    findings: list[Finding] = Field(default_factory=list)
+    authorization: PaymentAuthorization | None = None

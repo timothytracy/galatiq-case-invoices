@@ -1,0 +1,25 @@
+# Business rules for one invoice run. rules.py loads this at startup.
+# A missing key, a wrong type, or a nonsense value stops the process
+# and names the key. Numbers below are the behavior this prototype ships with.
+# XAI_MAX_ATTEMPTS still overrides model_retry_attempts for a single run.
+
+# A total in an allowed currency above this goes to critique, then back to approval.
+scrutiny_threshold = "10000"
+
+# Currencies that can be paid. Anything else is manual review. Nothing is converted.
+allowed_currencies = ["USD"]
+
+# Header fields that must be present. line_items means the lines list.
+required_fields = ["vendor", "due_date", "line_items", "total"]
+
+# Printed money may differ from the recomputed amount by at most this much.
+money_tolerance = "0.01"
+
+# Critique passes before the graph leaves the loop. 1 means one pass.
+critique_cap = 1
+
+# Send-backs the audit may use. The next one escalates to manual review.
+audit_send_back_cap = 3
+
+# Model calls per step. After this the invoice is manual review and is not paid.
+model_retry_attempts = 5

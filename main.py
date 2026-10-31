@@ -15,6 +15,7 @@ from pathlib import Path
 from db import create_database
 from graph import run_invoice
 from llm_client import GrokClient, MissingAPIKey
+from rules import result_codes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,6 +62,7 @@ def _result_line(path: Path, result: dict) -> dict:
         "file": path.name,
         "outcome": result.get("outcome"),
         "payment_status": payment_status(result),
+        "codes": result_codes(result),
     }
 
 

@@ -1,14 +1,23 @@
 """Critique may only make an approval stricter. The graph caps the loop at one round."""
 
 from llm_client import AgentStepFailed, call_with_retries
-from models import ApprovalDecision, CritiqueDraft, PipelineState
-from pipeline.stage_log import _stopped, stage_log
+from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
+from pipeline.stage_log import _stopped, agent_finding, stage_log
 
 
 def critique(state: PipelineState, llm, clock, rng, max_attempts: int) -> dict:
     decision = state.decision
     if decision is None:
-        return _stopped(state, "reject", "Critique had no decision.", "critique", [], agent_error=None)
+        reason = "Critique had no decision."
+        return _stopped(
+            state,
+            "reject",
+            reason,
+            "critique",
+            [],
+            agent_error=None,
+            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
+        )
     step_attempts: list[dict] = []
     try:
         draft = call_with_retries(
@@ -21,7 +30,15 @@ def critique(state: PipelineState, llm, clock, rng, max_attempts: int) -> dict:
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return _stopped(state, "manual_review", str(exc), "critique", step_attempts, agent_error=str(exc))
+        return _stopped(
+            state,
+            "manual_review",
+            str(exc),
+            "critique",
+            step_attempts,
+            agent_error=str(exc),
+            finding=agent_finding(exc),
+        )
 
     stricter = bool(draft.stricter) and decision.decision == "approve"
     result = {

@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from llm_client import SleepClock, read_max_attempts
 from models import PipelineState
 from pipeline import approve, audit, critique, ingest, payment, reject_log, validate
-from rules import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP
+from rules import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, POLICY
 
 RECURSION_LIMIT = 80
 
@@ -95,7 +95,7 @@ def route_after_approval(state: PipelineState) -> str:
         return "reject_log"
     total = state.invoice.total
     over = (
-        state.invoice.currency == "USD"
+        state.invoice.currency in POLICY.allowed_currencies
         and total is not None
         and total > APPROVAL_THRESHOLD_USD
         and state.critique_rounds < CRITIQUE_CAP

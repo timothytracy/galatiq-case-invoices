@@ -27,11 +27,17 @@ python3 scripts/export_graph.py
 
 ## Caps
 
+The numbers live in `policy.toml`. `rules.py` loads that file at startup and rejects a missing key, a wrong type, or a nonsense value (negative cap, empty currency list) with an error that names the key.
+
 | Knob | Value | Where |
 |---|---|---|
-| Critique | 1 | `CRITIQUE_CAP` in `rules.py`. A USD total over 10000 goes approval → critique → approval, then to audit. |
-| Audit send-back | 3 | `MAX_SEND_BACKS`. The fourth send-back verdict escalates to manual review. |
-| Model attempts | 5 | `DEFAULT_MAX_ATTEMPTS`, override with `XAI_MAX_ATTEMPTS`. |
+| Scrutiny threshold | 10000 | `scrutiny_threshold`. A total in an allowed currency over this goes approval → critique → approval, then to audit. |
+| Allowed currencies | USD | `allowed_currencies`. Anything else is manual review. No conversion. |
+| Required fields | vendor, due date, line items, total | `required_fields`. |
+| Money tolerance | 0.01 | `money_tolerance`. |
+| Critique | 1 | `critique_cap`. |
+| Audit send-back | 3 | `audit_send_back_cap`. The next send-back verdict escalates to manual review. |
+| Model attempts | 5 | `model_retry_attempts`. `XAI_MAX_ATTEMPTS` still overrides one run. |
 | Backoff | 1, 2, 4, 8, 16 seconds plus up to 25% jitter | `BACKOFF_SECONDS` in `llm_client.py`. |
 | Schema repair | 2 tries inside one attempt | `SCHEMA_REPAIR_LIMIT`. The second try is the repair. |
 
@@ -41,6 +47,7 @@ There is no durable work list and no extra database table. When the attempts are
 
 Python decides. The model writes.
 
+- Every problem a stage raises is a `Finding` (`code`, `message`, `severity`, `item`). `outcome_from_findings` is the one place that turns that list into an outcome: a blocking reject-class code rejects, a manual-review-class code holds, and neither approves. Reject wins when both are present. The sample label text is still the finding messages in that same order.
 - Validation sums quantities per item and compares them to the fixed snapshot. `quantity > stock` fails. `quantity == stock` passes. Approving an invoice does not change stock. The README table says INV-1001, INV-1004, and INV-1006 all pass, and WidgetA on those three is 10 + 3 + 5 = 18, which is more than 15, so the stock balance cannot be decrementing.
 - Line math is recomputed. Printed line amounts, the subtotal, and subtotal + tax + shipping must match within 0.01.
 - Currency other than USD is manual review. The message is `non-USD currency (EUR), manual review required`, with the code that was actually found. `€`, `EUR`, `euro`, and `euros` count, in any case, as do currency fields in JSON, XML, and CSV. A missing currency on a document with `$` amounts is USD. Nothing is converted.
@@ -53,7 +60,7 @@ The reasoning object on the decision has `rules_applied`, `evidence`, `risks_con
 
 ## Known limitations / cut scope
 
-Duplicates are not detected. Each invoice is evaluated independently, with no memory of other files or earlier runs. A second copy of the same bill can be approved on its own. In production, check a payments ledger before paying.
+Duplicates are not detected across files. Each invoice is evaluated independently. Payment will not run twice for the same audit key inside one process (an in-memory set). A second copy of the same bill is a different file path, so it can still be approved on its own. In production, check a persistent payments ledger before paying.
 
 The revision marker on `invoice_1004_revised.json` is read and then ignored. There is no invoice-number memory.
 

@@ -11,8 +11,8 @@ import json
 
 from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
-from models import ApprovalDecision, ApprovalReasoning, PipelineState, ReasoningDraft
-from pipeline.stage_log import _stopped, stage_log
+from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
+from pipeline.stage_log import _stopped, agent_finding, stage_log
 from rules import PASSED_RULES, evidence_lines
 
 # Long enough to read the flagged sentence. Short enough to keep a log line small.
@@ -25,7 +25,16 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     invoice = state.invoice
     report = state.validation
     if invoice is None or report is None:
-        return _stopped(state, "reject", "Approval had no invoice.", "approval", [], agent_error=None)
+        reason = "Approval had no invoice."
+        return _stopped(
+            state,
+            "reject",
+            reason,
+            "approval",
+            [],
+            agent_error=None,
+            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
+        )
 
     stock = dict(load_stock(db_path))
     step_attempts: list[dict] = []
@@ -58,7 +67,15 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
             check=reject_bad_wording,
         )
     except AgentStepFailed as exc:
-        return _stopped(state, "manual_review", str(exc), "approval", step_attempts, agent_error=str(exc))
+        return _stopped(
+            state,
+            "manual_review",
+            str(exc),
+            "approval",
+            step_attempts,
+            agent_error=str(exc),
+            finding=agent_finding(exc),
+        )
     risks = list(draft.risks_considered)
     for concern in state.critique_concerns:
         line = f"Critique concern: {concern}"
@@ -166,6 +183,7 @@ def _reason_messages(state, invoice, report, evidence) -> list[dict]:
                 "TASK reason\n"
                 "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
                 "and conclusion (string). The decision is already fixed by the rules. "
+                "The user message is a valid JSON object of invoice facts. "
                 "Cite only the evidence you are given. Return JSON only."
             ),
         },
@@ -173,7 +191,11 @@ def _reason_messages(state, invoice, report, evidence) -> list[dict]:
             "role": "user",
             "content": "\n".join(
                 part
-                for part in (json.dumps(payload), prior, concerns)
+                for part in (
+                    "Invoice facts (a valid JSON object):\n" + json.dumps(payload),
+                    prior,
+                    concerns,
+                )
                 if part
             ),
         },

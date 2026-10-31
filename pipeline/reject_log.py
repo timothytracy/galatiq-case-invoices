@@ -3,6 +3,7 @@
 from models import PaymentRecord, PipelineState
 from pipeline.decisions import _decision_from_validation, _failure_decision, _tighten
 from pipeline.stage_log import stage_log
+from rules import finding_codes
 
 
 def reject_log(state: PipelineState) -> dict:
@@ -31,6 +32,7 @@ def reject_log(state: PipelineState) -> dict:
         "reason": reason,
         "decision": decision.model_dump(mode="json"),
         "payment": record.model_dump(mode="json"),
+        "codes": finding_codes(state.findings),
     }
     return {
         "outcome": outcome,

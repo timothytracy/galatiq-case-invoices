@@ -4,23 +4,33 @@ The model returns PASS, SEND_BACK, or ESCALATE. Python recomputes the hard
 rules and keeps whichever result is stricter.
 """
 
+import hashlib
 import json
 import re
 from decimal import Decimal
 
 from db import load_stock
 from llm_client import AgentStepFailed, call_with_retries
-from models import ApprovalDecision, AuditDraft, PipelineState
+from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
-from pipeline.stage_log import _stopped, stage_log
-from rules import HARD_REJECT, MAX_SEND_BACKS, assess, show_money
+from pipeline.stage_log import _stopped, agent_finding, stage_log
+from rules import MAX_SEND_BACKS, REJECT_CODES, assess, finding_codes, show_money
 
 
 def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> dict:
     invoice = state.invoice
     decision = state.decision
     if invoice is None or decision is None:
-        return _stopped(state, "manual_review", "Audit had no decision.", "audit", [], agent_error=state.agent_error)
+        reason = "Audit had no decision."
+        return _stopped(
+            state,
+            "manual_review",
+            reason,
+            "audit",
+            [],
+            agent_error=state.agent_error,
+            finding=Finding(code="AGENT_FAILED", message=reason, severity="warning"),
+        )
 
     step_attempts: list[dict] = []
     try:
@@ -34,7 +44,15 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return _stopped(state, "manual_review", str(exc), "audit", step_attempts, agent_error=str(exc))
+        return _stopped(
+            state,
+            "manual_review",
+            str(exc),
+            "audit",
+            step_attempts,
+            agent_error=str(exc),
+            finding=agent_finding(exc),
+        )
 
     stock = dict(load_stock(db_path))
     fresh = assess(invoice, state.raw_text, stock)
@@ -42,6 +60,18 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
     new_decision = decision
     if guarded["verdict"] != "SEND_BACK" and guarded["outcome"] not in (None, decision.decision):
         new_decision = _tighten(decision, guarded["outcome"], guarded["conclusion"], guarded["evidence"])
+
+    findings = list(state.findings) or list(fresh.findings)
+    extra = _audit_finding(guarded, findings)
+    if extra is not None:
+        findings = findings + [extra]
+    if guarded["verdict"] == "SEND_BACK":
+        kept = []
+    else:
+        kept = findings
+    authorization = None
+    if guarded["verdict"] == "PASS" and guarded["outcome"] == "approve":
+        authorization = issue_authorization(state)
 
     result = {
         "model_verdict": draft.verdict,
@@ -51,10 +81,13 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
         "notes": draft.notes,
         "attempts": step_attempts,
         "decision": new_decision.model_dump(mode="json"),
+        "codes": finding_codes(findings),
     }
     update = {
         "audit_verdict": guarded["verdict"],
         "decision": new_decision,
+        "findings": kept,
+        "authorization": authorization,
         "attempts": state.attempts + step_attempts,
         "agent_error": None,
         "logs": state.logs + [stage_log(state.filename, "audit", result)],
@@ -70,6 +103,44 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
     else:
         update["outcome"] = guarded["outcome"]
     return update
+
+
+def authorization_key(invoice_path: str, content: str) -> str:
+    """One-time key: the invoice file plus a hash of its text."""
+
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return f"{invoice_path}:{digest}"
+
+
+def issue_authorization(state: PipelineState) -> PaymentAuthorization | None:
+    """Build the payment sign-off. Only a PASS audit calls this."""
+
+    invoice = state.invoice
+    if invoice is None or not invoice.vendor or invoice.total is None:
+        return None
+    return PaymentAuthorization(
+        vendor=invoice.vendor,
+        amount=invoice.total,
+        currency=invoice.currency,
+        key=authorization_key(state.invoice_path, state.raw_text),
+    )
+
+
+def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
+    """A hold the audit itself added, when the rules did not already record one."""
+
+    if guarded["verdict"] != "ESCALATE" or guarded["outcome"] != "manual_review":
+        return None
+    if any(finding.code in {"NON_USD", "VENDOR_RENAMED", "FRAUD_SIGNAL"} for finding in findings):
+        return None
+    authored = {
+        "Audit send-back cap reached. Manual review, no payment.",
+        "Critique concerns were not addressed.",
+    }
+    message = guarded["conclusion"]
+    if message not in authored:
+        message = "Audit escalated the invoice to manual review."
+    return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
 
 
 def _audit_messages(state, invoice, decision) -> list[dict]:
@@ -138,9 +209,9 @@ def _whole_number_in_text(whole: str, raw: str) -> bool:
 def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
     """Apply the audit checks. The result is never looser than the rules or the model."""
 
-    hard = [finding for finding in findings if finding.code in HARD_REJECT]
-    non_usd = [finding for finding in findings if finding.code == "non_usd"]
-    fraud = [finding for finding in findings if finding.code == "fraud_signal"]
+    hard = [finding for finding in findings if finding.code in REJECT_CODES]
+    non_usd = [finding for finding in findings if finding.code == "NON_USD"]
+    fraud = [finding for finding in findings if finding.code in {"FRAUD_SIGNAL", "VENDOR_RENAMED"}]
     text_notes = []
     if state.invoice is not None and state.invoice.total is not None:
         if not amount_in_text(state.invoice.total, state.raw_text or ""):
