@@ -18,7 +18,7 @@
                   SUBTOTAL:        $6,OOO.OO
                   TAX (0%):            $0.OO
                   SHIPPING:          $15O.OO
-                  TOTAL:           $6,15O.OO
+                  TOTAL:           $6,150.00
 
   Notes: Deliver to dock lB. The mark
          before B is the digit one.
