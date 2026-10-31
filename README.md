@@ -117,3 +117,29 @@ Output should include structured logs and results.
 ## Submission
 
 Submit your solution as a link to a public GitHub repository — GitHub only (github.com).
+
+## This prototype
+
+The brief above is unchanged. The runnable system is a LangGraph workflow. Stage logic is ordinary Python in `pipeline.py`. `graph.py` only wires the nodes and edges. The diagram is `docs/graph.md`.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+# set XAI_API_KEY in .env
+python3 setup_db.py
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt
+python3 scripts/eval.py
+```
+
+Use `python3` when `python` is not on PATH. `--invoice_path` is one invoice file. The process prints a JSON log for each stage and saves the same records under `logs/`. A missing `XAI_API_KEY` exits non-zero before any invoice is processed. The model is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the OpenAI SDK at `https://api.x.ai/v1`.
+
+`main.py` creates `inventory.db` only when the file is missing. The workflow then opens it read-only. The four README seed rows are unchanged. `scripts/eval.py` runs each of the 20 sample invoices through a new graph and prints the score against `data/labels.json`.
+
+Hard rules are Python: stock (summed per item, equal to stock passes, the snapshot does not decrease), line math within 0.01, and currency. Any non-USD invoice is manual review, with no conversion. A USD total over 10000 goes through one critique pass and back to approval. The audit can send the extraction back at most 3 times, then it escalates. Critique and audit can only make a decision stricter. Model calls retry in memory on timeout, 429, 5xx, network errors, and JSON that is still invalid after the schema-repair loop (backoff 1, 2, 4, 8, 16 seconds, 5 attempts by default). A failed agent step is manual review and is not paid.
+
+Decisions are in `docs/DECISIONS.md`.
+
+## Known limitations / cut scope
+
+Duplicates are not detected. Each invoice is evaluated independently, with no memory of other files or earlier runs. A second copy of the same bill can be approved on its own. In production, check a payments ledger before paying.
