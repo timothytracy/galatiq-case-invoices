@@ -505,7 +505,19 @@ def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
     assert status(result) == "paid"
     assert result["agent_error"] is None
     assert result["attempts"] == [
-        {"attempt": 1, "error_type": "bad_reasoning", "backoff_seconds": 1.0, "retryable": True}
+        {
+            "attempt": 1,
+            "error_type": "bad_reasoning",
+            "backoff_seconds": 1.0,
+            "retryable": True,
+            "matched": "invalid input",
+            "conclusion": "Invalid input - unable to process or approve.",
+            "risks_considered": [
+                "The provided input string is not valid JSON and cannot be parsed.",
+                "The task requires returning only a JSON object matching the specified schema.",
+                "No vendor, total, currency, evidence, or findings data can be reliably extracted.",
+            ],
+        }
     ]
     assert result["decision"].reasoning.conclusion == "The checks passed."
     assert "payment" in stages(result)

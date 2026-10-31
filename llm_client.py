@@ -34,12 +34,24 @@ class MissingAPIKey(RuntimeError):
 
 
 class LLMError(Exception):
-    """One failed model call, already classified."""
+    """One failed model call, already classified.
 
-    def __init__(self, error_type: str, retryable: bool, message: str = "") -> None:
+    log, when set, is copied onto the attempt record. Approval puts the
+    rejected conclusion, the risks, and the matched phrase there.
+    """
+
+    def __init__(
+        self,
+        error_type: str,
+        retryable: bool,
+        message: str = "",
+        *,
+        log: dict | None = None,
+    ) -> None:
         super().__init__(message or error_type)
         self.error_type = error_type
         self.retryable = retryable
+        self.log = {} if log is None else log
 
 
 class AgentStepFailed(Exception):
@@ -194,6 +206,7 @@ def call_with_retries(
                 "backoff_seconds": delay,
                 "retryable": exc.retryable,
             }
+            entry.update(exc.log)
             attempt_log.append(entry)
             print(json.dumps({"record": "attempt", **entry}), flush=True)
             if give_up:
