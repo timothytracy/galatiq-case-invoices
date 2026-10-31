@@ -57,6 +57,7 @@ Item names are matched exactly, after normalizing only case, spaces, and hyphens
 
 ## Ground rules
 
+- **Precedence: Reject over Hold over Approve.** If any Reject condition applies, the outcome is Reject, even when fraud signals or other Hold conditions are also present. Those signals are still recorded as findings and mentioned in the reason, so a reviewer sees them.
 - **The LLM reads and flags; code decides.** The same findings always give the same outcome.
 - **Each invoice is judged on its own.** Processing order never changes a result.
 - **OCR number fixes are allowed only if the math reconciles.** For example, an O read as a 0 in an amount or date is fixed only when the lines and totals add up afterwards.
@@ -73,7 +74,7 @@ We keep the README's groupings:
 - 1009 is a data-integrity problem.
 - 1001, 1004, and 1006 pass validation.
 
-The captain's call: **1003 (urgency plus wire transfer) is a Hold, not a Reject.**
+The captain's call: **1003 is a Reject (stock shortfall).** Its urgency and wire-transfer signals are recorded as findings and named in the reason.
 
 ## Known follow-ups
 
