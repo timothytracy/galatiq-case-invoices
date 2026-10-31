@@ -1,7 +1,8 @@
-"""The sample-invoice graph output is unchanged across the readability split.
+"""Sample-invoice graph output with the test fake LLM.
 
-Captured on the pre-split code with the test fake LLM. Wall-clock timestamps
-and absolute paths are normalized so two identical runs compare equal.
+Outcomes match data/labels.json. The snapshot includes finding codes and, on
+a paid invoice, the audit authorization. Wall-clock timestamps and absolute
+paths are normalized. The approval prompt text is not in this snapshot.
 """
 
 import json
