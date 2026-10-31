@@ -138,7 +138,7 @@ Use `python3` when `python` is not on PATH. `--invoice_path` is one invoice file
 
 Hard rules are Python: stock (summed per item, equal to stock passes, the snapshot does not decrease), line math within 0.01, and currency. Any non-USD invoice is manual review, with no conversion. A USD total over 10000 goes through one critique pass and back to approval. The audit can send the extraction back at most 3 times, then it escalates. Critique and audit can only make a decision stricter. Model calls retry in memory on timeout, 429, 5xx, network errors, JSON that is still invalid after the schema-repair loop, and approval wording that refuses the input or contradicts an approve decision (backoff 1, 2, 4, 8, 16 seconds, 5 attempts by default). A failed agent step is manual review and is not paid. Those knobs are `policy.toml`. Every problem a stage raises is a finding with a stable code. `outcome_from_findings` in `rules.py` turns that list into approve, reject, or manual review. Payment runs only when a PASS audit has issued a one-time authorization for that vendor, amount, and currency.
 
-Decisions are in `docs/DECISIONS.md`.
+Decisions are in `docs/DECISIONS.md`. The approved decision policy is in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md).
 
 ## Known limitations / cut scope
 
