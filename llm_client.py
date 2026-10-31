@@ -134,15 +134,19 @@ def parse_json_object(text: str) -> dict:
     return value
 
 
-def structured_call(request, messages: list[dict], schema: type[BaseModel]) -> BaseModel:
-    """Call the model, then give it one repair turn if the JSON does not validate."""
+def structured_call(request, messages: list[dict], schema: type[BaseModel], check=None) -> BaseModel:
+    """Call the model, then give it one repair turn if the JSON does not validate.
+
+    check(parsed) runs after the JSON validates. It may raise LLMError so the
+    outer retry treats that reply as a failed attempt.
+    """
 
     conversation = list(messages)
     error_text = "empty response"
     for _ in range(SCHEMA_REPAIR_LIMIT):
         text = request(conversation)
         try:
-            return schema.model_validate(parse_json_object(text))
+            parsed = schema.model_validate(parse_json_object(text))
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             error_text = str(exc)[:2000]
             conversation = conversation + [
@@ -156,6 +160,10 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel]) -> B
                     ),
                 },
             ]
+            continue
+        if check is not None:
+            check(parsed)
+        return parsed
     raise LLMError("malformed_output", True, error_text)
 
 
@@ -168,13 +176,14 @@ def call_with_retries(
     clock,
     rng: random.Random,
     attempt_log: list[dict],
+    check=None,
 ) -> BaseModel:
     """Retry a structured call. Sleep happens through clock so tests can fake time."""
 
     last_type = "unknown"
     for attempt in range(1, max_attempts + 1):
         try:
-            return structured_call(request, messages, schema)
+            return structured_call(request, messages, schema, check=check)
         except LLMError as exc:
             last_type = exc.error_type
             give_up = (not exc.retryable) or attempt == max_attempts

@@ -31,11 +31,13 @@ from models import (
     InvoiceLabel,
     LineItem,
     PipelineState,
+    ReasoningDraft,
     SourceInfo,
     ValidationReport,
 )
 from parsers import parse_file
 from pipeline import audit
+from pipeline.approval import reasoning_output_failed
 from rules import (
     APPROVAL_THRESHOLD_USD,
     CRITIQUE_CAP,
@@ -159,10 +161,14 @@ def status(result) -> str:
     return payment.status
 
 
-def scripted(extract_text, *, audits=None, critique=None, before_extract=None):
-    """before_extract(call_number) may raise LLMError or return a stand-in string."""
+def scripted(extract_text, *, audits=None, critique=None, before_extract=None, reasons=None):
+    """before_extract(call_number) may raise LLMError or return a stand-in string.
+
+    reasons, when set, is the sequence of TASK reason replies. The last one repeats.
+    """
 
     audit_replies = list(audits or ["PASS"])
+    reason_replies = None if reasons is None else list(reasons)
     counts = {"extract": 0, "audit": 0, "critique": 0, "reason": 0}
 
     def handler(messages):
@@ -176,6 +182,9 @@ def scripted(extract_text, *, audits=None, critique=None, before_extract=None):
             return extract_text
         if name == "reason":
             counts["reason"] += 1
+            if reason_replies is not None:
+                index = min(counts["reason"] - 1, len(reason_replies) - 1)
+                return reason_replies[index]
             return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
         if name == "critique":
             counts["critique"] += 1
@@ -470,6 +479,98 @@ def test_retry_then_success_uses_the_fake_clock(tmp_path, db_path):
     assert result["attempts"][0]["error_type"] == "http_429"
     assert result["attempts"][0]["backoff_seconds"] == 1.0
     assert BACKOFF_SECONDS == (1, 2, 4, 8, 16)
+
+
+_BAD_REASON = json.dumps(
+    {
+        "risks_considered": [
+            "The provided input string is not valid JSON and cannot be parsed.",
+            "The task requires returning only a JSON object matching the specified schema.",
+            "No vendor, total, currency, evidence, or findings data can be reliably extracted.",
+        ],
+        "conclusion": "Invalid input - unable to process or approve.",
+    }
+)
+_GOOD_REASON = json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+
+
+def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA 2\nTotal: 500.00\n")
+    handler, counts = scripted(extraction(), reasons=[_BAD_REASON, _GOOD_REASON])
+    clock = FakeClock()
+    result = run(path, db_path, handler, clock=clock)
+    assert clock.slept == [1.0]
+    assert counts["reason"] == 2
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+    assert result["agent_error"] is None
+    assert result["attempts"] == [
+        {"attempt": 1, "error_type": "bad_reasoning", "backoff_seconds": 1.0, "retryable": True}
+    ]
+    assert result["decision"].reasoning.conclusion == "The checks passed."
+    assert "payment" in stages(result)
+
+
+def test_bad_reasoning_every_time_is_unpaid_manual_review(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA 2\nTotal: 500.00\n")
+    handler, counts = scripted(extraction(), reasons=[_BAD_REASON])
+    clock = FakeClock()
+    max_attempts = 3
+    result = run(path, db_path, handler, clock=clock, max_attempts=max_attempts)
+    assert clock.slept == [1.0, 2.0]
+    assert counts["reason"] == max_attempts
+    assert len(result["attempts"]) == max_attempts
+    assert [row["error_type"] for row in result["attempts"]] == ["bad_reasoning"] * max_attempts
+    assert result["outcome"] == "manual_review"
+    assert status(result) == "not_paid"
+    assert result["agent_error"] == f"agent step failed after {max_attempts} attempts: bad_reasoning"
+    assert "payment" not in stages(result)
+    assert stages(result)[-1] == "reject_log"
+
+
+def test_reasoning_output_failed_covers_refusal_and_normal_wording():
+    flake = ReasoningDraft(
+        risks_considered=[
+            "The provided input string is not valid JSON and cannot be parsed.",
+            "The task requires returning only a JSON object matching the specified schema.",
+            "No vendor, total, currency, evidence, or findings data can be reliably extracted.",
+        ],
+        conclusion="Invalid input - unable to process or approve.",
+    )
+    assert reasoning_output_failed(flake, "approve") is True
+    assert reasoning_output_failed(flake, "manual_review") is True
+
+    unparseable = ReasoningDraft(
+        risks_considered=["The input is unparseable."],
+        conclusion="See the risks.",
+    )
+    assert reasoning_output_failed(unparseable, "approve") is True
+
+    contradicts = ReasoningDraft(
+        risks_considered=["no extra risk"],
+        conclusion="Unable to approve this invoice.",
+    )
+    assert reasoning_output_failed(contradicts, "approve") is True
+    not_to = ReasoningDraft(
+        risks_considered=["no extra risk"],
+        conclusion="The rules say not to approve.",
+    )
+    assert reasoning_output_failed(not_to, "approve") is True
+
+    passed = ReasoningDraft(risks_considered=["no extra risk"], conclusion="The checks passed.")
+    assert reasoning_output_failed(passed, "approve") is False
+    approve_line = ReasoningDraft(risks_considered=["stock is valid"], conclusion="Approve.")
+    assert reasoning_output_failed(approve_line, "approve") is False
+    schema_mention = ReasoningDraft(
+        risks_considered=["Return only a JSON object matching the specified schema."],
+        conclusion="The checks passed.",
+    )
+    assert reasoning_output_failed(schema_mention, "approve") is False
+    hold = ReasoningDraft(
+        risks_considered=["amount is high"],
+        conclusion="Do not approve. Manual review, no payment.",
+    )
+    assert reasoning_output_failed(hold, "manual_review") is False
 
 
 def test_exhausted_retries_are_manual_review_and_unpaid(tmp_path, db_path):
