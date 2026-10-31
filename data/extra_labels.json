@@ -1,0 +1,44 @@
+{
+  "invoices": [
+    {
+      "file": "invoice_2001.pdf",
+      "outcome": "approve",
+      "reason": "WidgetA 10 (stock 15), WidgetB 5 (stock 10) within stock and the printed total matches the lines."
+    },
+    {
+      "file": "invoice_2002.json",
+      "outcome": "approve",
+      "reason": "WidgetA 15 (stock 15), WidgetB 4 (stock 10) within stock and the printed total matches the lines."
+    },
+    {
+      "file": "invoice_2003.txt",
+      "outcome": "approve",
+      "reason": "WidgetA 8 (stock 15), WidgetB 4 (stock 10) within stock and the printed total matches the lines."
+    },
+    {
+      "file": "invoice_2004.csv",
+      "outcome": "reject",
+      "reason": "WidgetA quantity 17 exceeds stock of 15."
+    },
+    {
+      "file": "invoice_2005.xml",
+      "outcome": "reject",
+      "reason": "Printed total 2475.00 does not equal 2550.00 (subtotal + tax + shipping)."
+    },
+    {
+      "file": "invoice_2006.json",
+      "outcome": "reject",
+      "reason": "Due date is missing."
+    },
+    {
+      "file": "invoice_2007.xml",
+      "outcome": "manual_review",
+      "reason": "Vendor identity change (formerly) requires manual review."
+    },
+    {
+      "file": "invoice_2008.txt",
+      "outcome": "approve",
+      "reason": "WidgetA 10 (stock 15), WidgetB 4 (stock 10), GadgetX 2 (stock 5) within stock and the printed total matches the lines."
+    }
+  ]
+}
