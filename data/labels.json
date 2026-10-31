@@ -1,171 +1,103 @@
 {
-  "policies": {
-    "stock": "Stock is a fixed snapshot and does not decrease between invoices. Sum quantities per item on one invoice. quantity greater than stock fails; an equal quantity passes.",
-    "duplicates": "A duplicate or revision of an already-processed invoice is never paid twice. In a batch, files are sorted by filename. The first file for a normalized invoice number is judged on its own merits. A later file with the same number is not paid.",
-    "fx": "EUR converts to USD at a fixed rate of 1.10 before the $10,000 check. The payment itself uses the printed amount and currency.",
-    "eur_usd_rate": "1.10",
-    "approval_threshold_usd": "10000",
-    "orchestrator": "The orchestrator is plain Python in pipeline.py. No agent framework."
-  },
   "invoices": [
     {
       "file": "invoice_1001.txt",
-      "invoice_number": "INV-1001",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 10 and WidgetB 5 are within the fixed stock snapshot."
+      "outcome": "approve",
+      "reason": "WidgetA 10 (stock 15), WidgetB 5 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1002.txt",
-      "invoice_number": "INV-1002",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "stock_mismatch",
+      "outcome": "reject",
       "reason": "GadgetX quantity 20 exceeds stock of 5."
     },
     {
       "file": "invoice_1003.txt",
-      "invoice_number": "INV-1003",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "fake_item",
-      "reason": "FakeItem is in inventory with stock 0, so the quantity is out of stock."
+      "outcome": "reject",
+      "reason": "FakeItem quantity 100 exceeds stock of 0."
     },
     {
       "file": "invoice_1004.json",
-      "invoice_number": "INV-1004",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 3 and WidgetB 2 are within the fixed stock snapshot."
+      "outcome": "approve",
+      "reason": "WidgetA 3 (stock 15), WidgetB 2 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1004_revised.json",
-      "invoice_number": "INV-1004",
-      "decision": "reject",
-      "needs_human": true,
-      "scenario": "duplicate_or_revision",
-      "reason": "Revision R1 of INV-1004. invoice_1004.json sorts first and can be paid. A revision of an already-processed invoice is never paid again; a person would have to approve any delta. Stock and arithmetic would pass on their own (GadgetX 5 equals stock)."
+      "outcome": "approve",
+      "reason": "WidgetA 3 (stock 15), WidgetB 2 (stock 10), GadgetX 5 (stock 5) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1005.json",
-      "invoice_number": "INV-1005",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "stock_mismatch",
+      "outcome": "reject",
       "reason": "GadgetX quantity 8 exceeds stock of 5."
     },
     {
       "file": "invoice_1006.csv",
-      "invoice_number": "INV-1006",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 5 and WidgetB 3 are within the fixed stock snapshot."
+      "outcome": "approve",
+      "reason": "WidgetA 5 (stock 15), WidgetB 3 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1007.csv",
-      "invoice_number": "INV-1007",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "stock_and_math",
-      "reason": "WidgetA 20 exceeds stock 15 and WidgetB 15 exceeds stock 10. Printed total 15525.00 does not equal subtotal 14750.00 plus tax 885.00."
+      "outcome": "reject",
+      "reason": "WidgetA quantity 20 exceeds stock of 15. WidgetB quantity 15 exceeds stock of 10. Printed total 15525.00 does not equal 15635.00 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1008.txt",
-      "invoice_number": "INV-1008",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "unknown_item",
-      "reason": "SuperGizmo and MegaSprocket are not in the inventory database."
+      "outcome": "reject",
+      "reason": "SuperGizmo is not in the inventory database. MegaSprocket is not in the inventory database."
     },
     {
       "file": "invoice_1009.json",
-      "invoice_number": "INV-1009",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "negative_quantity",
-      "reason": "WidgetA quantity is negative. The vendor is blank and the printed subtotal does not match the lines."
+      "outcome": "reject",
+      "reason": "WidgetA quantity -5 is negative or zero. Vendor is missing. Due date is missing. Printed subtotal 1000.00 does not equal the line sum -250.00. Printed total -250.00 does not equal 1000.00 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1010.txt",
-      "invoice_number": "INV-1010",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "Summed quantities are within stock (WidgetA 12, WidgetB 4, GadgetX 2). The rush-order unit price is not a reject because there is no price list."
+      "outcome": "approve",
+      "reason": "WidgetA 12 (stock 15), WidgetB 4 (stock 10), GadgetX 2 (stock 5) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1011.pdf",
-      "invoice_number": "INV-1011",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 6 and WidgetB 3 are within stock. This is the first file for INV-1011."
+      "outcome": "approve",
+      "reason": "WidgetA 6 (stock 15), WidgetB 3 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1011.txt",
-      "invoice_number": "INV-1011",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "duplicate",
-      "reason": "Same invoice number as invoice_1011.pdf, which sorts first. A duplicate is never paid twice."
+      "outcome": "approve",
+      "reason": "WidgetA 6 (stock 15), WidgetB 3 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1012.pdf",
-      "invoice_number": "INV-1012",
-      "decision": "reject",
-      "needs_human": true,
-      "scenario": "vendor_rename",
-      "reason": "The vendor line says QuickShip Distributers (formerly FastShip Ltd.). There is no vendor master to confirm the rename, so this is not auto-paid. Stock and arithmetic would otherwise pass."
+      "outcome": "manual_review",
+      "reason": "Vendor identity change (formerly) requires manual review."
     },
     {
       "file": "invoice_1012.txt",
-      "invoice_number": "INV-1012",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "duplicate",
-      "reason": "Same invoice number as invoice_1012.pdf, which sorts first. A duplicate is never paid twice."
+      "outcome": "manual_review",
+      "reason": "Vendor identity change (formerly) requires manual review."
     },
     {
       "file": "invoice_1013.json",
-      "invoice_number": "INV-1013",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "stock_and_math",
-      "reason": "Summed quantities exceed stock (WidgetA 22 > 15, WidgetB 18 > 10, GadgetX 9 > 5). Printed total 22562.80 is 50.00 above subtotal plus tax."
+      "outcome": "reject",
+      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1013.pdf",
-      "invoice_number": "INV-1013",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "stock_and_math",
-      "reason": "Same stock and total failures as invoice_1013.json. The json file also sorts first, so this copy would not be paid twice."
+      "outcome": "reject",
+      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1014.xml",
-      "invoice_number": "INV-1014",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 4 and WidgetB 6 are within stock. 4125 EUR at 1.10 is 4537.50 USD, under the $10,000 line. Pay the printed 4125 EUR."
+      "outcome": "manual_review",
+      "reason": "non-USD currency (EUR), manual review required"
     },
     {
       "file": "invoice_1015.csv",
-      "invoice_number": "INV-1015",
-      "decision": "approve",
-      "needs_human": false,
-      "scenario": "passes_validation",
-      "reason": "WidgetA 10, WidgetB 5, and GadgetX 2 are within the fixed stock snapshot."
+      "outcome": "approve",
+      "reason": "WidgetA 10 (stock 15), WidgetB 5 (stock 10), GadgetX 2 (stock 5) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1016.json",
-      "invoice_number": "INV-1016",
-      "decision": "reject",
-      "needs_human": false,
-      "scenario": "unknown_item",
+      "outcome": "reject",
       "reason": "WidgetC is not in the inventory database."
     }
   ]
