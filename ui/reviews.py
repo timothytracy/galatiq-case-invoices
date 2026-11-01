@@ -7,32 +7,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REVIEW_PATH = ROOT / "output" / "reviews" / "hold_reviews.json"
 
-
 def load_reviews(path: Path | None = None) -> list[dict]:
-    """Reviews already saved. Missing file means none."""
-
+    """Reviews already saved. A missing file means there are none."""
     destination = path or REVIEW_PATH
     if not destination.is_file():
         return []
-    payload = json.loads(destination.read_text(encoding="utf-8"))
-    reviews = payload.get("reviews")
+    reviews = json.loads(destination.read_text(encoding="utf-8")).get("reviews")
     if not isinstance(reviews, list):
         raise ValueError(f"{destination} has no reviews list")
     return reviews
 
-
 def record_review(
-    *,
-    file: str,
-    pipeline_outcome: str,
-    pipeline_reason_code: str | None,
-    pipeline_action: str | None,
-    reviewer_outcome: str,
-    note: str,
-    path: Path | None = None,
+    *, file: str, pipeline_outcome: str, pipeline_reason_code: str | None,
+    pipeline_action: str | None, reviewer_outcome: str, note: str, path: Path | None = None,
 ) -> dict:
     """Append a reviewer's approve or reject. Does not pay or change the pipeline outcome."""
-
     if pipeline_outcome != "hold":
         raise ValueError("only a hold can be recorded")
     if reviewer_outcome not in {"approve", "reject"}:
@@ -43,12 +32,9 @@ def record_review(
     destination = path or REVIEW_PATH
     reviews = [row for row in load_reviews(destination) if row.get("file") != file]
     entry = {
-        "file": file,
-        "pipeline_outcome": pipeline_outcome,
-        "pipeline_reason_code": pipeline_reason_code,
-        "pipeline_action": pipeline_action,
-        "reviewer_outcome": reviewer_outcome,
-        "note": text,
+        "file": file, "pipeline_outcome": pipeline_outcome,
+        "pipeline_reason_code": pipeline_reason_code, "pipeline_action": pipeline_action,
+        "reviewer_outcome": reviewer_outcome, "note": text,
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     reviews.append(entry)
