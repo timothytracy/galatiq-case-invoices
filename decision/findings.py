@@ -26,7 +26,6 @@ _MISSING_TEXT = {
     "line_items": "No line items.",
     "total": "Total is missing.",
 }
-
 _FORMERLY = re.compile(r"\bformerly\b", re.IGNORECASE)
 _URGENCY = re.compile(r"\burgent\b|\bimmediate(?:ly)?\b|pay\s+immediately", re.IGNORECASE)
 _WIRE = re.compile(r"\bwire\s+(?:transfer|only)\b|\bwire\s+to\b", re.IGNORECASE)
@@ -52,9 +51,12 @@ _INJECTION = re.compile(
     r"|\bsystem\s*:",
     re.IGNORECASE,
 )
-# Illustrative only. "Unit" is omitted: business parks use it.
-# The extraction model sets noncommercial_address for a residence, landmark, or fictional address.
+# "Unit" is omitted: business parks use it. The model flag covers a residence or landmark.
 _APARTMENT = re.compile(r"\b(?:apt|apartment)\b", re.IGNORECASE)
+
+
+def _finding(code: str, message: str, severity: str = "warning", item: str | None = None) -> Finding:
+    return Finding(code=code, message=message, severity=severity, item=item)
 
 
 def injection_phrase(text: str) -> bool:
@@ -80,17 +82,9 @@ def collect_findings(
 
     currency = resolve_currency(invoice.currency, raw_text)
     findings: list[Finding] = []
-
     for field in POLICY.required_fields:
         if _field_missing(invoice, field):
-            findings.append(
-                Finding(
-                    code="MISSING_FIELD",
-                    message=_MISSING_TEXT[field],
-                    severity="blocking",
-                    item=field,
-                )
-            )
+            findings.append(_finding("MISSING_FIELD", _MISSING_TEXT[field], "blocking", field))
 
     credit = (
         _is_credit_label(invoice, raw_text)
@@ -99,104 +93,61 @@ def collect_findings(
         and all(line.quantity != 0 for line in invoice.line_items)
     )
     if credit:
-        findings.append(
-            Finding(
-                code="CREDIT_NOTE",
-                message="Labeled credit note and the math reconciles.",
-                severity="warning",
-            )
-        )
+        findings.append(_finding("CREDIT_NOTE", "Labeled credit note and the math reconciles."))
     else:
         for line in invoice.line_items:
             if line.quantity <= 0:
                 findings.append(
-                    Finding(
-                        code="BAD_QUANTITY",
-                        item=line.item,
-                        message=f"{line.item} quantity {show_qty(line.quantity)} is negative or zero.",
-                        severity="blocking",
+                    _finding(
+                        "BAD_QUANTITY",
+                        f"{line.item} quantity {show_qty(line.quantity)} is negative or zero.",
+                        "blocking",
+                        line.item,
                     )
                 )
         if _has_negative_amount(invoice):
             findings.append(
-                Finding(
-                    code="NEGATIVE_AMOUNT",
-                    message="Negative amount is not a labeled credit note.",
-                    severity="blocking",
-                    item="total",
+                _finding(
+                    "NEGATIVE_AMOUNT",
+                    "Negative amount is not a labeled credit note.",
+                    "blocking",
+                    "total",
                 )
             )
 
     for item, qty in summed_quantities(invoice, stock).items():
         if item not in stock:
             findings.append(
-                Finding(
-                    code="UNKNOWN_ITEM",
-                    item=item,
-                    message=f"{item} is not in the inventory database.",
-                    severity="blocking",
-                )
+                _finding("UNKNOWN_ITEM", f"{item} is not in the inventory database.", "blocking", item)
             )
         elif qty > Decimal(stock[item]):
             findings.append(
-                Finding(
-                    code="STOCK_SHORTFALL",
-                    item=item,
-                    message=f"{item} quantity {show_qty(qty)} exceeds stock of {stock[item]}.",
-                    severity="blocking",
+                _finding(
+                    "STOCK_SHORTFALL",
+                    f"{item} quantity {show_qty(qty)} exceeds stock of {stock[item]}.",
+                    "blocking",
+                    item,
                 )
             )
 
     findings.extend(_math_findings(invoice))
-
     if currency not in POLICY.allowed_currencies:
-        findings.append(
-            Finding(
-                code="NON_USD",
-                message=non_usd_message(currency),
-                severity="warning",
-                item="currency",
-            )
-        )
-
+        findings.append(_finding("NON_USD", non_usd_message(currency), item="currency"))
     if _is_revised(invoice, raw_text):
-        findings.append(
-            Finding(
-                code="REVISED_INVOICE",
-                message="This invoice is marked as a revision.",
-                severity="warning",
-            )
-        )
+        findings.append(_finding("REVISED_INVOICE", "This invoice is marked as a revision."))
 
     blob = _blob(raw_text, invoice.vendor, invoice.notes, invoice.payment_terms)
     if _FORMERLY.search(blob):
-        findings.append(
-            Finding(
-                code="VENDOR_RENAMED",
-                message="The vendor name says formerly.",
-                severity="warning",
-                item="vendor",
-            )
-        )
+        findings.append(_finding("VENDOR_RENAMED", "The vendor name says formerly.", item="vendor"))
 
     fraud: list[Finding] = []
     if _URGENCY.search(blob):
-        fraud.append(
-            Finding(code="FRAUD_SIGNAL", message="Urgency pressure is a fraud signal.", severity="warning")
-        )
+        fraud.append(_finding("FRAUD_SIGNAL", "Urgency pressure is a fraud signal."))
     if _WIRE.search(blob):
-        fraud.append(
-            Finding(code="FRAUD_SIGNAL", message="Wire transfer is a fraud signal.", severity="warning")
-        )
+        fraud.append(_finding("FRAUD_SIGNAL", "Wire transfer is a fraud signal."))
     new_account = bool(_NEW_ACCOUNT.search(blob))
     if new_account:
-        fraud.append(
-            Finding(
-                code="FRAUD_SIGNAL",
-                message="A new remittance or bank account is a fraud signal.",
-                severity="warning",
-            )
-        )
+        fraud.append(_finding("FRAUD_SIGNAL", "A new remittance or bank account is a fraud signal."))
     findings.extend(fraud)
 
     if currency in POLICY.allowed_currencies:
@@ -205,25 +156,23 @@ def collect_findings(
             if ref is None or line.unit_price is None or not different(line.unit_price, ref):
                 continue
             findings.append(
-                Finding(
-                    code="PRICE_VARIANCE",
-                    item=line.item,
-                    message=(
+                _finding(
+                    "PRICE_VARIANCE",
+                    (
                         f"Unit price {show_money(line.unit_price)} for {line.item} "
                         f"differs from the reference price {show_money(ref)}."
                     ),
-                    severity="warning",
+                    item=line.item,
                 )
             )
             if line.unit_price > ref * (Decimal("1") + POLICY.price_fraud_ratio):
-                high = Finding(
-                    code="FRAUD_SIGNAL",
-                    item=line.item,
-                    message=(
+                high = _finding(
+                    "FRAUD_SIGNAL",
+                    (
                         f"Unit price {show_money(line.unit_price)} for {line.item} "
                         "is well above the reference price."
                     ),
-                    severity="warning",
+                    item=line.item,
                 )
                 findings.append(high)
                 fraud.append(high)
@@ -231,73 +180,44 @@ def collect_findings(
     for line in invoice.line_items:
         if line.description and re.search(r"\([^)]+\)", line.description) and line.note:
             findings.append(
-                Finding(
-                    code="DESCRIPTOR",
-                    item=line.item,
-                    message=(
+                _finding(
+                    "DESCRIPTOR",
+                    (
                         f"Descriptor on {line.description}: matched as {line.item}, "
                         f"{line.note!r} kept as a note."
                     ),
-                    severity="warning",
+                    item=line.item,
                 )
             )
 
     if _near_threshold(invoice.total, currency):
         findings.append(
-            Finding(
-                code="NEAR_THRESHOLD",
-                message=(
+            _finding(
+                "NEAR_THRESHOLD",
+                (
                     f"Total {show_money(invoice.total)} is within "
                     f"{POLICY.near_threshold_ratio * 100:.0f}% under the "
                     f"{show_money(APPROVAL_THRESHOLD_USD)} threshold."
                 ),
-                severity="warning",
                 item="total",
             )
         )
 
     address_note = _address_note(invoice)
     if address_note is not None:
-        findings.append(
-            Finding(
-                code="NONCOMMERCIAL_ADDRESS",
-                message=address_note,
-                severity="warning",
-                item="vendor_address",
-            )
-        )
-
+        findings.append(_finding("NONCOMMERCIAL_ADDRESS", address_note, item="vendor_address"))
     if invoice.due_date and not _dated(invoice.due_date):
         findings.append(
-            Finding(
-                code="UNPARSED_DATE",
-                message=f"Due date {invoice.due_date!r} is not a date.",
-                severity="warning",
-                item="due_date",
-            )
+            _finding("UNPARSED_DATE", f"Due date {invoice.due_date!r} is not a date.", item="due_date")
         )
-
     if _raw_has_ocr_o(raw_text) and math_reconciles(invoice):
-        findings.append(
-            Finding(
-                code="OCR_FIX",
-                message="OCR O-to-0 fix applied because the math reconciles.",
-                severity="info",
-            )
-        )
-
+        findings.append(_finding("OCR_FIX", "OCR O-to-0 fix applied because the math reconciles.", "info"))
     if invoice.embedded_instructions and injection_phrase(_blob(raw_text, invoice.notes)):
         findings.append(
-            Finding(
-                code="EMBEDDED_INSTRUCTIONS",
-                message="Embedded instructions aimed at the system.",
-                severity="blocking",
-            )
+            _finding("EMBEDDED_INSTRUCTIONS", "Embedded instructions aimed at the system.", "blocking")
         )
 
-    rejected = any(
-        finding.severity == "blocking" and finding.code in REJECT_CODES for finding in findings
-    )
+    rejected = any(item.severity == "blocking" and item.code in REJECT_CODES for item in findings)
     over = (
         invoice.total is not None
         and currency in POLICY.allowed_currencies
@@ -305,31 +225,20 @@ def collect_findings(
     )
     if not rejected and new_account and over:
         findings.append(
-            Finding(
-                code="NEW_REMITTANCE",
-                message="Clean invoice over the threshold with a new remittance or bank account.",
-                severity="warning",
+            _finding(
+                "NEW_REMITTANCE",
+                "Clean invoice over the threshold with a new remittance or bank account.",
             )
         )
     elif not rejected and len(fraud) >= 2:
-        findings.append(
-            Finding(code="FRAUD_CLUSTER", message="Two or more fraud signals.", severity="warning")
-        )
+        findings.append(_finding("FRAUD_CLUSTER", "Two or more fraud signals."))
     return findings, currency
 
 
-def evidence_lines(
-    invoice: ExtractedInvoice,
-    stock: dict[str, int],
-    findings: list[Finding],
-) -> list[str]:
+def evidence_lines(invoice: ExtractedInvoice, stock: dict[str, int], findings: list[Finding]) -> list[str]:
     """Facts the reasoning may cite. Built from the invoice, the stock, and the findings."""
 
-    lines = []
-    if invoice.total is None:
-        lines.append("total is missing")
-    else:
-        lines.append(f"total {show_money(invoice.total)} {invoice.currency}")
+    lines = ["total is missing" if invoice.total is None else f"total {show_money(invoice.total)} {invoice.currency}"]
     for item, qty in summed_quantities(invoice, stock).items():
         if item in stock:
             lines.append(f"{item} quantity {show_qty(qty)} compared with stock {stock[item]}")
@@ -338,23 +247,20 @@ def evidence_lines(
     for line in invoice.line_items:
         if line.quantity <= 0:
             lines.append(f"{line.item} quantity {show_qty(line.quantity)} is negative or zero")
-    for finding in findings:
-        lines.append(finding.message)
+    lines.extend(finding.message for finding in findings)
     if not findings:
         lines.append("No stock, math, currency, or fraud finding.")
     return lines
 
 
 def _field_missing(invoice: ExtractedInvoice, field: str) -> bool:
-    if field == "vendor":
-        return not invoice.vendor
-    if field == "due_date":
-        return not invoice.due_date
-    if field == "line_items":
-        return not invoice.line_items
-    if field == "total":
-        return invoice.total is None
-    return True
+    checks = {
+        "vendor": not invoice.vendor,
+        "due_date": not invoice.due_date,
+        "line_items": not invoice.line_items,
+        "total": invoice.total is None,
+    }
+    return checks.get(field, True)
 
 
 def _blob(*parts: str | None) -> str:
@@ -394,8 +300,6 @@ def _is_credit_label(invoice: ExtractedInvoice, raw_text: str) -> bool:
 
 
 def _address_note(invoice: ExtractedInvoice) -> str | None:
-    """A model flag, or an illustrative Apt/Apartment cue. Warning only."""
-
     place = invoice.vendor_address or "the vendor address"
     if invoice.noncommercial_address:
         reason = invoice.address_reason or "the extraction model flagged the address"
@@ -406,9 +310,7 @@ def _address_note(invoice: ExtractedInvoice) -> str | None:
 
 
 def _near_threshold(total: Decimal | None, currency: str) -> bool:
-    if total is None or currency not in POLICY.allowed_currencies:
-        return False
-    if total >= APPROVAL_THRESHOLD_USD:
+    if total is None or currency not in POLICY.allowed_currencies or total >= APPROVAL_THRESHOLD_USD:
         return False
     return (APPROVAL_THRESHOLD_USD - total) <= APPROVAL_THRESHOLD_USD * POLICY.near_threshold_ratio
 
@@ -424,7 +326,6 @@ def _raw_has_ocr_o(raw_text: str) -> bool:
 def _math_findings(invoice: ExtractedInvoice) -> list[Finding]:
     if invoice.total is None or not invoice.line_items:
         return []
-
     findings = []
     line_sum = Decimal("0")
     for line in invoice.line_items:
@@ -433,56 +334,54 @@ def _math_findings(invoice: ExtractedInvoice) -> list[Finding]:
             line_sum += expected
             if line.amount is not None and different(line.amount, expected):
                 findings.append(
-                    Finding(
-                        code="TOTAL_MISMATCH",
-                        item=line.item,
-                        severity="blocking",
-                        message=(
+                    _finding(
+                        "TOTAL_MISMATCH",
+                        (
                             f"{line.item} line amount {show_money(line.amount)} does not equal "
                             f"quantity times unit price ({show_money(expected)})."
                         ),
+                        "blocking",
+                        line.item,
                     )
                 )
         elif line.amount is not None:
             line_sum += line.amount
         else:
             findings.append(
-                Finding(
-                    code="TOTAL_MISMATCH",
-                    item=line.item,
-                    severity="blocking",
-                    message=f"{line.item} has no unit price or line amount.",
+                _finding(
+                    "TOTAL_MISMATCH",
+                    f"{line.item} has no unit price or line amount.",
+                    "blocking",
+                    line.item,
                 )
             )
-
     line_sum = as_money(line_sum)
     if invoice.subtotal is not None and different(invoice.subtotal, line_sum):
         findings.append(
-            Finding(
-                code="TOTAL_MISMATCH",
-                item="subtotal",
-                severity="blocking",
-                message=(
+            _finding(
+                "TOTAL_MISMATCH",
+                (
                     f"Printed subtotal {show_money(invoice.subtotal)} does not equal "
                     f"the line sum {show_money(line_sum)}."
                 ),
+                "blocking",
+                "subtotal",
             )
         )
-
     base = invoice.subtotal if invoice.subtotal is not None else line_sum
     tax = invoice.tax_amount if invoice.tax_amount is not None else Decimal("0")
     shipping = invoice.shipping if invoice.shipping is not None else Decimal("0")
     expected_total = as_money(base + tax + shipping)
     if different(expected_total, invoice.total):
         findings.append(
-            Finding(
-                code="TOTAL_MISMATCH",
-                item="total",
-                severity="blocking",
-                message=(
+            _finding(
+                "TOTAL_MISMATCH",
+                (
                     f"Printed total {show_money(invoice.total)} does not equal "
                     f"{show_money(expected_total)} (subtotal + tax + shipping)."
                 ),
+                "blocking",
+                "total",
             )
         )
     return findings

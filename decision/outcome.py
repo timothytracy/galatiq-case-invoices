@@ -73,31 +73,24 @@ def primary_code(findings: list[Finding], outcome: Outcome) -> str | None:
             for finding in findings
             if finding.severity == "blocking" and finding.code in REJECT_CODES
         }
-        for code in REJECT_CODES:
-            if code in present:
-                return code
-        return None
-    if outcome == "hold":
+        order = REJECT_CODES
+    elif outcome == "hold":
         present = {finding.code for finding in findings if finding.code in HOLD_CODES}
         if sum(1 for finding in findings if finding.code == "FRAUD_SIGNAL") >= 2:
             present.add("FRAUD_CLUSTER")
-        for code in HOLD_CODES:
-            if code in present:
-                return code
+        order = HOLD_CODES
+    else:
         return None
+    for code in order:
+        if code in present:
+            return code
     return None
 
 
 def finding_codes(findings: list) -> list[str]:
     """Codes in the order the findings were raised."""
 
-    codes = []
-    for finding in findings:
-        if isinstance(finding, dict):
-            codes.append(finding["code"])
-        else:
-            codes.append(finding.code)
-    return codes
+    return [finding["code"] if isinstance(finding, dict) else finding.code for finding in findings]
 
 
 def result_codes(result: dict) -> list[str]:

@@ -1,12 +1,12 @@
 """Plain-text and email invoices. The first matching line pattern wins."""
 
 import re
-from decimal import Decimal
 from pathlib import Path
 
 from models import ExtractedInvoice, LineItem, SourceInfo
-from parsers.common import _build, _make_item, _money, _rate, _read, _source
-from rules import math_reconciles
+from decision.findings import math_reconciles
+from decision.invoice_fields import resolve_currency
+from parsers.common import _filled, _make_item, _read, _source
 
 # A letter O inside a token that already contains a digit is treated as zero.
 # "2O26" and "$3,500.O0" change. "NOTES" does not, because that O has no digit.
@@ -50,25 +50,46 @@ def parse_text(raw: str, source: SourceInfo) -> ExtractedInvoice:
 def _parse_fields(text: str, source: SourceInfo) -> ExtractedInvoice:
     items = _line_items(text)
     tax_rate, tax_amount = _find_tax(text)
-    warnings = []
-    if not items:
-        warnings.append("no line items recognized")
-    return _build(
-        vendor=_find_vendor(text),
-        invoice_number_raw=_find_invoice_number(text),
-        invoice_date=_find_invoice_date(text),
-        due_date=_find_due_date(text),
-        currency=_find_currency(text),
-        line_items=items,
-        subtotal=_money(_search(r"(?im)Subtotal:\s*\$?\s*([0-9,]+\.\d{2})", text)),
-        tax_rate=tax_rate,
-        tax_amount=tax_amount,
-        shipping=_money(_search(r"(?im)Shipping:\s*\$?\s*([0-9,]+\.\d{2})", text)),
-        total=_money(_find_total(text)),
-        payment_terms=_search(r"(?im)^\s*(?:Payment\s+Terms|Pymnt\s+Terms|Terms):\s*(.+?)\s*$", text),
-        notes=_search(r"(?im)^\s*Notes:\s*(.+?)\s*$", text),
-        source=source,
-        warnings=warnings,
+    warnings = [] if items else ["no line items recognized"]
+    return _filled(
+        source,
+        items,
+        {
+            "vendor": _find_vendor(text),
+            "invoice_number": _first(
+                text,
+                r"(?i)Invoice\s*Number:\s*(INV[-\s]?\d+)",
+                r"(?i)INV\s*NO:\s*(INV[-\s]?\d+)",
+                r"(?i)Invoice:\s*(INV[-\s]?\d+)",
+                r"(?i)INVOICE\s*#\s*(INV[-\s]?\d+)",
+                r"(?i)Inv\s*#:\s*(\d+)",
+            ),
+            "invoice_date": _first(
+                text,
+                r"(?im)^\s*(?:Date|Dt):\s*(.+?)\s*$",
+                r"(?i)(?<!Due )Date:\s*(\S+)",
+            ),
+            "due_date": _first(
+                text,
+                r"(?im)^\s*Due\s*(?:Date|Dt)?:\s*(.+?)\s*$",
+                r"(?i)\bDue(?:\s*(?:Date|Dt))?:\s*(\S+)",
+            ),
+            "currency": resolve_currency(None, text),
+            "subtotal": _first(text, r"(?im)Subtotal:\s*\$?\s*([0-9,]+\.\d{2})"),
+            "tax_rate": tax_rate,
+            "tax_amount": tax_amount,
+            "shipping": _first(text, r"(?im)Shipping:\s*\$?\s*([0-9,]+\.\d{2})"),
+            "total": _first(
+                text,
+                r"(?im)Grand\s+Total:\s*\$?\s*([0-9,]+\.\d{2})",
+                r"(?im)Total\s+Amount:\s*\$?\s*([0-9,]+\.\d{2})",
+                r"(?im)^\s*Amt:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
+                r"(?im)^\s*Total:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
+            ),
+            "payment_terms": _first(text, r"(?im)^\s*(?:Payment\s+Terms|Pymnt\s+Terms|Terms):\s*(.+?)\s*$"),
+            "notes": _first(text, r"(?im)^\s*Notes:\s*(.+?)\s*$"),
+        },
+        warnings,
     )
 
 
@@ -130,76 +151,19 @@ def _find_vendor(text: str) -> str | None:
     return name or None
 
 
-def _find_invoice_number(text: str) -> str | None:
-    patterns = (
-        r"(?i)Invoice\s*Number:\s*(INV[-\s]?\d+)",
-        r"(?i)INV\s*NO:\s*(INV[-\s]?\d+)",
-        r"(?i)Invoice:\s*(INV[-\s]?\d+)",
-        r"(?i)INVOICE\s*#\s*(INV[-\s]?\d+)",
-        r"(?i)Inv\s*#:\s*(\d+)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1).strip()
-    return None
-
-
-def _find_invoice_date(text: str) -> str | None:
-    match = re.search(r"(?im)^\s*(?:Date|Dt):\s*(.+?)\s*$", text)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"(?i)(?<!Due )Date:\s*(\S+)", text)
-    if match:
-        return match.group(1).strip()
-    return None
-
-
-def _find_due_date(text: str) -> str | None:
-    match = re.search(r"(?im)^\s*Due\s*(?:Date|Dt)?:\s*(.+?)\s*$", text)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"(?i)\bDue(?:\s*(?:Date|Dt))?:\s*(\S+)", text)
-    if match:
-        return match.group(1).strip()
-    return None
-
-
-def _find_total(text: str) -> str | None:
-    patterns = (
-        r"(?im)Grand\s+Total:\s*\$?\s*([0-9,]+\.\d{2})",
-        r"(?im)Total\s+Amount:\s*\$?\s*([0-9,]+\.\d{2})",
-        r"(?im)^\s*Amt:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
-        r"(?im)^\s*Total:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
-    )
-    for pattern in patterns:
-        found = _search(pattern, text)
-        if found:
-            return found
-    return None
-
-
-def _find_tax(text: str) -> tuple[Decimal | None, Decimal | None]:
+def _find_tax(text: str) -> tuple[str | None, str | None]:
     match = re.search(
         r"(?i)(?:Sales\s+)?Tax(?:\s*\(([^)]*)\))?\s*:\s*\$?\s*([0-9,]+\.\d{2})",
         text,
     )
     if not match:
         return None, None
-    rate = _rate(match.group(1)) if match.group(1) else None
-    return rate, _money(match.group(2))
+    return match.group(1), match.group(2)
 
 
-def _find_currency(text: str) -> str:
-    # Euro markers in the document. A missing currency with $ amounts stays USD.
-    if re.search(r"(?i)€|\beuros?\b|\beur\b", text):
-        return "EUR"
-    return "USD"
-
-
-def _search(pattern: str, text: str) -> str | None:
-    match = re.search(pattern, text)
-    if not match:
-        return None
-    value = match.group(1).strip()
-    return value or None
+def _first(text: str, *patterns: str) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    return None

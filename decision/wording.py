@@ -3,8 +3,9 @@
 import re
 from datetime import date
 
-from models import ExtractedInvoice, Finding, Outcome
+from models import Assessment, ExtractedInvoice, Finding, Outcome
 
+from decision.findings import collect_findings
 from decision.invoice_fields import show_qty, summed_quantities
 from decision.outcome import (
     PAYMENT_REFUSED,
@@ -93,35 +94,10 @@ PASSED_RULES = [
     ),
 ]
 
-# Words that are only glue once the threshold phrase is removed.
-_FILLER = {
-    "a",
-    "an",
-    "the",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "being",
-    "been",
-    "this",
-    "that",
-    "it",
-    "its",
-    "of",
-    "to",
-    "for",
-    "and",
-    "or",
-    "but",
-    "only",
-    "just",
-    "because",
-    "so",
-    "very",
-    "too",
-}
+# Glue left behind once the threshold phrase is removed.
+_FILLER = set(
+    "a an the is are was were be being been this that it its of to for and or but only just because so very too".split()
+)
 _AMOUNT = r"(?:\$\s*)?10[,.]?000|\$?\s*10k"
 _THRESHOLD_PHRASE = re.compile(
     rf"""(?ix)
@@ -141,7 +117,6 @@ _THRESHOLD_PHRASE = re.compile(
 
 
 def today_line(as_of: date) -> str:
-    """One sentence for every agent prompt. Tests inject as_of."""
 
     return (
         f"Today's date is {as_of.isoformat()}. "
@@ -155,11 +130,7 @@ def resolve_as_of(as_of: date | None) -> date:
 
 
 def threshold_only_concern(text: str) -> bool:
-    """True when nothing substantive is left after the threshold phrase is removed.
-
-    A concern that also names a price, a duplicate, or a due date is kept.
-    The prompt is what tells the model not to raise the threshold by itself.
-    """
+    """True when nothing substantive is left after the threshold phrase is removed."""
 
     if not _THRESHOLD_PHRASE.search(text or ""):
         return False
@@ -168,15 +139,31 @@ def threshold_only_concern(text: str) -> bool:
     return not [word for word in words if word not in _FILLER]
 
 
+def assess(
+    invoice: ExtractedInvoice,
+    raw_text: str,
+    stock: dict[str, int],
+) -> Assessment:
+    """Apply the hard rules to one invoice. The file is judged on its own."""
+
+    findings, currency = collect_findings(invoice, raw_text, stock)
+    outcome, code, reason, action = explain(findings, invoice, stock)
+    return Assessment(
+        outcome=outcome,
+        reason_code=code,
+        reason=reason,
+        action=action,
+        findings=findings,
+        currency=currency,
+    )
+
+
 def explain(
     findings: list[Finding],
     invoice: ExtractedInvoice | None = None,
     stock: dict[str, int] | None = None,
 ) -> tuple[Outcome, str | None, str, str | None]:
-    """Outcome, primary reason code, plain-English reason, and the next action.
-
-    Lower-precedence findings stay in the reason after the primary ones.
-    """
+    """Outcome, primary reason code, plain-English reason, and the next action."""
 
     outcome = outcome_from_findings(findings)
     code = primary_code(findings, outcome)

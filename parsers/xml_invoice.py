@@ -4,7 +4,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from models import ExtractedInvoice
-from parsers.common import _blank, _build, _make_item, _money, _rate, _read, _source
+from parsers.common import _filled, _make_item, _read, _source
 
 
 def parse_xml_file(path: Path) -> ExtractedInvoice:
@@ -27,21 +27,23 @@ def parse_xml_file(path: Path) -> ExtractedInvoice:
                 _xml_child(node, "note"),
             )
         )
-    return _build(
-        vendor=_blank(_xml_first(root, "vendor")),
-        invoice_number_raw=_blank(_xml_first(root, "invoice_number")),
-        invoice_date=_blank(_xml_first(root, "date")),
-        due_date=_blank(_xml_first(root, "due_date")),
-        currency=_blank(_xml_first(root, "currency")) or "USD",
-        line_items=items,
-        subtotal=_money(_xml_first(root, "subtotal")),
-        tax_rate=_rate(_xml_first(root, "tax_rate")),
-        tax_amount=_money(_xml_first(root, "tax_amount")),
-        shipping=_money(_xml_first(root, "shipping")),
-        total=_money(_xml_first(root, "total")),
-        payment_terms=_blank(_xml_first(root, "payment_terms")),
-        notes=_blank(_xml_first(root, "notes")),
-        source=_source(path, "xml", raw),
+    return _filled(
+        _source(path, "xml", raw),
+        items,
+        {
+            "vendor": _xml_first(root, "vendor"),
+            "invoice_number": _xml_first(root, "invoice_number"),
+            "invoice_date": _xml_first(root, "date"),
+            "due_date": _xml_first(root, "due_date"),
+            "currency": _xml_first(root, "currency"),
+            "subtotal": _xml_first(root, "subtotal"),
+            "tax_rate": _xml_first(root, "tax_rate"),
+            "tax_amount": _xml_first(root, "tax_amount"),
+            "shipping": _xml_first(root, "shipping"),
+            "total": _xml_first(root, "total"),
+            "payment_terms": _xml_first(root, "payment_terms"),
+            "notes": _xml_first(root, "notes"),
+        },
     )
 
 

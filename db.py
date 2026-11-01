@@ -1,8 +1,4 @@
-"""Inventory database.
-
-setup_db.py is the only writer. The workflow opens the file read-only.
-The four seed rows match the README and are not extended. There is no other table.
-"""
+"""Inventory database. setup_db.py is the only writer. The workflow opens it read-only."""
 
 import sqlite3
 from pathlib import Path
@@ -21,11 +17,7 @@ SEED = (
 
 
 def create_database(path: str | Path = "inventory.db") -> Path:
-    """Create inventory.db if needed and seed it when the table is empty.
-
-    A database that already has rows is left alone. main.py calls this only
-    when the file is missing. The invoice workflow does not call it.
-    """
+    """Create the file if needed and seed it when the table is empty."""
 
     db_path = Path(path)
     connection = sqlite3.connect(db_path)
@@ -44,10 +36,7 @@ def create_database(path: str | Path = "inventory.db") -> Path:
 
 
 def connect_readonly(path: str | Path = "inventory.db") -> sqlite3.Connection:
-    """Open the inventory snapshot without writing it.
-
-    The default path uses the read-only URI form. Writes raise OperationalError.
-    """
+    """Read-only URI. Writes raise OperationalError."""
 
     name = Path(path).as_posix()
     if name == "inventory.db":
@@ -64,7 +53,3 @@ def load_stock(path: str | Path = "inventory.db") -> list[tuple[str, int]]:
     finally:
         connection.close()
     return [(item, int(stock)) for item, stock in rows]
-
-
-def inventory_rows(path: str | Path) -> list[tuple[str, int]]:
-    return load_stock(path)

@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from models import ExtractedInvoice
-from parsers.common import _blank, _build, _make_item, _money, _rate, _read, _source
+from parsers.common import _blank, _filled, _make_item, _read, _source
 
 
 def parse_json_file(path: Path) -> ExtractedInvoice:
@@ -25,23 +25,25 @@ def parse_json_file(path: Path) -> ExtractedInvoice:
         for row in (data.get("line_items") or data.get("items") or [])
         if str(row.get("item") or row.get("name") or row.get("description") or "").strip()
     ]
-    return _build(
-        vendor=vendor,
-        vendor_address=address,
-        invoice_number_raw=_blank(data.get("invoice_number")),
-        revision=_blank(data.get("revision")),
-        invoice_date=_blank(data.get("date") or data.get("invoice_date")),
-        due_date=_blank(data.get("due_date")),
-        currency=_blank(data.get("currency")) or "USD",
-        line_items=items,
-        subtotal=_money(data.get("subtotal")),
-        tax_rate=_rate(data.get("tax_rate")),
-        tax_amount=_money(data.get("tax_amount")),
-        shipping=_money(data.get("shipping")),
-        total=_money(data.get("total")),
-        payment_terms=_blank(data.get("payment_terms")),
-        notes=_blank(data.get("notes")),
-        source=_source(path, "json", raw),
+    return _filled(
+        _source(path, "json", raw),
+        items,
+        {
+            "vendor": vendor,
+            "vendor_address": address,
+            "invoice_number": data.get("invoice_number"),
+            "revision": data.get("revision"),
+            "invoice_date": data.get("date") or data.get("invoice_date"),
+            "due_date": data.get("due_date"),
+            "currency": data.get("currency"),
+            "subtotal": data.get("subtotal"),
+            "tax_rate": data.get("tax_rate"),
+            "tax_amount": data.get("tax_amount"),
+            "shipping": data.get("shipping"),
+            "total": data.get("total"),
+            "payment_terms": data.get("payment_terms"),
+            "notes": data.get("notes"),
+        },
     )
 
 

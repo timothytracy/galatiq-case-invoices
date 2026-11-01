@@ -3,7 +3,7 @@
 from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
 from pipeline.stage_log import _stopped, agent_finding, stage_log
-from rules import resolve_as_of, threshold_only_concern, today_line
+from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 
 def critique(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None) -> dict:

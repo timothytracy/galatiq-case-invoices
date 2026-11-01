@@ -1,10 +1,11 @@
-"""One JSON object per stage, printed and returned so the saved log matches stdout."""
+"""One JSON object per stage, printed and returned."""
 
 import json
 from datetime import datetime, timezone
 
 from models import Finding, StageRecord
-from rules import explain, finding_codes
+from decision.outcome import finding_codes
+from decision.wording import explain
 
 
 def stage_log(filename: str, stage: str, result: dict) -> dict:

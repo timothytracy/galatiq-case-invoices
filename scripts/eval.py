@@ -1,12 +1,4 @@
-"""Score the sample invoices against data/answer_key.json.
-
-Each file is a new graph run. Nothing is remembered between files.
-The exit code is 0 only when every outcome and primary reason code match.
-Warning lines are printed and do not change the exit code.
-
-    python3 scripts/eval.py
-    python3 scripts/eval.py --help
-"""
+"""Score sample invoices against data/answer_key.json. Exit 0 only on a full match."""
 
 import argparse
 import json
@@ -20,7 +12,8 @@ from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from llm_client import GrokClient, MissingAPIKey  # noqa: E402
 from main import payment_status  # noqa: E402
-from rules import KEY_REASON_TO_CODE, result_codes  # noqa: E402
+from decision.outcome import result_codes  # noqa: E402
+from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
 
 INVOICES = ROOT / "data" / "invoices"
 ANSWER_KEY = ROOT / "data" / "answer_key.json"

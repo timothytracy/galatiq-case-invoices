@@ -1,8 +1,4 @@
-"""Shared shapes for the invoice workflow.
-
-Money is Decimal. Missing values are None. Dates stay as printed text.
-The graph state holds these models. Nodes return updates to that state.
-"""
+"""Shared shapes. Money is Decimal. Missing values are None. Dates stay as printed text."""
 
 from decimal import Decimal
 from typing import Literal
@@ -13,11 +9,15 @@ Outcome = Literal["approve", "reject", "hold"]
 AuditVerdict = Literal["PASS", "SEND_BACK", "ESCALATE"]
 
 
-class SourceInfo(BaseModel):
-    """Where an invoice came from. raw_text is the document text before any repair."""
-
+class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+
+class _Loose(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class SourceInfo(_Strict):
     path: str
     filename: str
     format: str
@@ -25,11 +25,7 @@ class SourceInfo(BaseModel):
     raw_text: str | None = None
 
 
-class LineItem(BaseModel):
-    """One priced row. item is the normalized code. description is the printed text."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class LineItem(_Strict):
     item: str
     description: str
     quantity: Decimal
@@ -38,11 +34,7 @@ class LineItem(BaseModel):
     note: str | None = None
 
 
-class ExtractedInvoice(BaseModel):
-    """Ingestion output. Totals are the printed numbers, not recomputed ones."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class ExtractedInvoice(_Strict):
     vendor: str | None = None
     vendor_address: str | None = None
     invoice_number: str | None = None
@@ -59,10 +51,9 @@ class ExtractedInvoice(BaseModel):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
-    # True only when the extraction model flags instructions aimed at the system.
-    # A reject also needs the deterministic phrase check in rules.py.
+    # Reject also needs the phrase check in decision.findings.
     embedded_instructions: bool = False
-    # Set by extraction when the address looks non-commercial. Warning only.
+    # Warning only. Set when the address looks non-commercial.
     noncommercial_address: bool = False
     address_reason: str | None = None
     source: SourceInfo
@@ -77,62 +68,33 @@ class ExtractedInvoice(BaseModel):
         return text
 
 
-class Finding(BaseModel):
-    """One problem a stage raised.
-
-    code is a stable short name such as STOCK_SHORTFALL.
-    severity is info, warning, or blocking.
-    item is the line or invoice field this finding is about, or null.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
+class Finding(_Strict):
     code: str
     message: str
     severity: Literal["info", "warning", "blocking"] = "blocking"
     item: str | None = None
 
 
-class PaymentAuthorization(BaseModel):
-    """Sign-off produced only by a PASS audit. Payment refuses to run without one.
-
-    key is one-time for this process. The audit builds it from the invoice
-    file path and a hash of the file text.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
+class PaymentAuthorization(_Strict):
     vendor: str
     amount: Decimal
     currency: str
     key: str = Field(min_length=1)
 
 
-class ValidationReport(BaseModel):
-    """Validation output. passed is true only when no rule blocks payment."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class ValidationReport(_Strict):
     passed: bool
     findings: list[Finding] = Field(default_factory=list)
 
 
-class ApprovalReasoning(BaseModel):
-    """Why a decision was made. Evidence is taken from the invoice and the findings."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class ApprovalReasoning(_Strict):
     rules_applied: list[str] = Field(min_length=1)
     evidence: list[str] = Field(min_length=1)
     risks_considered: list[str] = Field(min_length=1)
     conclusion: str = Field(min_length=1)
 
 
-class ApprovalDecision(BaseModel):
-    """Approval output. Pay only when decision is approve and the audit returns PASS."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class ApprovalDecision(_Strict):
     decision: Outcome
     reasoning: ApprovalReasoning
     reason_code: str | None = None
@@ -142,11 +104,7 @@ class ApprovalDecision(BaseModel):
     currency: str | None = None
 
 
-class PaymentRecord(BaseModel):
-    """Payment output. mock_response is set only when status is paid."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class PaymentRecord(_Strict):
     status: Literal["paid", "not_paid"]
     vendor: str | None = None
     amount: Decimal | None = None
@@ -155,11 +113,7 @@ class PaymentRecord(BaseModel):
     mock_response: dict | None = None
 
 
-class StageRecord(BaseModel):
-    """One printed and saved log record."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class StageRecord(_Strict):
     record: Literal["stage"] = "stage"
     stage: Literal[
         "ingestion",
@@ -176,21 +130,7 @@ class StageRecord(BaseModel):
     result: dict
 
 
-class InvoiceLabel(BaseModel):
-    """One row of data/labels.json. The outcome comes from that file's own content."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    file: str
-    outcome: Outcome
-    reason: str = Field(min_length=1)
-
-
-class Assessment(BaseModel):
-    """Deterministic rule result for one invoice."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class Assessment(_Strict):
     outcome: Outcome
     reason_code: str | None = None
     reason: str
@@ -199,11 +139,7 @@ class Assessment(BaseModel):
     currency: str
 
 
-class ExtractionLine(BaseModel):
-    """One line in the extraction agent's JSON."""
-
-    model_config = ConfigDict(extra="ignore")
-
+class ExtractionLine(_Loose):
     item: str
     description: str | None = None
     quantity: Decimal
@@ -212,11 +148,7 @@ class ExtractionLine(BaseModel):
     note: str | None = None
 
 
-class ExtractionSchema(BaseModel):
-    """JSON the extraction agent must return."""
-
-    model_config = ConfigDict(extra="ignore")
-
+class ExtractionSchema(_Loose):
     vendor: str | None = None
     vendor_address: str | None = None
     invoice_number: str | None = None
@@ -237,38 +169,26 @@ class ExtractionSchema(BaseModel):
     address_reason: str | None = None
 
 
-class ReasoningDraft(BaseModel):
-    """The part of the approval reasoning the model writes."""
-
-    model_config = ConfigDict(extra="ignore")
-
+class ReasoningDraft(_Loose):
     risks_considered: list[str] = Field(min_length=1)
     conclusion: str = Field(min_length=1)
 
 
-class CritiqueDraft(BaseModel):
-    """Critique may add concerns and may only make the decision stricter."""
-
-    model_config = ConfigDict(extra="ignore")
-
+class CritiqueDraft(_Loose):
     concerns: list[str] = Field(default_factory=list)
     stricter: bool = False
 
 
-class AuditDraft(BaseModel):
-    """Audit verdict. Python may tighten it. It may not loosen it."""
-
-    model_config = ConfigDict(extra="ignore")
-
+class AuditDraft(_Loose):
     verdict: AuditVerdict
     feedback: list[str] = Field(default_factory=list)
     notes: str = ""
-    # Finding codes this verdict is based on. Empty means the concern is free text.
+    # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):
-    """Graph state. One invoice, no memory of any other file."""
+    """One invoice. Nothing in here is remembered for the next file."""
 
     invoice_path: str
     filename: str

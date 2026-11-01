@@ -1,9 +1,10 @@
-"""Reject log. The other exit. Nothing on this path is paid."""
+"""Reject log. The other exit. Nothing here is paid."""
 
 from models import PaymentRecord, PipelineState
 from pipeline.decisions import _decision_from_validation, _failure_decision, _tighten
 from pipeline.stage_log import stage_log
-from rules import ACTION, explain, finding_codes
+from decision.outcome import finding_codes
+from decision.wording import ACTION, explain
 
 
 def _stage_name(outcome: str) -> str:

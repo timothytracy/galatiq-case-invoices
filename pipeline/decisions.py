@@ -1,11 +1,8 @@
-"""Decision objects built in Python.
-
-The model does not write rules_applied or evidence. Audit and the reject log
-share the tighten step so a revision cannot drift between those two exits.
-"""
+"""Decision objects built in Python. The model does not write rules_applied or evidence."""
 
 from models import ApprovalDecision, ApprovalReasoning, PipelineState
-from rules import RULE_TEXT, show_money
+from decision.invoice_fields import show_money
+from decision.wording import RULE_TEXT
 
 
 def _tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: list[str]) -> ApprovalDecision:

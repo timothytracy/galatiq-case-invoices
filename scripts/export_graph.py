@@ -1,9 +1,4 @@
-"""Write docs/graph.md from the compiled LangGraph diagram.
-
-    python3 scripts/export_graph.py
-
-Drawing the graph does not call the model and does not need a key.
-"""
+"""Write docs/graph.md from the compiled graph. No model call and no API key."""
 
 import sys
 from pathlib import Path

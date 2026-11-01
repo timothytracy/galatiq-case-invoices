@@ -1,1 +1,1 @@
-"""Invoice decision pieces. rules.py re-exports the public names."""
+"""Invoice decision pieces: policy, findings, precedence, and wording."""

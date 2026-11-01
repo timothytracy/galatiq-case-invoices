@@ -1,11 +1,4 @@
-"""Approval. The outcome is already fixed. The model only writes the wording.
-
-rules_applied and evidence are filled here from the real findings, so the
-model cannot invent the facts. A second pass after critique appends the
-previous reasoning. A reply that says the input is invalid, or that refuses
-an approve decision, is a failed attempt and is retried. That attempt's
-log keeps the conclusion, the risks, and the phrase that matched.
-"""
+"""Approval wording. The outcome is already fixed. Facts are filled in Python."""
 
 import json
 import re
@@ -14,7 +7,8 @@ from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
 from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
 from pipeline.stage_log import _stopped, agent_finding, stage_log
-from rules import PASSED_RULES, evidence_lines, resolve_as_of, today_line
+from decision.findings import evidence_lines
+from decision.wording import PASSED_RULES, resolve_as_of, today_line
 
 # Long enough to read the flagged sentence. Short enough to keep a log line small.
 _LOG_LIMIT = 500
@@ -115,36 +109,18 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
     }
 
 
-# Wording that means the model refused the payload, or fought an approve decision.
+# A payload refusal, or a fight with an approve decision. "approved" alone does not match.
 _BAD_INPUT = (
-    "not valid json",
-    "invalid json",
-    "invalid input",
-    "cannot be parsed",
-    "unparseable",
-    "unable to parse",
-    "unable to process",
-    "cannot be reliably extracted",
+    "not valid json", "invalid json", "invalid input", "cannot be parsed",
+    "unparseable", "unable to parse", "unable to process", "cannot be reliably extracted",
 )
-_NOT_APPROVE = (
-    "unable to approve",
-    "not to approve",
-    "not approve",
-    "don't approve",
-    "can't approve",
-)
-# "approved" alone does not match. "should/cannot/must not be approved" does,
-# because each of those contains "not" before "approv".
+_NOT_APPROVE = ("unable to approve", "not to approve", "not approve", "don't approve", "can't approve")
+# "should/cannot/must not be approved" contains "not" before "approv".
 _APPROVE_REFUSAL = re.compile(r"(?i)not\s+(?:be\s+)?approv")
 
 
 def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
-    """The phrase that tripped the detector, or None when the wording is fine.
-
-    A not-approve phrase on an approve decision is 'approve-contradiction'.
-    Any other hit is the matched phrase. Conclusion is checked first, then
-    each risk, and phrases are checked in list order.
-    """
+    """Matched phrase, or 'approve-contradiction'. None when the wording is fine."""
 
     phrases = _BAD_INPUT
     if decision == "approve":
