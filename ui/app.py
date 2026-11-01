@@ -239,7 +239,10 @@ def _invoice_block(invoice: dict) -> None:
         {label(name): "" if blank(line.get(name)) else show_text(line[name]) for name in LINE_FIELDS}
         for line in invoice.get("line_items") or []
     ]
-    st.dataframe(items, hide_index=True, width="stretch") if items else st.write("No line items.")
+    if items:
+        st.dataframe(items, hide_index=True, width="stretch")
+    else:
+        st.write("No line items.")
 
 def _findings_block(findings: list) -> None:
     warnings = sum(1 for item in findings if item.get("severity") == "warning")
