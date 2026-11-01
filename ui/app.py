@@ -1,5 +1,6 @@
 """Invoice review screen. Launch: streamlit run ui/app.py"""
 
+import json
 import sys
 from html import escape
 from pathlib import Path
@@ -10,71 +11,54 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st
 
-from tests.fake_llm_eval import AS_OF
+from llm_client import MissingAPIKey
 from ui.present import (
-    INVOICE_FIELDS,
-    OUTCOMES,
-    agent_trail,
-    detail_index,
-    format_amount,
-    format_money,
-    holds,
-    invoice_view,
-    summarize,
-    table_rows,
+    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, clean,
+    detail_index, format_amount, format_money, holds, invoice_view, label, payment_text,
+    reason_code_text, show_text, summarize, table_rows,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
-    DEFAULT_RUN,
-    invoice_files,
-    load_run,
-    parse_payload,
-    resolve_path,
-    run_one,
-    save_run,
+    DEFAULT_RUN, grok_key_set, invoice_files, load_run, mode_label, parse_payload,
+    resolve_path, run_one, save_run,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
-BADGE = {"approve": "green", "reject": "red", "hold": "orange"}
-SEVERITY = {"blocking": "reject", "warning": "hold", "info": "info"}
+MODES = ("Live (Grok)", "Offline (fake LLM)")
+BADGE = {"approve": "green", "reject": "red", "hold": "orange", "blocking": "red", "warning": "orange", "info": "gray"}
+TIMING = {
+    "elapsed_seconds": "Average of the time around each run_invoice call.",
+    "timestamps": "Average of the stage-log timestamp span.",
+    "mixed": "Average of measured time where a live run stored it, otherwise the stage-log span.",
+}
 
 st.set_page_config(page_title="Invoice review", layout="wide")
 st.markdown(
-    """
-    <style>
-    .review-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    .results-table { table-layout: fixed; }
-    .review-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #d9d3c5;
-        font-size: 12px; letter-spacing: 0.03em; text-transform: lowercase; }
-    .review-table td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; color: white;
-        font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
-    .badge-approve { background: #1f7a4d; }
-    .badge-reject { background: #9d2c2c; }
-    .badge-hold { background: #8a5a12; }
-    .badge-info { background: #5c6b73; }
-    .file { font-weight: 600; }
-    .sub, .null { color: #666; }
-    .reason { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .num, .nowrap { white-space: nowrap; }
-    .missing { color: #777; font-style: italic; }
-    #MainMenu, footer, div[data-testid="stToolbar"] { visibility: hidden; }
-    header[data-testid="stHeader"] { background: transparent; }
-    </style>
-    """,
+    "<style>"
+    ".review-table{width:100%;border-collapse:collapse;font-size:14px}"
+    ".review-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #d9d3c5}"
+    ".review-table td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}"
+    ".badge{display:inline-block;padding:2px 8px;border-radius:999px;color:#fff;font-size:12px;font-weight:700}"
+    ".badge-approve{background:#1f7a4d}.badge-reject,.badge-blocking{background:#9d2c2c}"
+    ".badge-hold,.badge-warning{background:#8a5a12}.badge-info,.badge-gray{background:#5c6b73}"
+    ".file{font-weight:600}.sub,.note{color:#555}"
+    ".reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+    "#MainMenu,footer,div[data-testid='stToolbar']{visibility:hidden}"
+    "</style>",
     unsafe_allow_html=True,
 )
 
 
 def main() -> None:
     st.title("Invoice review")
-    st.caption(
-        f"LangGraph invoice pipeline. Live runs use the fake LLM. Agents are told today is {AS_OF.isoformat()}."
-    )
-    entries = st.session_state.setdefault("entries", [])
+    live = st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1).startswith("Live")
     page = st.sidebar.radio("Screen", SCREENS)
+    used = mode_label(st.session_state.get("entries") or [])
+    if used:
+        st.caption(f"This run used {used}.")
+    entries = st.session_state.setdefault("entries", [])
     if page == "Run or load":
-        screen_run()
+        screen_run(live)
     elif not entries:
         st.info("Process an invoice or load a run file on Run or load.")
     elif page == "Results":
@@ -87,52 +71,44 @@ def main() -> None:
         screen_metrics(entries)
 
 
-def screen_run() -> None:
+def screen_run(live: bool) -> None:
     st.header("Run or load")
     left, right = st.columns(2)
     with left:
         st.subheader("Process")
-        st.text_input("invoice_path", value="data/invoices/invoice_1001.txt", key="invoice_path")
+        st.text_input("Invoice path", value="data/invoices/invoice_1001.txt", key="invoice_path")
         one, folder = st.columns(2)
-        with one:
-            process_one = st.button("Process this invoice", type="primary")
-        with folder:
-            process_folder = st.button("Process data/invoices")
+        process_one = one.button("Process this invoice", type="primary")
+        process_folder = folder.button("Process data/invoices")
         st.caption("Payment will not run twice for the same invoice in this session.")
     with right:
         st.subheader("Load")
-        st.text_input("run file", value="", placeholder="output/runs/review_run.json", key="run_path")
+        st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
         load_clicked = st.button("Load run file")
-        st.caption("Or upload a JSON file.")
-        uploaded = st.file_uploader("run file upload", type=["json"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Upload a JSON run file", type=["json"])
     if process_one:
-        _process_one(st.session_state["invoice_path"])
+        _process([resolve_path(st.session_state["invoice_path"])], live, single=True)
     if process_folder:
-        _process_folder()
+        _process(invoice_files(), live, single=False)
     if load_clicked:
-        _load_path(st.session_state["run_path"])
-    if uploaded is not None:
-        token = getattr(uploaded, "file_id", None) or (uploaded.name, uploaded.size)
-        if st.session_state.get("upload_id") != token:
-            st.session_state["upload_id"] = token
-            _load_upload(uploaded.getvalue().decode("utf-8"), uploaded.name)
+        _remember(st.session_state.get("run_path") or "")
+    if uploaded is not None and st.session_state.get("upload_id") != getattr(uploaded, "file_id", uploaded.name):
+        st.session_state["upload_id"] = getattr(uploaded, "file_id", uploaded.name)
+        _remember_payload(uploaded.getvalue().decode("utf-8"), uploaded.name)
     _flash()
     entries = st.session_state.get("entries") or []
-    if entries:
-        counts = summarize(entries)["counts"]
-        tally = ", ".join(f"{name} {counts[name]}" for name in OUTCOMES)
-        st.write(f"This session has {len(entries)} invoices ({tally}).")
-        if st.button("Save run file"):
-            destination = save_run(DEFAULT_RUN, entries)
-            st.success(f"Saved {destination}")
+    if not entries:
+        return
+    counts = summarize(entries)["counts"]
+    st.write("This session has " + f"{len(entries)} invoices (" + ", ".join(f"{name} {counts[name]}" for name in OUTCOMES) + ").")
+    if st.button("Save run file"):
+        st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
 
 
 def screen_results(entries: list[dict]) -> None:
     st.header("Results")
     choice = st.segmented_control(
-        "outcome",
-        ["all", *OUTCOMES],
-        default="all",
+        "Outcome", ["all", *OUTCOMES], default="all",
         format_func=lambda value: "All" if value == "all" else value.upper(),
     )
     if isinstance(choice, list):
@@ -145,57 +121,56 @@ def screen_results(entries: list[dict]) -> None:
     body = []
     for row in rows:
         outcome = row["outcome"] or ""
-        badge = f"<span class='badge badge-{escape(outcome)}'>{escape(outcome.upper())}</span>"
-        number = row.get("invoice_number") or ""
-        invoice = f"<div class='file'>{escape(row['file'])}</div>"
-        if number:
-            invoice += f"<div class='sub'>{escape(number)}</div>"
-        code = escape(row["reason_code"]) if row["reason_code"] else "<span class='null'>null</span>"
+        number = f"<div class='sub'>{escape(row['invoice_number'])}</div>" if row.get("invoice_number") else ""
         reason = escape(row["reason"]).replace("\n", " ")
-        amount = escape(format_amount(row["amount"], row["currency"]))
         body.append(
             "<tr>"
-            f"<td>{invoice}</td><td>{badge}</td><td>{code}</td>"
-            f"<td class='num'>{amount}</td>"
-            f"<td><div class='reason' title='{reason}'>{reason}</div></td>"
-            "</tr>"
+            f"<td><div class='file'>{escape(row['file'])}</div>{number}</td>"
+            f"<td>{_badge(outcome, outcome.upper())}</td>"
+            f"<td>{escape(reason_code_text(row))}</td>"
+            f"<td>{escape(format_amount(row['amount'], row['currency']))}</td>"
+            f"<td><div class='reason' title='{reason}'>{reason}</div></td></tr>"
         )
-    header = "<tr><th>invoice</th><th>outcome</th><th>reason_code</th><th>amount</th><th>reason</th></tr>"
-    columns = (
-        "<colgroup><col style='width:18%'><col style='width:11%'>"
-        "<col style='width:16%'><col style='width:14%'><col style='width:41%'></colgroup>"
-    )
-    st.markdown(
-        f"<table class='review-table results-table'>{columns}<thead>{header}</thead>"
-        f"<tbody>{''.join(body)}</tbody></table>",
-        unsafe_allow_html=True,
-    )
+    _table(["Invoice", "Outcome", "Reason code", "Amount", "Reason"], body)
 
 
 def screen_detail(entries: list[dict]) -> None:
     st.header("Invoice detail")
     views = [invoice_view(entry) for entry in entries]
     labels = [view["file"] for view in views]
-    choice = st.selectbox("invoice", labels, index=detail_index(views), key="invoice_detail")
-    view = views[labels.index(choice)]
-    _detail_header(view)
+    view = views[labels.index(st.selectbox("Invoice", labels, index=detail_index(views), key="invoice_detail"))]
+    outcome = view["outcome"] or ""
+    columns = st.columns(4)
+    columns[0].caption("Outcome")
+    columns[0].badge(outcome.upper(), color=BADGE.get(outcome, "gray"))
+    columns[1].caption("Reason code")
+    columns[1].write(reason_code_text(view))
+    columns[2].caption("Total")
+    columns[2].write(format_amount(view["amount"], view["currency"]))
+    columns[3].caption("Payment")
+    columns[3].badge(payment_text(view["payment_status"]), color="green" if view["payment_status"] == "paid" else "gray")
+    if view["reason"]:
+        st.caption("Reason")
+        st.write(view["reason"])
+    st.caption("Next action")
+    st.write(action_text(view))
+    st.write("Payment happened." if view["payment_status"] == "paid" else "Payment did not happen.")
+    detail = (view.get("payment") or {}).get("detail")
+    if not blank(detail):
+        st.caption("Payment detail")
+        st.write(detail)
     st.subheader("Extracted invoice")
-    _invoice_fields(view.get("invoice") or {})
+    _invoice_block(view.get("invoice") or {})
     st.subheader("Findings")
-    _findings_table(view["findings"])
+    _findings_block(view["findings"])
     st.subheader("Agent trail")
-    _trail(view["logs"])
-    if view["raw_text"]:
-        with st.expander("raw_text"):
-            st.text(view["raw_text"])
+    _trail_block(view)
 
 
 def screen_holds(entries: list[dict]) -> None:
     st.header("Hold queue")
     _flash()
-    st.caption(
-        "A review is a local note. It does not call payment and it does not change outcome, reason_code, or action."
-    )
+    st.caption("A review is a local note. It does not call payment or change the pipeline outcome.")
     st.caption(f"Saved to {REVIEW_PATH.relative_to(ROOT)}")
     queued = holds(entries)
     if not queued:
@@ -209,218 +184,146 @@ def screen_holds(entries: list[dict]) -> None:
     for index, view in enumerate(queued):
         st.subheader(view["file"])
         meta = st.columns(3)
-        meta[0].caption("reason_code")
-        meta[0].write(view["reason_code"] or "null")
-        meta[1].caption("amount")
-        meta[1].write(format_amount(view["amount"], view["currency"]) or "null")
-        meta[2].caption("payment.status")
-        meta[2].write(view["payment_status"])
-        st.caption("action")
-        st.write(view["action"] or "null")
+        for column, caption, value in zip(
+            meta,
+            ("Reason code", "Amount", "Payment"),
+            (reason_code_text(view), format_amount(view["amount"], view["currency"]), payment_text(view["payment_status"])),
+        ):
+            column.caption(caption)
+            column.write(value)
+        if action_text(view):
+            st.caption("Next action")
+            st.write(action_text(view))
         existing = saved.get(view["file"])
         if existing:
             st.info(
-                f"Recorded reviewer_outcome {existing.get('reviewer_outcome')}. "
-                f"pipeline_outcome is still {existing.get('pipeline_outcome')}. "
-                f"Note: {existing.get('note')}"
+                f"Recorded {existing.get('reviewer_outcome')}. "
+                f"Pipeline outcome is still {existing.get('pipeline_outcome')}. Note: {existing.get('note')}"
             )
         with st.form(f"review-{index}-{view['file']}"):
             reviewer_outcome = st.radio(
-                "reviewer_outcome",
-                ["approve", "reject"],
-                horizontal=True,
-                key=f"choice-{index}-{view['file']}",
+                "Reviewer choice", ["approve", "reject"], index=None, horizontal=True,
+                format_func=str.capitalize, key=f"choice-{index}-{view['file']}",
             )
-            note = st.text_area("note", key=f"note-{index}-{view['file']}")
-            submitted = st.form_submit_button("Save review")
-        if submitted:
-            _save_hold(view, reviewer_outcome, note)
+            note = st.text_area("Note", key=f"note-{index}-{view['file']}")
+            if st.form_submit_button("Save review"):
+                _save_hold(view, reviewer_outcome, note)
 
 
 def screen_metrics(entries: list[dict]) -> None:
     st.header("Metrics")
     summary = summarize(entries)
-    count_cols = st.columns(3)
-    for column, name in zip(count_cols, OUTCOMES):
-        column.metric(name, summary["counts"][name])
-    dollar_cols = st.columns(3)
-    dollar_labels = {
-        "approve": "Dollars approved",
-        "reject": "Dollars rejected",
-        "hold": "Dollars held",
-    }
-    for column, name in zip(dollar_cols, OUTCOMES):
-        column.metric(dollar_labels[name], f"{format_money(summary['dollars'][name])} USD")
+    dollars = {"approve": "Dollars approved", "reject": "Dollars rejected", "hold": "Dollars held"}
+    for column, name in zip(st.columns(3), OUTCOMES):
+        column.metric(label(name), summary["counts"][name])
+    for column, name in zip(st.columns(3), OUTCOMES):
+        column.metric(dollars[name], f"{format_money(summary['dollars'][name])} USD")
     average = summary["average_seconds"]
-    shown = "n/a" if average is None else f"{average:.3f} s"
-    st.metric("Average time per invoice", shown)
-    if summary["timing"] == "elapsed_seconds":
-        st.caption(
-            f"Mean of elapsed_seconds around each run_invoice call ({summary['timed_invoices']} invoices)."
-        )
-    elif summary["timing"] == "timestamps":
-        st.caption("Mean of the stage-log timestamp span. The log stamps are whole seconds.")
-    elif summary["timing"] == "mixed":
-        st.caption("Mean of elapsed_seconds where a live run stored it, otherwise the stage-log span.")
-    else:
-        st.caption("No timing on this run.")
-    if summary["other"]:
-        st.caption("Not included in the dollar totals. Nothing is converted.")
-        for currency, bucket in summary["other"].items():
-            parts = [f"{name} {format_money(bucket[name])} {currency}" for name in OUTCOMES if bucket[name]]
-            st.write(", ".join(parts))
+    st.metric("Average time per invoice", "n/a" if average is None else f"{average:.3f} s")
+    if summary["timing"] in TIMING:
+        st.caption(TIMING[summary["timing"]])
+    if not summary["other"]:
+        return
+    st.caption("Not included in the dollar totals. Nothing is converted.")
+    for currency, bucket in summary["other"].items():
+        parts = [f"{name} {format_money(bucket[name])} {currency}" for name in OUTCOMES if bucket[name]]
+        st.write(", ".join(parts))
 
 
-def _detail_header(view: dict) -> None:
-    outcome = view["outcome"] or ""
-    columns = st.columns(4)
-    columns[0].caption("outcome")
-    columns[0].badge(outcome.upper() or "null", color=BADGE.get(outcome, "gray"))
-    columns[1].caption("reason_code")
-    columns[1].write(view["reason_code"] or "null")
-    columns[2].caption("total")
-    columns[2].write(format_amount(view["amount"], view["currency"]) or "null")
-    columns[3].caption("payment.status")
-    paid = view["payment_status"] == "paid"
-    columns[3].badge(view["payment_status"], color="green" if paid else "gray")
-    st.caption("reason")
-    st.write(view["reason"] or "null")
-    st.caption("action")
-    st.write(view["action"] or "null")
-    if paid:
-        st.write("Payment happened.")
-    else:
-        st.write("Payment did not happen.")
-    detail = (view.get("payment") or {}).get("detail")
-    if detail:
-        st.caption("payment.detail")
-        st.write(detail)
-
-
-def _invoice_fields(invoice: dict) -> None:
+def _invoice_block(invoice: dict) -> None:
     if not invoice:
         st.write("No invoice was extracted.")
         return
-    cells = []
-    for name in INVOICE_FIELDS:
-        cells.append(f"<tr><th>{escape(name)}</th><td>{_show(invoice.get(name))}</td></tr>")
-    st.markdown(
-        f"<table class='review-table'><tbody>{''.join(cells)}</tbody></table>",
-        unsafe_allow_html=True,
-    )
-    warnings = invoice.get("warnings") or []
-    st.caption("warnings")
-    st.write(", ".join(warnings) if warnings else "[]")
+    rows = [
+        f"<tr><th>{escape(label(name))}</th><td>{escape(show_text(invoice[name]))}</td></tr>"
+        for name in INVOICE_FIELDS if not blank(invoice.get(name))
+    ]
+    if rows:
+        _html(f"<table class='review-table'><tbody>{''.join(rows)}</tbody></table>")
+    if invoice.get("warnings"):
+        st.caption("Warnings")
+        st.write(show_text(invoice["warnings"]))
     source = invoice.get("source") or {}
-    st.caption(f"source.format {source.get('format')} · source.parser {source.get('parser')}")
+    bits = [f"{label(key)} {source[key]}" for key in ("format", "parser") if not blank(source.get(key))]
+    if bits:
+        st.caption(" · ".join(bits))
     items = invoice.get("line_items") or []
-    st.caption("line_items")
+    st.caption("Line items")
     if not items:
-        st.write("[]")
+        st.write("No line items.")
         return
-    header = "<tr><th>item</th><th>description</th><th>quantity</th><th>unit_price</th><th>amount</th><th>note</th></tr>"
-    body = []
-    for line in items:
-        body.append(
-            "<tr>"
-            + "".join(
-                f"<td>{_show(line.get(name))}</td>"
-                for name in ("item", "description", "quantity", "unit_price", "amount", "note")
-            )
-            + "</tr>"
-        )
-    st.markdown(
-        f"<table class='review-table'><thead>{header}</thead><tbody>{''.join(body)}</tbody></table>",
-        unsafe_allow_html=True,
-    )
+    body = ["<tr>" + "".join(
+        f"<td>{'' if blank(line.get(name)) else escape(show_text(line.get(name)))}</td>" for name in LINE_FIELDS
+    ) + "</tr>" for line in items]
+    _table([label(name) for name in LINE_FIELDS], body)
 
 
-def _findings_table(findings: list) -> None:
-    warnings = [item for item in findings if item.get("severity") == "warning"]
-    st.caption(f"{len(findings)} findings, {len(warnings)} with severity warning")
+def _findings_block(findings: list) -> None:
+    warnings = sum(1 for item in findings if item.get("severity") == "warning")
+    st.caption(f"{len(findings)} findings, {warnings} with severity warning")
     if not findings:
         st.write("No findings.")
         return
-    header = "<tr><th>code</th><th>severity</th><th>item</th><th>message</th></tr>"
     body = []
     for finding in findings:
         severity = finding.get("severity") or ""
-        kind = SEVERITY.get(severity, "info")
-        badge = f"<span class='badge badge-{kind}'>{escape(severity)}</span>"
+        item = "" if blank(finding.get("item")) else escape(str(finding["item"]))
         body.append(
-            "<tr>"
-            f"<td class='nowrap'>{escape(finding.get('code') or '')}</td><td>{badge}</td>"
-            f"<td>{_show(finding.get('item'))}</td><td>{escape(finding.get('message') or '')}</td>"
-            "</tr>"
+            f"<tr><td>{escape(finding.get('code') or '')}</td><td>{_badge(severity, severity)}</td>"
+            f"<td>{item}</td><td>{escape(finding.get('message') or '')}</td></tr>"
         )
-    st.markdown(
-        f"<table class='review-table'><thead>{header}</thead><tbody>{''.join(body)}</tbody></table>",
-        unsafe_allow_html=True,
-    )
+    _table(["Code", "Severity", "Item", "Message"], body)
 
 
-def _trail(logs: list) -> None:
-    trail = agent_trail(logs)
-    header = "<tr><th>stage</th><th>timestamp</th><th>summary</th></tr>"
-    body = []
-    for row in trail["rows"]:
-        body.append(
-            "<tr>"
-            f"<td>{escape(row['stage'])}</td>"
-            f"<td>{escape(row['timestamp'])}</td>"
-            f"<td>{escape(row['summary'])}</td>"
-            "</tr>"
-        )
-    if body:
-        st.markdown(
-            f"<table class='review-table'><thead>{header}</thead><tbody>{''.join(body)}</tbody></table>",
-            unsafe_allow_html=True,
-        )
+def _trail_block(view: dict) -> None:
+    trail = agent_trail(view["logs"], view["amount"])
+    if trail["rows"]:
+        _table(["Stage", "Time", "Summary"], [
+            f"<tr><td>{escape(label(row['stage']))}</td><td>{escape(row['timestamp'])}</td>"
+            f"<td>{escape(row['summary'])}</td></tr>"
+            for row in trail["rows"]
+        ])
+    if "critique" not in {row["stage"] for row in trail["rows"]}:
+        st.markdown(f"<p class='note'>{escape(trail['critique'])}</p>", unsafe_allow_html=True)
     if trail["missing"]:
-        st.markdown(
-            "<p class='missing'>Not in the logs: " + escape(", ".join(trail["missing"])) + "</p>",
-            unsafe_allow_html=True,
-        )
+        st.caption("Not in the logs: " + ", ".join(label(stage) for stage in trail["missing"]))
     for row in trail["rows"]:
-        with st.expander(f"{row['stage']} {row['timestamp']} result"):
-            st.json(row["result"])
+        if row["result"]:
+            with st.expander(f"{label(row['stage'])} {row['timestamp']} result"):
+                st.json(row["result"])
+    if view["raw_text"]:
+        with st.expander("Raw text"):
+            st.text(view["raw_text"])
 
 
-def _process_one(text: str) -> None:
-    path = resolve_path(text)
-    if path.is_dir():
-        st.error("invoice_path must be one invoice file.")
+def _process(paths: list[Path], live: bool, *, single: bool) -> None:
+    if single and (not paths[0].is_file() or paths[0].is_dir()):
+        st.error("Invoice path must be one invoice file." if paths[0].is_dir() else f"Invoice file not found: {paths[0]}")
         return
-    if not path.is_file():
-        st.error(f"Invoice file not found: {path}")
-        return
-    with st.spinner(f"Running {path.name} with the fake LLM…"):
-        entry = run_one(path)
-    _replace_entry(entry)
-    st.session_state["notice"] = f"Processed {path.name} with the fake LLM."
-
-
-def _process_folder() -> None:
-    paths = invoice_files()
-    rows = []
-    progress = st.progress(0.0)
-    status = st.empty()
+    rows, progress, status = [], st.progress(0.0), st.empty()
     try:
         for index, path in enumerate(paths, start=1):
             status.write(f"{path.name} ({index}/{len(paths)})")
-            rows.append(run_one(path))
+            rows.append(run_one(path, live=live))
             progress.progress(index / len(paths))
+    except MissingAPIKey as exc:
+        st.error(str(exc))
+        return
     except Exception as exc:
         st.error(str(exc))
         return
     finally:
         progress.empty()
         status.empty()
-    st.session_state["entries"] = rows
-    st.session_state["notice"] = f"Processed {len(rows)} invoices with the fake LLM."
+    if single:
+        _replace_entry(rows[0])
+    else:
+        st.session_state["entries"] = rows
+    st.session_state["notice"] = f"Processed {paths[0].name}." if single else f"Processed {len(rows)} invoices."
+    st.rerun()
 
 
-def _load_path(text: str) -> None:
+def _remember(text: str) -> None:
     if not text.strip():
         st.error("Enter a path to a run file or a directory of logs.")
         return
@@ -431,12 +334,11 @@ def _load_path(text: str) -> None:
         st.error(str(exc))
         return
     st.session_state["entries"] = entries
-    st.session_state["notice"] = f"Loaded {len(entries)} invoices from {path}."
+    st.session_state["notice"] = f"Loaded {len(entries)} invoices from {path.name}."
+    st.rerun()
 
 
-def _load_upload(text: str, name: str) -> None:
-    import json
-
+def _remember_payload(text: str, name: str) -> None:
     try:
         entries = parse_payload(json.loads(text), name)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -444,37 +346,31 @@ def _load_upload(text: str, name: str) -> None:
         return
     st.session_state["entries"] = entries
     st.session_state["notice"] = f"Loaded {len(entries)} invoices from {name}."
+    st.rerun()
 
 
 def _replace_entry(entry: dict) -> None:
     filename = (entry.get("state") or {}).get("filename")
-    kept = [
-        row
-        for row in st.session_state.get("entries") or []
-        if (row.get("state") or {}).get("filename") != filename
-    ]
+    kept = [row for row in st.session_state.get("entries") or [] if (row.get("state") or {}).get("filename") != filename]
     kept.append(entry)
     kept.sort(key=lambda row: (row.get("state") or {}).get("filename") or "")
     st.session_state["entries"] = kept
 
 
-def _save_hold(view: dict, reviewer_outcome: str, note: str) -> None:
+def _save_hold(view: dict, reviewer_outcome: str | None, note: str) -> None:
+    if reviewer_outcome not in {"approve", "reject"}:
+        st.error("Pick approve or reject before saving.")
+        return
     try:
         record_review(
-            file=view["file"],
-            pipeline_outcome=view["outcome"],
-            pipeline_reason_code=view["reason_code"],
-            pipeline_action=view["action"],
-            reviewer_outcome=reviewer_outcome,
-            note=note,
-            path=REVIEW_PATH,
+            file=view["file"], pipeline_outcome=view["outcome"], pipeline_reason_code=view["reason_code"],
+            pipeline_action=view["action"], reviewer_outcome=reviewer_outcome, note=note, path=REVIEW_PATH,
         )
     except ValueError as exc:
         st.error(str(exc))
         return
     st.session_state["notice"] = (
-        f"Recorded {reviewer_outcome} for {view['file']}. "
-        "The pipeline outcome was not changed and nothing was paid."
+        f"Recorded {reviewer_outcome} for {view['file']}. The pipeline outcome was not changed and nothing was paid."
     )
     st.rerun()
 
@@ -485,12 +381,17 @@ def _flash() -> None:
         st.success(notice)
 
 
-def _show(value) -> str:
-    if value is None:
-        return "<span class='null'>null</span>"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return escape(str(value))
+def _badge(kind: str, text: str) -> str:
+    return f"<span class='badge badge-{escape(kind)}'>{escape(text)}</span>"
+
+
+def _table(headers: list[str], body: list[str]) -> None:
+    head = "".join(f"<th>{escape(header)}</th>" for header in headers)
+    _html(f"<table class='review-table'><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>")
+
+
+def _html(text: str) -> None:
+    st.markdown(text, unsafe_allow_html=True)
 
 
 main()

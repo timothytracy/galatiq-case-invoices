@@ -1,11 +1,12 @@
-"""Run invoices with the repo's fake LLM, and read a saved run back.
+"""Run one invoice with Grok or the fake LLM, and read a saved run back.
 
-stdout from the stage log is captured here so the review screen does not
-repeat it. The records stay on the graph result, under logs.
+Stage-log prints are captured so the review screen does not repeat them.
+The records stay on the graph result, under logs.
 """
 
 import io
 import json
+import os
 import time
 from contextlib import redirect_stdout
 from datetime import date, datetime
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 
 from db import create_database
 from graph import run_invoice
+from llm_client import GrokClient, load_dotenv
 from tests.fake_llm_eval import AS_OF, handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom
 
@@ -26,29 +28,24 @@ DEFAULT_DB = ROOT / "inventory.db"
 DEFAULT_RUN = ROOT / "output" / "runs" / "review_run.json"
 
 
-def invoice_files(folder: Path | None = None) -> list[Path]:
-    """Invoice files in the same set the eval script walks."""
+def grok_key_set() -> bool:
+    """True when the CLI's Grok client would start. It reads XAI_API_KEY."""
 
+    load_dotenv()
+    return bool(os.environ.get("XAI_API_KEY", "").strip())
+
+
+def invoice_files(folder: Path | None = None) -> list[Path]:
     directory = folder or INVOICES
-    return sorted(
-        path
-        for path in directory.iterdir()
-        if path.is_file() and path.suffix.lower() in SUFFIXES
-    )
+    return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES)
 
 
 def resolve_path(text: str) -> Path:
-    """A relative path is from the repo root, not the shell's cwd."""
-
     path = Path(text.strip())
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
+    return path if path.is_absolute() else ROOT / path
 
 
 def ensure_db(path: Path | None = None) -> Path:
-    """Create inventory.db only when it is missing, same as main.py."""
-
     db_path = path or DEFAULT_DB
     if not db_path.exists():
         create_database(db_path)
@@ -56,8 +53,6 @@ def ensure_db(path: Path | None = None) -> Path:
 
 
 def to_jsonable(value):
-    """Graph result to JSON. Models keep the field names model_dump already uses."""
-
     if isinstance(value, BaseModel):
         return to_jsonable(value.model_dump(mode="json"))
     if isinstance(value, dict):
@@ -66,38 +61,37 @@ def to_jsonable(value):
         return [to_jsonable(item) for item in value]
     if isinstance(value, Decimal):
         return format(value, "f")
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Path):
-        return str(value)
+    if isinstance(value, (datetime, date, Path)):
+        return value.isoformat() if not isinstance(value, Path) else str(value)
     return value
 
 
-def run_one(path: Path, db_path: Path | None = None) -> dict:
-    """One invoice through run_invoice. The model is the test fake, not Grok."""
+def run_one(path: Path, db_path: Path | None = None, *, live: bool = False) -> dict:
+    """One invoice. live=True uses GrokClient, the same client main.py constructs."""
 
     database = ensure_db(db_path)
+    if live:
+        llm, extra = GrokClient(), {}
+    else:
+        llm = FakeLLM(handler_for(path))
+        extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
     started = time.perf_counter()
     with redirect_stdout(io.StringIO()):
-        result = run_invoice(
-            path,
-            database,
-            FakeLLM(handler_for(path)),
-            clock=FakeClock(),
-            rng=ZeroRandom(),
-            max_attempts=5,
-            as_of=AS_OF,
-        )
-    return {"elapsed_seconds": time.perf_counter() - started, "state": to_jsonable(result)}
+        result = run_invoice(path, database, llm, **extra)
+    return {
+        "elapsed_seconds": time.perf_counter() - started,
+        "state": to_jsonable(result),
+        "llm": "grok" if live else "fake",
+    }
 
 
 def pack(entries: list[dict]) -> dict:
-    return {
-        "record": "review_run",
-        "llm": "fake",
-        "as_of": AS_OF.isoformat(),
-        "invoices": entries,
-    }
+    modes = {entry.get("llm") for entry in entries if entry.get("llm")}
+    llm = modes.pop() if len(modes) == 1 else "mixed"
+    payload = {"record": "review_run", "llm": llm, "invoices": entries}
+    if llm == "fake":
+        payload["as_of"] = AS_OF.isoformat()
+    return payload
 
 
 def save_run(path: Path, entries: list[dict]) -> Path:
@@ -107,8 +101,6 @@ def save_run(path: Path, entries: list[dict]) -> Path:
 
 
 def load_run(path: Path) -> list[dict]:
-    """A review_run file, a main.py log, or a directory of those JSON files."""
-
     if path.is_dir():
         files = sorted(item for item in path.iterdir() if item.suffix.lower() == ".json")
         if not files:
@@ -132,29 +124,23 @@ def _load_file(path: Path) -> list[dict]:
 
 def parse_payload(payload, name: str = "") -> list[dict]:
     if isinstance(payload, dict) and payload.get("record") == "review_run":
+        mode = payload.get("llm") if payload.get("llm") in {"fake", "grok"} else None
         entries = []
         for row in payload.get("invoices") or []:
-            if isinstance(row, dict) and "state" in row:
-                entries.append(
-                    {
-                        "elapsed_seconds": row.get("elapsed_seconds"),
-                        "state": row["state"],
-                        "result_line": row.get("result_line"),
-                    }
-                )
-            elif isinstance(row, dict):
-                entries.append({"elapsed_seconds": None, "state": row})
+            if not isinstance(row, dict):
+                continue
+            state = row["state"] if "state" in row else row
+            entries.append({
+                "elapsed_seconds": row.get("elapsed_seconds"),
+                "state": state,
+                "result_line": row.get("result_line"),
+                "llm": row.get("llm") or mode,
+            })
         return entries
+    # main.py only runs with GrokClient, so a pipeline log is a live run.
     if isinstance(payload, list) and _is_pipeline_log(payload):
-        return [
-            {
-                "elapsed_seconds": None,
-                "state": state_from_log(payload),
-                "result_line": _result_record(payload),
-            }
-        ]
-    label = name or "file"
-    raise ValueError(f"{label} is not a review run or a pipeline log")
+        return [{"elapsed_seconds": None, "state": state_from_log(payload), "result_line": _result_record(payload), "llm": "grok"}]
+    raise ValueError(f"{name or 'file'} is not a review run or a pipeline log")
 
 
 def _is_pipeline_log(payload: list) -> bool:
@@ -163,25 +149,17 @@ def _is_pipeline_log(payload: list) -> bool:
 
 
 def _result_record(records: list) -> dict:
-    for row in records:
-        if isinstance(row, dict) and row.get("record") == "result":
-            return row
-    return {}
+    return next((row for row in records if isinstance(row, dict) and row.get("record") == "result"), {})
 
 
 def state_from_log(records: list) -> dict:
-    """Rebuild the fields the screen reads from a main.py log (stage records + result line)."""
-
     stages = [row for row in records if isinstance(row, dict) and row.get("record") == "stage"]
     result = _result_record(records)
     filename = result.get("file") or (stages[0].get("invoice_file") if stages else "")
     state: dict = {"filename": filename, "logs": stages}
-    if "outcome" in result:
-        state["outcome"] = result.get("outcome")
-    if "reason_code" in result:
-        state["reason_code"] = result.get("reason_code")
-    if "action" in result:
-        state["action"] = result.get("action")
+    for key in ("outcome", "reason_code", "action"):
+        if key in result:
+            state[key] = result.get(key)
     for stage in stages:
         body = stage.get("result") or {}
         name = stage.get("stage")
@@ -204,3 +182,16 @@ def state_from_log(records: list) -> dict:
                 state.setdefault("action", body.get("action"))
                 break
     return state
+
+
+def mode_label(entries: list[dict]) -> str:
+    """How the shown run was produced. Empty when nothing has been loaded."""
+
+    modes = {entry.get("llm") for entry in entries if entry.get("llm") in {"fake", "grok"}}
+    if modes == {"fake"}:
+        return "Offline (fake LLM)"
+    if modes == {"grok"}:
+        return "Live (Grok)"
+    if modes:
+        return "Live (Grok) and Offline (fake LLM)"
+    return ""
