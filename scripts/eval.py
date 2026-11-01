@@ -40,12 +40,36 @@ def load_answer_key(path: Path | None = None) -> dict:
     return payload["invoices"]
 
 
+def invoice_lookup(path: Path) -> str:
+    """Repo-relative answer-key path, or data/invoices/<name> when it is outside the repo."""
+
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return f"data/invoices/{path.name}"
+
+
+def _accepted_codes(expected: dict) -> set:
+    """Reason codes the row accepts. An unknown alternative is warned, not added."""
+
+    names = [expected["primary_reason"]]
+    for name in expected.get("also_accepted_reasons") or []:
+        if name not in KEY_REASON_TO_CODE:
+            print(
+                f"warning: unknown reason name {name!r} in also_accepted_reasons",
+                file=sys.stderr,
+            )
+        names.append(name)
+    return {KEY_REASON_TO_CODE[name] for name in names if name in KEY_REASON_TO_CODE}
+
+
 def grade(result: dict, expected: dict) -> dict:
     """Compare one graph result to one answer-key row.
 
     Outcome and reason code decide ok. also_accepted_reasons, when present, is
     a list of reason texts in the same form as primary_reason. A predicted code
-    matches the primary or any of those. Warnings are informational.
+    matches the primary or any of those. An unknown name in that list is not a
+    code, and it is printed rather than dropped quietly. Warnings are informational.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()
@@ -56,9 +80,7 @@ def grade(result: dict, expected: dict) -> dict:
         expected_code = KEY_REASON_TO_CODE[expected_name]
     else:
         expected_code = expected_name
-    names = [expected_name]
-    names.extend(expected.get("also_accepted_reasons") or [])
-    accepted = {KEY_REASON_TO_CODE[name] for name in names if name in KEY_REASON_TO_CODE}
+    accepted = _accepted_codes(expected)
     codes = set(result_codes(result))
     messages = " ".join(_messages(result)).lower()
     expected_warnings = list(expected.get("warnings") or [])
@@ -117,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
         default=str(INVOICES),
         help="Directory of invoice files (default: data/invoices)",
     )
+    parser.add_argument(
+        "--answer-key",
+        default=str(ANSWER_KEY),
+        help="Path to the answer-key JSON (default: data/answer_key.json)",
+    )
     args = parser.parse_args(argv)
     try:
         GrokClient()
@@ -129,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     if not db_path.exists():
         create_database(db_path)
 
-    key = load_answer_key()
+    key = load_answer_key(Path(args.answer_key))
     files = sorted(
         path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
     )
@@ -137,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     for path in files:
         result = run_invoice(path, db_path, GrokClient())
         print_bad_reasoning(path.name, result.get("attempts") or [])
-        lookup = f"data/invoices/{path.name}"
+        lookup = invoice_lookup(path)
         expected = key.get(lookup)
         if expected is None:
             print(f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\tMISS", flush=True)

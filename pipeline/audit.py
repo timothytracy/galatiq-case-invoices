@@ -9,6 +9,13 @@ from db import load_stock
 from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
+from pipeline.fact_guard import (
+    AUDIT_CLAIMS,
+    VERIFIED_FACTS,
+    apply_concern_guard,
+    partition_concerns,
+    verified_payload,
+)
 from pipeline.stage_log import _stopped, agent_finding, stage_log
 from decision.invoice_fields import show_money
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, finding_codes
@@ -33,11 +40,13 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
             finding=Finding(code="SYSTEM_ERROR", message=reason, severity="warning"),
         )
 
+    stock = dict(load_stock(db_path))
+    facts = verified_payload(invoice, stock, as_of)
     step_attempts: list[dict] = []
     try:
         draft = call_with_retries(
             llm.request,
-            _audit_messages(state, invoice, decision, as_of),
+            _audit_messages(state, invoice, decision, as_of, facts),
             AuditDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -55,10 +64,12 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
             finding=agent_finding(exc),
         )
 
-    stock = dict(load_stock(db_path))
     fresh = assess(invoice, state.raw_text, stock)
-    verdict = draft.verdict
-    feedback = list(draft.feedback)
+    # Stock and totals are not checked here: a note may be about the raw text.
+    kept_feedback, dropped = partition_concerns(draft.feedback, invoice, stock, as_of, "audit")
+    verdict, feedback = apply_concern_guard(
+        draft.verdict, kept_feedback, dropped, list(draft.cited_codes)
+    )
     ignored = _ignored_audit_note(verdict, list(draft.cited_codes), feedback, draft.notes)
     if ignored is not None:
         verdict = "PASS"
@@ -94,6 +105,7 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         "notes": draft.notes,
         "cited_codes": [str(code).strip().upper() for code in draft.cited_codes if str(code).strip()],
         "audit_note": note_text,
+        "dropped_concerns": dropped,
         "attempts": step_attempts,
         "decision": new_decision.model_dump(mode="json"),
         "codes": finding_codes(findings),
@@ -168,7 +180,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
 
 
-def _audit_messages(state, invoice, decision, as_of) -> list[dict]:
+def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
     findings = []
     if state.validation is not None:
         findings = [finding.model_dump(mode="json") for finding in state.validation.findings]
@@ -178,6 +190,7 @@ def _audit_messages(state, invoice, decision, as_of) -> list[dict]:
         "findings": findings,
         "critique_concerns": list(state.critique_concerns),
         "raw_text": state.raw_text,
+        "verified_by_code": facts,
     }
     return [
         {
@@ -188,8 +201,9 @@ def _audit_messages(state, invoice, decision, as_of) -> list[dict]:
                 "Compare the extracted fields with the raw text. Check the decision against the "
                 "findings. Re-check the line math and any fraud signals. Check that critique "
                 "concerns were addressed. Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
-                "feedback (list of field notes, required for SEND_BACK), notes (string), and "
-                "cited_codes (list of finding codes this verdict relies on). "
+                "feedback (list of strings or objects, required for SEND_BACK), "
+                "notes (string), and cited_codes (list of finding codes this verdict relies on). "
+                f"{VERIFIED_FACTS} {AUDIT_CLAIMS} "
                 "You can only make the outcome stricter. Never turn a hard failure or a non-USD "
                 "invoice into a payment.\n"
                 "Warning-only codes, which never hold or reject on their own: "

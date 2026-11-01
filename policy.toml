@@ -30,7 +30,8 @@ near_threshold_ratio = "0.02"
 
 # abs(unit_price) >= reference * (1 + this ratio) is a PRICE_SPIKE hold.
 # The next step is to verify the price with the vendor.
-# 0.50 means 50% or more above the USD reference. A smaller difference stays
+# Must be greater than zero. 0.50 means 50% or more above the USD reference.
+# A smaller difference stays
 # a price-variance warning. The spike line keeps that warning. It is not a
 # fraud signal.
 price_spike_ratio = "0.50"

@@ -1,7 +1,7 @@
 """Findings for one invoice. Detection only. Precedence lives in outcome.py."""
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from models import Assessment, ExtractedInvoice, Finding
@@ -171,7 +171,8 @@ def collect_findings(
             ref = POLICY.reference_prices.get(canonical_item(line.item, stock))
             if ref is None or line.unit_price is None:
                 continue
-            price = abs(line.unit_price)
+            # Round to the money tolerance before comparing, same as the line math.
+            price = as_money(abs(line.unit_price))
             if not different(price, ref):
                 continue
             findings.append(
@@ -326,17 +327,22 @@ def _blob(*parts: str | None) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def _dated(value: str | None) -> bool:
+def parse_printed_date(value: str | None) -> date | None:
+    """The printed date, or None when it is not a date this pipeline reads."""
+
     if not value:
-        return False
+        return None
     text = value.strip()
     for fmt in _DATE_FORMATS:
         try:
-            datetime.strptime(text, fmt)
-            return True
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    return False
+    return None
+
+
+def _dated(value: str | None) -> bool:
+    return parse_printed_date(value) is not None
 
 
 def _has_negative_amount(invoice: ExtractedInvoice) -> bool:

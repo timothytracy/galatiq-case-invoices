@@ -55,6 +55,7 @@ def _write(directory: Path, text: str) -> Path:
         (GOOD.replace('allowed_currencies = ["USD"]', "allowed_currencies = []"), "allowed_currencies"),
         (GOOD.replace('money_tolerance = "0.01"', 'money_tolerance = "-0.01"'), "money_tolerance"),
         (GOOD.replace('price_spike_ratio = "0.50"', 'price_spike_ratio = "-0.01"'), "price_spike_ratio"),
+        (GOOD.replace('price_spike_ratio = "0.50"', 'price_spike_ratio = "0"'), "price_spike_ratio"),
     ],
 )
 def test_bad_policy_names_the_key(tmp_path, text, key):

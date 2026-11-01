@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Outcome = Literal["approve", "reject", "hold"]
 AuditVerdict = Literal["PASS", "SEND_BACK", "ESCALATE"]
@@ -175,14 +175,36 @@ class ReasoningDraft(_Loose):
     conclusion: str = ""
 
 
+class FactConcern(_Loose):
+    """One structured claim. A plain string is category other and is not checked.
+
+    stock claims the requested quantity exceeds stock. totals_mismatch claims the
+    totals do not reconcile. future_date, with field invoice_date or due_date,
+    claims that date is after today. Anything else is kept.
+    """
+
+    category: str = "other"
+    item: str = ""
+    field: str = ""
+    text: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_string(cls, value):
+        if isinstance(value, str):
+            return {"category": "other", "text": value}
+        return value
+
+
 class CritiqueDraft(_Loose):
-    concerns: list[str] = Field(default_factory=list)
+    concerns: list[FactConcern] = Field(default_factory=list)
     stricter: bool = False
 
 
 class AuditDraft(_Loose):
     verdict: AuditVerdict
-    feedback: list[str] = Field(default_factory=list)
+    # A string is a note. An object is a structured claim. See FactConcern.
+    feedback: list[FactConcern] = Field(default_factory=list)
     notes: str = ""
     # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
