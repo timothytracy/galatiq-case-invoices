@@ -45,7 +45,7 @@ Hold only when a person can do something the system can't. Every hold names that
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
-Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a hold on its own: reason "Unit price 50% or more above reference" (reason code PRICE_SPIKE). That spike is not a fraud signal and does not count toward the two-fraud-signal hold. A smaller difference, including a price below the reference, stays a price-variance warning. Non-USD invoices are not price-checked, because nothing is converted. The ratio will live in `policy.toml`; a separate code change will load it. Reject still beats this hold. Approved by the captain on 2026-10-31.
+Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a hold on its own: reason "Unit price 50% or more above reference" (reason code PRICE_SPIKE). That spike is not a fraud signal and does not count toward the two-fraud-signal hold. A smaller difference, including a price below the reference, stays a price-variance warning. A spike line still records its price-variance warning. Non-USD invoices are not price-checked, because nothing is converted. The ratio is `price_spike_ratio` in `policy.toml`. Reject still beats this hold. Approved by the captain on 2026-10-31.
 
 ## Warnings
 
