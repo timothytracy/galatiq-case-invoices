@@ -151,7 +151,8 @@ def collect_findings(
             _finding(
                 "ITEM_NOT_IN_SOURCE",
                 f"{line.item} is not in the invoice text.",
-                item=line.item,
+                "warning",
+                line.item,
             )
         )
 

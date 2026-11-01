@@ -137,6 +137,8 @@ def test_a_name_missing_from_the_source_is_an_unpaid_hold(tmp_path, db_path):
     )
     assert result["outcome"] == "hold"
     assert result["reason_code"] == "ITEM_NOT_IN_SOURCE"
+    source_miss = next(finding for finding in result["findings"] if finding.code == "ITEM_NOT_IN_SOURCE")
+    assert source_miss.severity == "warning"
     assert result["action"] == "Check the item name against the invoice."
     assert result["action"] == ACTION["ITEM_NOT_IN_SOURCE"]
     assert "WidgetA is not in the invoice text." in result["decision"].reasoning.conclusion
@@ -177,6 +179,10 @@ def test_missing_source_text_fails_closed():
     assert assessed.outcome == "hold"
     assert assessed.reason_code == "ITEM_NOT_IN_SOURCE"
     assert assessed.action == "Check the item name against the invoice."
+    source_miss = next(finding for finding in assessed.findings if finding.code == "ITEM_NOT_IN_SOURCE")
+    revised = assess(_invoice("WidgetA", "WidgetA\nRevised invoice"), "WidgetA\nRevised invoice", STOCK)
+    other_hold = next(finding for finding in revised.findings if finding.code == "REVISED_INVOICE")
+    assert source_miss.severity == other_hold.severity == "warning"
     assert invoice.line_items[0].item == "WidgetA"
 
 
@@ -314,14 +320,11 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
             assessed = assess(invoice, invoice.source.raw_text, STOCK)
             assert _names(invoice) == before
             assert "ITEM_NOT_IN_SOURCE" not in _codes(assessed), path.name
-            # 2107 is a reject only when the model sets embedded_instructions.
-            # The deterministic reader leaves that flag false, so offline stays approve.
+            # 2107's live reject is a separate strict xfail. This loop still checks the name.
             if path.name == "invoice_2107.pdf":
-                assert assessed.outcome == "approve"
-                assert assessed.reason_code is None
-            else:
-                assert assessed.outcome.upper() == expected["outcome"], path.name
-                assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]], path.name
+                continue
+            assert assessed.outcome.upper() == expected["outcome"], path.name
+            assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]], path.name
             result = run_invoice(
                 path,
                 db_path,
@@ -330,12 +333,8 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
                 rng=ZeroRandom(),
                 max_attempts=5,
             )
-            if path.name == "invoice_2107.pdf":
-                assert result["outcome"] == "approve"
-                assert result["reason_code"] is None
-            else:
-                row = grade(result, expected)
-                assert row["outcome_ok"] and row["reason_ok"], (path.name, row)
+            row = grade(result, expected)
+            assert row["outcome_ok"] and row["reason_ok"], (path.name, row)
             if result["outcome"] == "approve":
                 assert result["payment"].status == "paid", path.name
             else:
@@ -348,3 +347,34 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
                 assert "Likely meant" not in assessed.reason
                 assert "Likely meant" not in result["decision"].reasoning.conclusion
     assert seen == 41
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "The live system rejects 2107 as EMBEDDED_INSTRUCTIONS, "
+        "and the offline reader never sets that flag."
+    ),
+)
+def test_offline_2107_matches_the_live_reject(db_path):
+    """Offline extraction approves and pays 2107. The answer key rejects it."""
+
+    path = ROOT / "data" / "extra_invoices" / "invoice_2107.pdf"
+    expected = load_answer_key(ROOT / "data" / "extra_answer_key.json")[
+        "data/extra_invoices/invoice_2107.pdf"
+    ]
+    invoice = parse_file(path)
+    assessed = assess(invoice, invoice.source.raw_text or "", STOCK)
+    assert assessed.outcome.upper() == expected["outcome"]
+    assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]]
+    result = run_invoice(
+        path,
+        db_path,
+        FakeLLM(handler_for(path)),
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+        max_attempts=5,
+    )
+    row = grade(result, expected)
+    assert row["outcome_ok"] and row["reason_ok"], row
+    assert result["payment"].status == "not_paid"
