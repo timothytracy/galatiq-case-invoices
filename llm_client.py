@@ -24,7 +24,8 @@ BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2
 # Not in policy.toml: Policy rejects unknown keys. A round is one model
-# reply that contains tool calls. The counts cover one agent step.
+# reply that contains tool calls. One ToolStep owns the counts for the
+# whole step: the repair turn and every retry share them.
 TOOL_ROUND_CAP = 3
 TOOL_CALL_CAP = 8
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
@@ -195,6 +196,9 @@ def call_with_retries(
 
     last_type = "unknown"
     for attempt in range(1, max_attempts + 1):
+        mark_attempt = getattr(request, "set_attempt", None)
+        if mark_attempt is not None:
+            mark_attempt(attempt)
         try:
             return structured_call(request, messages, schema, check=check)
         except LLMError as exc:
@@ -249,12 +253,7 @@ class GrokClient:
             message = str(exc).replace(self.api_key, "[redacted]")
             classified = classify_exception(exc)
             raise LLMError(classified.error_type, classified.retryable, message) from None
-        content = response.choices[0].message.content
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content
-        return str(content)
+        return _message_text(response.choices[0].message.content)
 
     def request_tools(self, messages: list[dict], tools: list[dict], timeout: float = 60) -> dict:
         """One completion that may ask for tools. Used only when XAI_TOOLS is on.
@@ -279,96 +278,108 @@ class GrokClient:
             classified = classify_exception(exc)
             raise LLMError(classified.error_type, classified.retryable, message) from None
         message = response.choices[0].message
-        content = message.content
-        if content is None:
-            text = ""
-        elif isinstance(content, str):
-            text = content
-        else:
-            text = str(content)
         calls = [_read_tool_call(item) for item in (message.tool_calls or [])]
-        return {"content": text, "tool_calls": calls}
+        return {"content": _message_text(message.content), "tool_calls": calls}
 
 
-def tool_request(llm, registry, tool_log: list | None = None):
+class ToolStep:
+    """Caps and the tool log for one agent step.
+
+    The repair turn and every retry share the counts. A new tool_request()
+    starts at zero. Reusing this callable does too: call_with_retries calls
+    set_attempt(1) at the start of the next step.
+    """
+
+    def __init__(self, llm, registry, tool_log: list | None = None) -> None:
+        self.llm = llm
+        self.registry = registry
+        self.log = [] if tool_log is None else tool_log
+        self.rounds = 0
+        self.calls = 0
+        self.attempt = 1
+
+    def set_attempt(self, attempt: int) -> None:
+        """call_with_retries reports the attempt. 1 starts a step. A retry does not."""
+
+        if attempt == 1 and (self.rounds or self.calls):
+            self.rounds = 0
+            self.calls = 0
+            self.log.clear()
+        self.attempt = attempt
+
+    def __call__(self, messages, timeout=60) -> str:
+        if not tools_enabled():
+            return self.llm.request(messages, timeout)
+        return _tool_loop(self, messages, timeout)
+
+
+def tool_request(llm, registry, tool_log: list | None = None) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
     Flag off: llm.request, the same payload as today.
     Flag on: run tool calls until the model returns plain content, then return
     that text. Parsing and the one repair turn stay in structured_call.
-
-    The caps cover this step, including the repair turn. A retry sends the
-    original messages again, so the caps start over. tool_log keeps every
-    call made through this function.
     """
 
-    log = [] if tool_log is None else tool_log
-    spent = {"rounds": 0, "calls": 0}
-    seen = {"first": None}
-
-    def request(messages, timeout=60):
-        if not tools_enabled():
-            return llm.request(messages, timeout)
-        # The first call and a retry both send the original messages, so the
-        # caps start over. The repair turn appends messages, so it keeps the count.
-        if seen["first"] is None or messages == seen["first"]:
-            spent["rounds"] = 0
-            spent["calls"] = 0
-            seen["first"] = [dict(item) for item in messages]
-        return _tool_loop(llm, messages, registry, spent, log, timeout)
-
-    return request
+    return ToolStep(llm, registry, tool_log)
 
 
-def _tool_loop(llm, messages, registry, spent, log, timeout) -> str:
+def _tool_loop(step: ToolStep, messages, timeout) -> str:
     conversation = list(messages)
-    schemas = registry.schemas()
+    schemas = step.registry.schemas()
     while True:
         try:
-            reply = llm.request_tools(conversation, schemas, timeout)
+            reply = step.llm.request_tools(conversation, schemas, timeout)
         except LLMError as exc:
-            exc.log.setdefault("tool_calls", list(log))
+            exc.log.setdefault("tool_calls", list(step.log))
             raise
         # A reply that still has tool calls is a tool turn. Its text is not the answer.
         pending = reply.get("tool_calls") or []
         calls = [
-            _normalize_call(item, spent["rounds"] + 1, index)
+            _normalize_call(item, step.rounds + 1, index)
             for index, item in enumerate(pending, start=1)
         ]
         if not calls:
             return reply.get("content") or ""
-        next_round = spent["rounds"] + 1
-        next_calls = spent["calls"] + len(calls)
+        next_round = step.rounds + 1
+        next_calls = step.calls + len(calls)
         if next_round > TOOL_ROUND_CAP or next_calls > TOOL_CALL_CAP:
             which = "rounds" if next_round > TOOL_ROUND_CAP else "calls"
             raise LLMError(
                 "tool_cap",
                 False,
                 f"tool {which} cap reached",
-                log={"tool_calls": list(log), "cap": which},
+                log={"tool_calls": list(step.log), "cap": which},
             )
-        spent["rounds"] = next_round
-        spent["calls"] = next_calls
+        step.rounds = next_round
+        step.calls = next_calls
         conversation.append(_assistant_tool_message(reply, calls))
         for call in calls:
-            record, tool_message = _run_call(registry, call, next_round)
-            log.append(record)
+            try:
+                record, tool_message = _run_call(step, call, next_round)
+            except LLMError as exc:
+                exc.log.setdefault("tool_calls", list(step.log))
+                raise
+            step.log.append(record)
             conversation.append(tool_message)
 
 
 def _normalize_call(call: dict, round_number: int, index: int) -> dict:
-    raw = call.get("arguments")
-    if raw is None:
-        arguments = ""
-    elif isinstance(raw, str):
-        arguments = raw
-    else:
-        arguments = json.dumps(raw)
     return {
         "id": str(call.get("id") or f"call_{round_number}_{index}"),
         "name": str(call.get("name") or ""),
-        "arguments": arguments,
+        "arguments": _argument_text(call.get("arguments")),
     }
+
+
+def _argument_text(raw) -> str:
+    """The one place a non-string tool argument becomes JSON text."""
+
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    return json.dumps(raw, default=str)
 
 
 def _assistant_tool_message(reply: dict, calls: list[dict]) -> dict:
@@ -387,27 +398,64 @@ def _assistant_tool_message(reply: dict, calls: list[dict]) -> dict:
     }
 
 
-def _run_call(registry, call: dict, round_number: int) -> tuple[dict, dict]:
+def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict]:
     started = time.perf_counter()
-    payload = registry.call(call["name"], call["arguments"])
+    try:
+        payload = step.registry.call(call["name"], call["arguments"])
+    except LLMError:
+        raise
+    except Exception as exc:
+        # A lookup miss is already {"error": ...}. Anything else is infrastructure.
+        raise LLMError("tool_error", False, str(exc)) from None
     latency_ms = int((time.perf_counter() - started) * 1000)
+    payload, body = _json_ready(payload)
     error = _error_text(payload)
+    parsed, _parse_error, invalid_raw = parse_tool_arguments(call["arguments"])
     record = {
         "round": round_number,
+        "attempt": step.attempt,
         "call_id": call["id"],
         "name": call["name"],
-        "arguments": _arguments_object(call["arguments"]),
-        "arguments_raw": call["arguments"],
+        "arguments": parsed,
         "result": None if error else payload,
-        "ok": error is None,
         "error": error,
         "latency_ms": latency_ms,
     }
-    return record, {
-        "role": "tool",
-        "tool_call_id": call["id"],
-        "content": json.dumps(payload),
-    }
+    if invalid_raw is not None:
+        record["arguments_raw"] = invalid_raw
+    return record, {"role": "tool", "tool_call_id": call["id"], "content": body}
+
+
+def parse_tool_arguments(raw: str) -> tuple[dict | None, str | None, str | None]:
+    """Return (object, error, raw_if_the_JSON_itself_was_invalid).
+
+    An empty string is an empty object. A JSON array is an error, and the
+    raw text is not kept. Only invalid JSON sets the third value.
+    """
+
+    if raw.strip() == "":
+        return {}, None, None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, "arguments are not valid JSON", raw
+    if not isinstance(value, dict):
+        return None, "arguments must be a JSON object", None
+    return value, None, None
+
+
+def _json_ready(payload: dict) -> tuple[dict, str]:
+    """JSON text for the model, and the same value stored on the log.
+
+    Decimal and date become strings. A value that still will not serialize
+    becomes an error result, so the node does not crash.
+    """
+
+    try:
+        text = json.dumps(payload, default=str)
+    except (TypeError, ValueError):
+        text = json.dumps({"error": "tool result is not JSON"})
+    return json.loads(text), text
 
 
 def _error_text(payload: dict) -> str | None:
@@ -418,32 +466,21 @@ def _error_text(payload: dict) -> str | None:
     return None
 
 
-def _arguments_object(raw: str) -> dict | None:
-    if raw.strip() == "":
-        return {}
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(value, dict):
-        return value
-    return None
+def _message_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return str(content)
 
 
 def _read_tool_call(item) -> dict:
-    function = getattr(item, "function", None)
-    if function is None and isinstance(item, dict):
-        function = item.get("function") or {}
-        name = function.get("name") or ""
-        arguments = function.get("arguments") or ""
-        call_id = item.get("id") or ""
-    else:
-        name = getattr(function, "name", "") or ""
-        arguments = getattr(function, "arguments", "") or ""
-        call_id = getattr(item, "id", "") or ""
-    if not isinstance(arguments, str):
-        arguments = json.dumps(arguments)
-    return {"id": str(call_id), "name": str(name), "arguments": arguments}
+    function = item.function
+    return {
+        "id": str(item.id or ""),
+        "name": str(function.name or ""),
+        "arguments": function.arguments,
+    }
 
 
 def _decimal(value: str):

@@ -31,7 +31,7 @@ from models import (
 )
 from pipeline import audit
 from pipeline.payment import _USED_KEYS, payment
-from pipeline.tools import Tool, ToolRegistry, example_registry
+from pipeline.tools import Tool, ToolInputError, ToolRegistry, example_registry
 from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom
 from tests.test_pipeline import extraction, scripted, write_invoice
 
@@ -39,12 +39,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ANSWER = '{"echoed": "phase-1"}'
 _RECORD_FIELDS = {
     "round",
+    "attempt",
     "call_id",
     "name",
     "arguments",
-    "arguments_raw",
     "result",
-    "ok",
     "error",
     "latency_ms",
 }
@@ -108,6 +107,9 @@ def _finish(steps, monkeypatch, registry=None):
 
 def _assert_record(record):
     assert set(record) == _RECORD_FIELDS
+    assert "ok" not in record
+    assert "arguments_raw" not in record
+    assert isinstance(record["attempt"], int) and record["attempt"] >= 1
     assert isinstance(record["latency_ms"], int)
     assert record["latency_ms"] >= 0
 
@@ -127,7 +129,7 @@ def test_one_tool_round_trip_returns_final_json(monkeypatch):
     assert log[0]["name"] == "echo_note"
     assert log[0]["arguments"] == {"note": "phase-1"}
     assert log[0]["result"] == {"note": "phase-1", "echo": "phase-1"}
-    assert log[0]["ok"] is True
+    assert log[0]["attempt"] == 1
     assert log[0]["error"] is None
     sent = model.tool_requests[1]["messages"]
     assert sent[-2]["role"] == "assistant"
@@ -154,7 +156,8 @@ def test_parallel_calls_all_run_and_each_counts(monkeypatch):
     assert [row["call_id"] for row in log] == ["c1", "c2"]
     assert [row["round"] for row in log] == [1, 1]
     assert [row["arguments"]["note"] for row in log] == ["one", "two"]
-    assert all(row["ok"] for row in log)
+    assert all(row["error"] is None for row in log)
+    assert [row["attempt"] for row in log] == [1, 1]
     sent = model.tool_requests[1]["messages"]
     tool_ids = [message["tool_call_id"] for message in sent if message["role"] == "tool"]
     assert tool_ids == ["c1", "c2"]
@@ -166,7 +169,6 @@ def test_unknown_tool_returns_an_error_and_continues(monkeypatch):
         monkeypatch,
     )
     assert parsed.echoed == "phase-1"
-    assert log[0]["ok"] is False
     assert log[0]["error"] == "unknown tool: nope"
     assert log[0]["result"] is None
     body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
@@ -186,34 +188,16 @@ def test_bad_args_return_an_error_and_the_loop_continues(monkeypatch):
             monkeypatch,
         )
         assert parsed.echoed == "phase-1"
-        assert log[0]["ok"] is False
         assert log[0]["error"] == error
         assert log[0]["result"] is None
         assert log[0]["name"] == "echo_note"
+        if arguments == "not-json":
+            assert log[0]["arguments"] is None
+            assert log[0]["arguments_raw"] == "not-json"
+        else:
+            assert "arguments_raw" not in log[0]
         body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
         assert body == {"error": error}
-
-    def explode(_arguments):
-        raise RuntimeError("boom")
-
-    registry = ToolRegistry(
-        [
-            Tool(
-                name="explode",
-                description="Raises.",
-                parameters={"type": "object", "properties": {}},
-                function=explode,
-            )
-        ]
-    )
-    parsed, log, model = _finish(
-        [tool_step(("c1", "explode", "{}")), text_step(ANSWER)],
-        monkeypatch,
-        registry=registry,
-    )
-    assert parsed.echoed == "phase-1"
-    assert log[0]["ok"] is False
-    assert log[0]["error"] == "tool failed: boom"
 
 
 def _payable_state() -> PipelineState:
@@ -264,14 +248,14 @@ class _LoopLLM:
         self.request = request
 
 
-def _cap_hold(steps, db_path, monkeypatch):
+def _cap_hold(steps, db_path, monkeypatch, registry=None):
     monkeypatch.setenv("XAI_TOOLS", "1")
     model = ScriptedToolModel(steps)
     log = []
     clock = FakeClock()
     out = audit(
         _payable_state(),
-        _LoopLLM(tool_request(model, example_registry(), log)),
+        _LoopLLM(tool_request(model, registry or example_registry(), log)),
         db_path,
         clock,
         ZeroRandom(),
@@ -280,13 +264,13 @@ def _cap_hold(steps, db_path, monkeypatch):
     return out, clock, log, model
 
 
-def _assert_system_error_hold(out, clock, executed):
+def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
     assert out["outcome"] == "hold"
     assert out["reason_code"] == "SYSTEM_ERROR"
     assert out["findings"][-1].code == "SYSTEM_ERROR"
     assert "Rerun the invoice" in (out["action"] or "")
     assert len(out["attempts"]) == 1
-    assert out["attempts"][0]["error_type"] == "tool_cap"
+    assert out["attempts"][0]["error_type"] == error_type
     assert out["attempts"][0]["retryable"] is False
     assert out["attempts"][0]["backoff_seconds"] is None
     assert len(out["attempts"][0]["tool_calls"]) == executed
@@ -318,6 +302,7 @@ def test_round_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monk
     assert out["attempts"][0]["cap"] == "rounds"
     assert len(log) == TOOL_ROUND_CAP
     assert [row["round"] for row in log] == [1, 2, 3]
+    assert [row["attempt"] for row in log] == [1, 1, 1]
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
     assert model.requests == []
 
@@ -334,6 +319,7 @@ def test_call_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monke
     assert out["attempts"][0]["cap"] == "calls"
     assert len(log) == TOOL_CALL_CAP
     assert {row["round"] for row in log} == {1}
+    assert {row["attempt"] for row in log} == {1}
     assert len(model.tool_requests) == 2
     assert model.requests == []
 
@@ -363,6 +349,7 @@ def test_repair_turn_shares_the_round_cap(monkeypatch):
     assert attempts[0]["cap"] == "rounds"
     assert attempts[0]["retryable"] is False
     assert len(log) == TOOL_ROUND_CAP
+    assert {row["attempt"] for row in log} == {1}
     repair = model.tool_requests[-1]["messages"]
     assert any(
         (message.get("content") or "").startswith("The JSON failed validation:")
@@ -371,9 +358,9 @@ def test_repair_turn_shares_the_round_cap(monkeypatch):
     assert all(message.get("role") != "tool" for message in repair)
 
 
-def test_retry_starts_the_cap_over(monkeypatch):
+def test_retry_keeps_counting_toward_the_cap(monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", "1")
-    steps = [_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
+    steps = [_echo(call_id=f"c{index}") for index in range(2)]
     steps.append(LLMError("http_429", True, "busy"))
     steps.append(_echo(call_id="after"))
     steps.append(text_step(ANSWER))
@@ -393,9 +380,165 @@ def test_retry_starts_the_cap_over(monkeypatch):
     assert parsed.echoed == "phase-1"
     assert len(attempts) == 1
     assert attempts[0]["error_type"] == "http_429"
-    assert len(attempts[0]["tool_calls"]) == TOOL_ROUND_CAP
+    assert len(attempts[0]["tool_calls"]) == 2
     assert clock.slept == [1.0]
-    assert len(log) == TOOL_ROUND_CAP + 1
+    assert [row["round"] for row in log] == [1, 2, 3]
+    assert [row["attempt"] for row in log] == [1, 1, 2]
+
+
+def test_retry_does_not_reset_the_round_cap(monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    steps = [_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
+    steps.append(LLMError("http_429", True, "busy"))
+    steps.append(_echo(call_id="over"))
+    model = ScriptedToolModel(steps)
+    log = []
+    clock = FakeClock()
+    attempts = []
+    with pytest.raises(AgentStepFailed) as caught:
+        call_with_retries(
+            tool_request(model, example_registry(), log),
+            [{"role": "user", "content": "Answer with JSON."}],
+            Echoed,
+            max_attempts=5,
+            clock=clock,
+            rng=ZeroRandom(),
+            attempt_log=attempts,
+        )
+    assert caught.value.attempts == 2
+    assert caught.value.error_type == "tool_cap"
+    assert [row["error_type"] for row in attempts] == ["http_429", "tool_cap"]
+    assert attempts[1]["retryable"] is False
+    assert attempts[1]["cap"] == "rounds"
+    assert clock.slept == [1.0]
+    assert len(log) == TOOL_ROUND_CAP
+    assert [row["attempt"] for row in log] == [1, 1, 1]
+
+
+def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    steps = [_echo(call_id=f"a{index}") for index in range(TOOL_ROUND_CAP)]
+    steps.append(text_step(ANSWER))
+    steps.append(_echo(call_id="b1"))
+    steps.append(text_step(ANSWER))
+    model = ScriptedToolModel(steps)
+    log = []
+    request = tool_request(model, example_registry(), log)
+    messages = [{"role": "user", "content": "Answer with JSON."}]
+    clock = FakeClock()
+    first = call_with_retries(
+        request,
+        messages,
+        Echoed,
+        max_attempts=3,
+        clock=clock,
+        rng=ZeroRandom(),
+        attempt_log=[],
+    )
+    assert first.echoed == "phase-1"
+    assert len(log) == TOOL_ROUND_CAP
+    second = call_with_retries(
+        request,
+        messages,
+        Echoed,
+        max_attempts=3,
+        clock=clock,
+        rng=ZeroRandom(),
+        attempt_log=[],
+    )
+    assert second.echoed == "phase-1"
+    assert clock.slept == []
+    assert len(log) == 1
+    assert log[0]["round"] == 1
+    assert log[0]["attempt"] == 1
+    assert log[0]["call_id"] == "b1"
+
+
+def test_a_new_tool_step_starts_fresh(monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    spent = ScriptedToolModel([_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)])
+    spent_log = []
+    with pytest.raises(LLMError) as caught:
+        tool_request(spent, example_registry(), spent_log)(
+            [{"role": "user", "content": "Answer with JSON."}]
+        )
+    assert caught.value.error_type == "tool_cap"
+    assert len(spent_log) == TOOL_ROUND_CAP
+
+    fresh = ScriptedToolModel([_echo(call_id="fresh"), text_step(ANSWER)])
+    fresh_log = []
+    text = tool_request(fresh, example_registry(), fresh_log)(
+        [{"role": "user", "content": "Answer with JSON."}]
+    )
+    assert text == ANSWER
+    assert len(fresh_log) == 1
+    assert fresh_log[0]["round"] == 1
+    assert fresh_log[0]["attempt"] == 1
+    assert fresh_log[0]["call_id"] == "fresh"
+
+
+def _registry(name, function):
+    return ToolRegistry(
+        [
+            Tool(
+                name=name,
+                description="Test tool.",
+                parameters={"type": "object", "properties": {}},
+                function=function,
+            )
+        ]
+    )
+
+
+def test_input_error_goes_back_to_the_model(monkeypatch):
+    def missing(_arguments):
+        raise ToolInputError("item not found")
+
+    parsed, log, model = _finish(
+        [tool_step(("c1", "lookup", "{}")), text_step(ANSWER)],
+        monkeypatch,
+        registry=_registry("lookup", missing),
+    )
+    assert parsed.echoed == "phase-1"
+    assert log[0]["error"] == "item not found"
+    assert log[0]["result"] is None
+    assert log[0]["attempt"] == 1
+    body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
+    assert body == {"error": "item not found"}
+
+
+def test_infrastructure_error_is_a_system_error_hold(db_path, monkeypatch):
+    def broken(_arguments):
+        raise RuntimeError("database is locked")
+
+    out, clock, log, model = _cap_hold(
+        [tool_step(("c1", "broken", "{}")), text_step(ANSWER)],
+        db_path,
+        monkeypatch,
+        registry=_registry("broken", broken),
+    )
+    _assert_system_error_hold(out, clock, executed=0, error_type="tool_error")
+    assert log == []
+    assert len(model.tool_requests) == 1
+    assert model.steps[0]["content"] == ANSWER
+
+
+def test_decimal_or_date_result_does_not_crash_the_node(monkeypatch):
+    from datetime import date
+
+    def priced(_arguments):
+        return {"amount": Decimal("1.50"), "when": date(2026, 1, 2)}
+
+    parsed, log, model = _finish(
+        [tool_step(("c1", "priced", "{}")), text_step(ANSWER)],
+        monkeypatch,
+        registry=_registry("priced", priced),
+    )
+    assert parsed.echoed == "phase-1"
+    assert log[0]["error"] is None
+    assert log[0]["result"] == {"amount": "1.50", "when": "2026-01-02"}
+    body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
+    assert body == log[0]["result"]
 
 
 def _install_openai(monkeypatch, captured, content='{"echoed": "x"}'):

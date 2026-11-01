@@ -1,11 +1,12 @@
 """Read-only tools. A tool is a function plus the JSON schema the model sees.
 
-call() always returns a dict. An unknown name or bad arguments come back as
-{"error": "..."}. They do not raise. No agent is given a registry yet.
-The only tool here is echo_note, for tests and the live probe.
+A ToolInputError (unknown tool, bad arguments, nothing found) becomes
+{"error": "..."} for the model. Any other exception leaves call() and the
+loop turns it into a non-retryable LLMError. echo_note is for tests and
+the probe. No agent is given a registry yet.
 """
 
-import json
+from llm_client import parse_tool_arguments
 
 
 class Tool:
@@ -28,6 +29,10 @@ class Tool:
         }
 
 
+class ToolInputError(Exception):
+    """The model can fix this: a bad argument, an unknown tool, or a missed lookup."""
+
+
 class ToolRegistry:
     def __init__(self, tools: list[Tool]) -> None:
         self._tools = {tool.name: tool for tool in tools}
@@ -36,23 +41,29 @@ class ToolRegistry:
         return [tool.schema() for tool in self._tools.values()]
 
     def call(self, name: str, arguments: str) -> dict:
-        """Run one call. Always a JSON object. Never raises."""
+        """Run one call. ToolInputError becomes {"error": "..."}.
 
+        Any other exception propagates. That is an infrastructure failure.
+        """
+
+        try:
+            return self._call(name, arguments)
+        except ToolInputError as exc:
+            return {"error": str(exc)}
+
+    def _call(self, name: str, arguments: str) -> dict:
         tool = self._tools.get(name)
         if tool is None:
-            return {"error": f"unknown tool: {name}"}
-        parsed, error = _parse_arguments(arguments)
+            raise ToolInputError(f"unknown tool: {name}")
+        parsed, error, _raw = parse_tool_arguments(arguments)
         if error is not None or parsed is None:
-            return {"error": error or "arguments must be a JSON object"}
-        error = _schema_error(tool.parameters, parsed)
-        if error is not None:
-            return {"error": error}
-        try:
-            result = tool.function(parsed)
-        except Exception as exc:
-            return {"error": f"tool failed: {exc}"}
+            raise ToolInputError(error or "arguments must be a JSON object")
+        schema_error = _schema_error(tool.parameters, parsed)
+        if schema_error is not None:
+            raise ToolInputError(schema_error)
+        result = tool.function(parsed)
         if not isinstance(result, dict):
-            return {"error": "tool result must be an object"}
+            raise TypeError("tool result must be an object")
         return result
 
 
@@ -61,7 +72,7 @@ def echo_note(arguments: dict) -> dict:
 
     note = arguments.get("note")
     if not isinstance(note, str) or note.strip() == "":
-        return {"error": "note must be a non-empty string"}
+        raise ToolInputError("note must be a non-empty string")
     return {"note": note, "echo": note}
 
 
@@ -84,18 +95,6 @@ def example_registry() -> ToolRegistry:
             )
         ]
     )
-
-
-def _parse_arguments(raw: str) -> tuple[dict | None, str | None]:
-    if raw.strip() == "":
-        return {}, None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None, "arguments are not valid JSON"
-    if not isinstance(value, dict):
-        return None, "arguments must be a JSON object"
-    return value, None
 
 
 _JSON_TYPES = {
