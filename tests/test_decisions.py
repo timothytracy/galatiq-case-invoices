@@ -7,46 +7,18 @@ from pathlib import Path
 import pytest
 
 from db import SEED, create_database
+from decision.findings import injection_phrase
+from decision.wording import KEY_REASON_TO_CODE, threshold_only_concern
 from graph import run_invoice
 from llm_client import LLMError
 from parsers import parse_file
-from rules import KEY_REASON_TO_CODE, assess, injection_phrase, threshold_only_concern
+from rules import assess
 from scripts.eval import grade, load_answer_key
 from tests.fake_llm_eval import handler_for
+from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-
-
-class ZeroRandom:
-    def uniform(self, _start, _end):
-        return 0.0
-
-
-class FakeClock:
-    def sleep(self, _seconds):
-        return None
-
-
-class FakeLLM:
-    def __init__(self, handler):
-        self.handler = handler
-        self.calls = []
-
-    def request(self, messages, timeout=60):
-        self.calls.append(messages)
-        result = self.handler(messages)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-
-def task_of(messages) -> str:
-    for message in messages:
-        first = (message.get("content") or "").splitlines()[0]
-        if first.startswith("TASK "):
-            return first.split()[1]
-    return ""
 
 
 def extraction(**overrides) -> str:
@@ -463,9 +435,13 @@ def test_threshold_only_concern_keeps_a_real_sentence():
     assert not threshold_only_concern("amount is high")
 
 
-def test_audit_ignores_a_warning_only_escalation(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+def _audit_reply(cited, notes, verdict="ESCALATE"):
+    return json.dumps(
+        {"verdict": verdict, "feedback": [], "notes": notes, "cited_codes": cited}
+    )
 
+
+def _clean_handler(audit_body: str):
     def handler(messages):
         name = task_of(messages)
         if name == "extract":
@@ -473,46 +449,116 @@ def test_audit_ignores_a_warning_only_escalation(tmp_path, db_path):
         if name == "reason":
             return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
         if name == "audit":
-            return json.dumps(
-                {
-                    "verdict": "ESCALATE",
-                    "feedback": [],
-                    "notes": "non-commercial address is one fraud signal, triggers hold",
-                }
-            )
+            return audit_body
         raise AssertionError(name)
 
-    result = run(path, db_path, handler)
+    return handler
+
+
+def test_warning_only_audit_citation_is_suppressed(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    body = _audit_reply(
+        ["NONCOMMERCIAL_ADDRESS", "FRAUD_SIGNAL"],
+        "one fraud signal on a residential address",
+    )
+    result = run(path, db_path, _clean_handler(body))
     assert result["outcome"] == "approve"
     assert result["payment"].status == "paid"
     assert "AUDIT_NOTE" in codes(result)
     assert "AUDIT_ESCALATED" not in codes(result)
 
 
-def test_audit_ignores_an_escalation_with_no_concrete_field(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+def test_warning_only_suppression_is_noted_on_a_hold(db_path):
+    from decimal import Decimal
 
-    def handler(messages):
-        name = task_of(messages)
-        if name == "extract":
-            return extraction()
-        if name == "reason":
-            return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
-        if name == "audit":
-            return json.dumps(
-                {
-                    "verdict": "SEND_BACK",
-                    "feedback": ["please look again"],
-                    "notes": "January 2026 looks like it is in the future",
-                }
+    from models import (
+        ApprovalDecision,
+        ApprovalReasoning,
+        ExtractedInvoice,
+        LineItem,
+        PipelineState,
+        SourceInfo,
+        ValidationReport,
+    )
+    from pipeline.audit import audit
+
+    invoice = ExtractedInvoice(
+        vendor="Widgets Inc.",
+        due_date="2026-04-30",
+        currency="USD",
+        total=Decimal("500"),
+        subtotal=Decimal("500"),
+        line_items=[
+            LineItem(
+                item="WidgetA",
+                description="WidgetA",
+                quantity=Decimal("2"),
+                unit_price=Decimal("250"),
+                amount=Decimal("500"),
             )
-        raise AssertionError(name)
+        ],
+        source=SourceInfo(path="x.txt", filename="x.txt", format="txt", raw_text="Total: 500.00"),
+    )
+    decision = ApprovalDecision(
+        decision="hold",
+        reasoning=ApprovalReasoning(
+            rules_applied=["placeholder"],
+            evidence=["total 500.00 USD"],
+            risks_considered=["critique"],
+            conclusion="hold",
+        ),
+        amount=Decimal("500"),
+        currency="USD",
+    )
+    state = PipelineState(
+        invoice_path="x.txt",
+        filename="x.txt",
+        raw_text="Vendor: Widgets Inc.\nTotal: 500.00\n",
+        invoice=invoice,
+        validation=ValidationReport(passed=True, findings=[]),
+        decision=decision,
+    )
 
-    result = run(path, db_path, handler)
-    assert result["outcome"] == "approve"
-    assert result["payment"].status == "paid"
-    assert result["send_backs"] == 0
-    assert "AUDIT_NOTE" in codes(result)
+    def handler(_messages):
+        return _audit_reply(["FRAUD_SIGNAL"], "one fraud signal")
+
+    out = audit(state, FakeLLM(handler), db_path, FakeClock(), ZeroRandom(), 3)
+    assert out["outcome"] == "hold"
+    assert any(finding.code == "AUDIT_NOTE" for finding in out["findings"])
+
+
+def test_mixed_warning_and_reject_citation_is_kept(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    body = _audit_reply(
+        ["NONCOMMERCIAL_ADDRESS", "UNKNOWN_ITEM"],
+        "UNKNOWN_ITEM: WidgetZ, and a warning on the address",
+    )
+    result = run(path, db_path, _clean_handler(body))
+    assert result["outcome"] == "hold"
+    assert result["payment"].status == "not_paid"
+    assert "AUDIT_ESCALATED" in codes(result)
+    assert "AUDIT_NOTE" not in codes(result)
+
+
+def test_hold_code_citation_is_kept(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    body = _audit_reply(["FRAUD_CLUSTER"], "Two or more fraud signals")
+    result = run(path, db_path, _clean_handler(body))
+    assert result["outcome"] == "hold"
+    assert "AUDIT_ESCALATED" in codes(result)
+    assert "AUDIT_NOTE" not in codes(result)
+
+
+def test_free_text_with_no_cited_codes_is_kept(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    body = _audit_reply(
+        [],
+        "duplicate of a previously paid invoice; possible phishing",
+    )
+    result = run(path, db_path, _clean_handler(body))
+    assert result["outcome"] == "hold"
+    assert "AUDIT_ESCALATED" in codes(result)
+    assert "AUDIT_NOTE" not in codes(result)
 
 
 def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_path):
@@ -532,6 +578,7 @@ def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_pa
             total=Decimal("500"),
             subtotal=Decimal("500"),
             noncommercial_address=flagged,
+            address_reason="looks like a home" if flagged else None,
             line_items=[
                 LineItem(
                     item="WidgetA",
@@ -548,10 +595,12 @@ def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_pa
     assert home.outcome == "approve"
     assert any(finding.code == "NONCOMMERCIAL_ADDRESS" for finding in home.findings)
     office = assess(invoice("1 Microsoft Way"), "Total: 500.00\n", stock)
-    assert office.outcome == "approve"
     assert all(finding.code != "NONCOMMERCIAL_ADDRESS" for finding in office.findings)
+    unit = assess(invoice("Unit 4, 500 Commerce Blvd"), "Total: 500.00\n", stock)
+    assert all(finding.code != "NONCOMMERCIAL_ADDRESS" for finding in unit.findings)
     flagged = assess(invoice("500 Commerce Blvd", flagged=True), "Total: 500.00\n", stock)
-    assert any(finding.code == "NONCOMMERCIAL_ADDRESS" for finding in flagged.findings)
+    noted = next(finding for finding in flagged.findings if finding.code == "NONCOMMERCIAL_ADDRESS")
+    assert "looks like a home" in noted.message
 
 
 def test_eval_help_makes_no_api_call():

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from db import CREATE_INVENTORY, SEED, create_database, inventory_rows
 from models import ApprovalDecision, ApprovalReasoning, ExtractedInvoice, LineItem, SourceInfo
 from parsers import parse_file
-from rules import normalize_invoice_number, normalize_item_name
+from decision.invoice_fields import normalize_invoice_number, normalize_item_name
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"

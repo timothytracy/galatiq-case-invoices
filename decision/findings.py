@@ -52,10 +52,9 @@ _INJECTION = re.compile(
     r"|\bsystem\s*:",
     re.IGNORECASE,
 )
-# Illustrative only: a unit or apartment number reads as a home.
-# The extraction model sets noncommercial_address for anything else.
-# This is not a list of streets or landmarks.
-_RESIDENTIAL_UNIT = re.compile(r"\b(?:apt|apartment|unit)\b", re.IGNORECASE)
+# Illustrative only. "Unit" is omitted: business parks use it.
+# The extraction model sets noncommercial_address for a residence, landmark, or fictional address.
+_APARTMENT = re.compile(r"\b(?:apt|apartment)\b", re.IGNORECASE)
 
 
 def injection_phrase(text: str) -> bool:
@@ -257,14 +256,12 @@ def collect_findings(
             )
         )
 
-    if _address_noted(invoice):
+    address_note = _address_note(invoice)
+    if address_note is not None:
         findings.append(
             Finding(
                 code="NONCOMMERCIAL_ADDRESS",
-                message=(
-            "Vendor address looks non-commercial and is noted: "
-            f"{invoice.vendor_address or 'the vendor address'}."
-        ),
+                message=address_note,
                 severity="warning",
                 item="vendor_address",
             )
@@ -396,12 +393,16 @@ def _is_credit_label(invoice: ExtractedInvoice, raw_text: str) -> bool:
     return bool(_CREDIT.search(_blob(raw_text, invoice.notes, invoice.payment_terms)))
 
 
-def _address_noted(invoice: ExtractedInvoice) -> bool:
-    """The model flags a non-commercial address. Apt/Unit is only an illustration."""
+def _address_note(invoice: ExtractedInvoice) -> str | None:
+    """A model flag, or an illustrative Apt/Apartment cue. Warning only."""
 
+    place = invoice.vendor_address or "the vendor address"
     if invoice.noncommercial_address:
-        return True
-    return bool(invoice.vendor_address and _RESIDENTIAL_UNIT.search(invoice.vendor_address))
+        reason = invoice.address_reason or "the extraction model flagged the address"
+        return f"Vendor address looks non-commercial and is noted: {place}. {reason}"
+    if invoice.vendor_address and _APARTMENT.search(invoice.vendor_address):
+        return f"Vendor address looks non-commercial and is noted: {place}."
+    return None
 
 
 def _near_threshold(total: Decimal | None, currency: str) -> bool:

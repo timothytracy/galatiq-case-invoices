@@ -62,8 +62,9 @@ class ExtractedInvoice(BaseModel):
     # True only when the extraction model flags instructions aimed at the system.
     # A reject also needs the deterministic phrase check in rules.py.
     embedded_instructions: bool = False
-    # Set by extraction when the vendor address looks like a home. Warning only.
+    # Set by extraction when the address looks non-commercial. Warning only.
     noncommercial_address: bool = False
+    address_reason: str | None = None
     source: SourceInfo
     warnings: list[str] = Field(default_factory=list)
 
@@ -233,6 +234,7 @@ class ExtractionSchema(BaseModel):
     revision: str | None = None
     embedded_instructions: bool = False
     noncommercial_address: bool = False
+    address_reason: str | None = None
 
 
 class ReasoningDraft(BaseModel):
@@ -261,6 +263,8 @@ class AuditDraft(BaseModel):
     verdict: AuditVerdict
     feedback: list[str] = Field(default_factory=list)
     notes: str = ""
+    # Finding codes this verdict is based on. Empty means the concern is free text.
+    cited_codes: list[str] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):

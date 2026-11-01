@@ -41,17 +41,11 @@ from pipeline import audit
 from pipeline.approval import _reason_messages, reasoning_output_failed
 from pipeline.payment import payment
 from scripts.eval import print_bad_reasoning
-from rules import (
-    APPROVAL_THRESHOLD_USD,
-    CRITIQUE_CAP,
-    MAX_SEND_BACKS,
-    HOLD_CODES,
-    REJECT_CODES,
-    WARNING_CODES,
-    assess,
-    outcome_from_findings,
-    resolve_currency,
-)
+from decision.invoice_fields import resolve_currency
+from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, outcome_from_findings
+from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, MAX_SEND_BACKS
+from rules import assess
+from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
@@ -71,32 +65,6 @@ README_OUTCOMES = {
 }
 
 
-class ZeroRandom:
-    def uniform(self, _start, _end):
-        return 0.0
-
-
-class FakeClock:
-    def __init__(self):
-        self.slept = []
-
-    def sleep(self, seconds):
-        self.slept.append(seconds)
-
-
-class FakeLLM:
-    def __init__(self, handler):
-        self.handler = handler
-        self.calls = []
-
-    def request(self, messages, timeout=60):
-        self.calls.append(messages)
-        result = self.handler(messages)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-
 @pytest.fixture(autouse=True)
 def block_network(monkeypatch):
     def explode(*_args, **_kwargs):
@@ -110,14 +78,6 @@ def db_path(tmp_path):
     path = tmp_path / "inventory.db"
     create_database(path)
     return path
-
-
-def task_of(messages) -> str:
-    for message in messages:
-        first = (message.get("content") or "").splitlines()[0]
-        if first.startswith("TASK "):
-            return first.split()[1]
-    return ""
 
 
 def extraction(**overrides) -> str:
@@ -793,7 +753,7 @@ def test_full_run_leaves_the_database_hash_unchanged(tmp_path, db_path, monkeypa
 
 def test_answer_key_covers_the_sample_files():
     from db import SEED
-    from rules import KEY_REASON_TO_CODE
+    from decision.wording import KEY_REASON_TO_CODE
     from scripts.eval import load_answer_key
 
     key = load_answer_key()

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rules import PolicyError, load_policy
+from decision.policy import PolicyError, load_policy
 
 GOOD = """\
 scrutiny_threshold = "10000"
