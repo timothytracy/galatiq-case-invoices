@@ -16,11 +16,13 @@ REJECT_CODES = (
 
 # A hold for a person. A reject-class finding wins when both are present.
 # SYSTEM_ERROR is a Grok failure after retries, not a business finding.
+# ITEM_NOT_IN_SOURCE is an extraction miss. It is named before a business hold.
 # PRICE_SPIKE follows FRAUD_CLUSTER, so a cluster stays the named reason
 # when a spiked price is present too.
 HOLD_CODES = (
     "SYSTEM_ERROR",
     "BAD_REASONING",
+    "ITEM_NOT_IN_SOURCE",
     "NON_USD",
     "CREDIT_NOTE",
     "REVISED_INVOICE",

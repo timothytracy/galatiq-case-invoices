@@ -634,7 +634,7 @@ def test_agents_do_not_call_the_tool_loop():
 
 
 def test_flag_does_not_change_agent_prompts(tmp_path, db_path, monkeypatch):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     seen = []
     for value in (None, "0", "1"):
         _USED_KEYS.clear()

@@ -20,7 +20,7 @@ Reject means the vendor must send something new. Every reject names that next st
 |---|---|
 | Missing required field (vendor, due date, line items, total) | Resend the invoice with the missing field filled in. |
 | Quantity that is zero, negative, or not a number | Resend with corrected quantities. |
-| Unknown item | Resend with the correct item name. We suggest "likely meant X" but never correct it silently. |
+| Unknown item | Resend with the correct item name. Code adds "Likely meant X." only when exactly one inventory name is one letter away, after case, spaces, and hyphens are removed. The item is still rejected and is never substituted. |
 | Stock shortfall | Resend for the quantity in stock, or amend the PO. |
 | Total or line-math mismatch | Resend with corrected totals. |
 | Unreadable file | Resend in a readable format. |
@@ -42,7 +42,10 @@ Hold only when a person can do something the system can't. Every hold names that
 | Two or more fraud signals together (urgency pressure, wire-only payment, a new remittance account) | Verify with the vendor using contact details already on file. |
 | Unit price 50% or more above reference | Verify the price with the vendor. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
+| Item name not in source text | Check the item name against the invoice. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
+
+An extracted item name that is not in the invoice text is a hold (`ITEM_NOT_IN_SOURCE`). The text is the file contents for `.txt`, JSON, CSV, and XML, and the PDF text layer for a PDF. Every supported format has that text. If it is missing or empty, the check fails closed and the invoice is held. A parenthetical descriptor is already split off, so the base name must still appear: "WidgetA (rush order)" is checked as WidgetA. The comparison removes case, spaces, and hyphens, the same way item matching does. The name is not corrected, and nothing is paid.
 
 Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a hold on its own: reason "Unit price 50% or more above reference" (reason code PRICE_SPIKE). That spike is not a fraud signal and does not count toward the two-fraud-signal hold. A smaller difference, including a price below the reference, stays a price-variance warning. A spike line still records its price-variance warning. Non-USD invoices are not price-checked, because nothing is converted. The ratio is `price_spike_ratio` in `policy.toml`. Reject still beats this hold. Approved by the captain on 2026-10-31.
 

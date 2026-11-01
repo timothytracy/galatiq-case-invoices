@@ -116,7 +116,7 @@ The primary reason is the first matching code in the ordered list in `decision/o
 | Outcome | Reason code | Example |
 |---|---|---|
 | Reject | `STOCK_SHORTFALL` | `invoice_1002.txt` asks for 20 GadgetX against stock of 5. `invoice_1003.txt` is the same code, and its urgency and wire-transfer signals stay on the record. |
-| Reject | `UNKNOWN_ITEM` | `invoice_1008.txt` names SuperGizmo and MegaSprocket. |
+| Reject | `UNKNOWN_ITEM` | `invoice_1008.txt` names SuperGizmo and MegaSprocket. The reason adds "Likely meant X." only when exactly one inventory name is one letter away, as with WidgitA on `invoice_2108.txt`. |
 | Reject | `EMBEDDED_INSTRUCTIONS` | `invoice_2107.pdf` tells the system to ignore previous instructions. |
 | Reject | `TOTAL_MISMATCH` | `invoice_2005.xml` leaves shipping out of the printed total. |
 | Hold | `NON_USD` | `invoice_1014.xml` is in EUR. |
@@ -205,7 +205,7 @@ flowchart TD
 
 ### Ingestion
 
-`pipeline/ingestion.py` reads the file, then asks Grok for one JSON object. PDFs contribute their text layer. There is no network fetch. The prompt includes today's date, and, after a send-back, the field notes from audit.
+`pipeline/ingestion.py` reads the file, then asks Grok for one JSON object. PDFs contribute their text layer. There is no network fetch. The prompt includes today's date, and, after a send-back, the field notes from audit. It tells the model to copy each item name exactly as printed and not to match it to a catalog.
 
 Code normalizes item names (case, spaces, hyphens) and the invoice number. A parenthetical descriptor is split into a note. The model sets `embedded_instructions` and `noncommercial_address`. An unreadable file is a reject, reason `UNREADABLE`. A model failure after the retries is a hold, reason `SYSTEM_ERROR`.
 
@@ -213,7 +213,7 @@ The deterministic readers under `parsers/` are the offline stand-in and the test
 
 ### Validation
 
-`pipeline/validation.py` is Python only. It loads the stock snapshot read-only and calls `assess` in `decision/findings.py`. That pass checks required fields (vendor, due date, line items, total), quantities, unknown items, summed stock, line math within 0.01, currency, revisions, credit notes, fraud wording, USD price spikes, and the phrase check for embedded instructions.
+`pipeline/validation.py` is Python only. It loads the stock snapshot read-only and calls `assess` in `decision/findings.py`. That pass checks required fields (vendor, due date, line items, total), quantities, unknown items, summed stock, line math within 0.01, currency, revisions, credit notes, fraud wording, USD price spikes, each base item name against the source text, and the phrase check for embedded instructions. A name missing from that text is an `ITEM_NOT_IN_SOURCE` hold. The source text is the file for `.txt`, JSON, CSV, and XML, and the PDF text layer for a PDF. A missing or empty source fails closed. An unknown item stays a reject; its reason adds "Likely meant X." only when exactly one inventory name is one letter away, and the item is never substituted.
 
 Embedded instructions reject only when the model flag is set and the text matches an imperative phrase aimed at the system. The bare word "approve" does not match. A non-commercial vendor address is recorded as a warning (`NONCOMMERCIAL_ADDRESS`) and is never a hold by itself, as the policy states, following the captain's ruling on 1004. The deterministic address cue is an apartment marker. An O-to-0 reading is kept only when the math then reconciles, and it is recorded as `OCR_FIX`.
 

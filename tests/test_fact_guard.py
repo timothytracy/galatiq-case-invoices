@@ -138,7 +138,7 @@ def test_fabricated_stock_concern_is_dropped_and_invoice_approves(tmp_path, db_p
 
 
 def test_fabricated_future_date_send_back_is_dropped(tmp_path, db_path):
-    path = _write(tmp_path, "dates.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = _write(tmp_path, "dates.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     body = _extraction(invoice_date="2026-04-16", due_date="2026-05-16")
     audit_body = {
         "verdict": "SEND_BACK",
@@ -253,7 +253,7 @@ def test_tax_rate_concern_holds_and_a_mismatch_claim_is_logged(db_path):
 
 
 def test_real_future_date_still_sends_back(tmp_path, db_path):
-    path = _write(tmp_path, "future.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = _write(tmp_path, "future.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     body = _extraction(invoice_date="2026-03-01", due_date="2026-05-16")
     send_back = {
         "verdict": "SEND_BACK",
@@ -326,7 +326,7 @@ def _approved(invoice) -> PipelineState:
     return PipelineState(
         invoice_path="x.txt",
         filename="x.txt",
-        raw_text=f"Total: {invoice.total}\n",
+        raw_text=" ".join(line.item for line in invoice.line_items) + f"\nTotal: {invoice.total}\n",
         invoice=invoice,
         decision=ApprovalDecision(
             decision="approve",
@@ -385,7 +385,7 @@ def _big_invoice(directory: Path):
     path = _write(
         directory,
         "big.txt",
-        "Vendor: Widgets Inc.\nDate: 2026-04-16\nDue Date: 2026-05-16\nTotal: 11500.00\n",
+        "Vendor: Widgets Inc.\nWidgetA WidgetB GadgetX\nDate: 2026-04-16\nDue Date: 2026-05-16\nTotal: 11500.00\n",
     )
     body = _extraction(
         line_items=[

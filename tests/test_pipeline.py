@@ -314,7 +314,7 @@ def test_renamed_vendor_is_a_hold_and_does_not_pay(tmp_path, db_path):
 
 
 def test_audit_pass_pays_and_send_back_uses_feedback(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     handler, counts = scripted(extraction(), audits=["SEND_BACK", "PASS"])
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
@@ -327,7 +327,7 @@ def test_audit_pass_pays_and_send_back_uses_feedback(tmp_path, db_path):
 
 
 def test_three_send_backs_then_escalate(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     handler, counts = scripted(extraction(), audits=["SEND_BACK"])
     result = run(path, db_path, handler)
     assert MAX_SEND_BACKS == 3
@@ -439,7 +439,7 @@ def test_audit_cannot_pay_non_usd(db_path):
 
 
 def test_non_usd_invoice_cannot_reach_payment(tmp_path, db_path):
-    path = write_invoice(tmp_path, "eur.txt", "Amount due 100.00 euros\n")
+    path = write_invoice(tmp_path, "eur.txt", "Amount due 100.00 euros\nWidgetA\n")
     body = extraction(currency="USD", total=100, subtotal=100, line_items=[
         {"item": "WidgetA", "description": "WidgetA", "quantity": 1, "unit_price": 100, "amount": 100, "note": None}
     ])
@@ -468,7 +468,7 @@ def test_currency_detection_without_a_conversion():
 
 
 def test_retry_then_success_uses_the_fake_clock(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Total: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "WidgetA\nTotal: 500.00\n")
 
     def before(call_number, _messages):
         if call_number == 1:
@@ -665,7 +665,7 @@ def test_reasoning_output_failed_covers_refusal_and_normal_wording():
 
 
 def test_exhausted_retries_are_a_hold_and_unpaid(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Total: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "WidgetA\nTotal: 500.00\n")
 
     def handler(_messages):
         raise LLMError("http_429", True, "busy")
@@ -684,7 +684,7 @@ def test_exhausted_retries_are_a_hold_and_unpaid(tmp_path, db_path):
 
 
 def test_non_retryable_error_skips_the_backoff(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Total: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "WidgetA\nTotal: 500.00\n")
     fake = FakeLLM(lambda _messages: (_ for _ in ()).throw(LLMError("http_401", False, "no")))
     clock = FakeClock()
     result = run_invoice(path, db_path, fake, clock=clock, rng=ZeroRandom(), max_attempts=5)
@@ -698,7 +698,7 @@ def test_non_retryable_error_skips_the_backoff(tmp_path, db_path):
 
 
 def test_schema_repair_then_success_does_not_sleep(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Total: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "WidgetA\nTotal: 500.00\n")
     calls = {"n": 0}
 
     def before(call_number, _messages):
@@ -760,7 +760,7 @@ def test_full_run_leaves_the_database_hash_unchanged(tmp_path, db_path, monkeypa
         return real_connect(*args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", wrapped)
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     handler, _counts = scripted(extraction())
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
@@ -856,7 +856,7 @@ def _three_lines(unit_prices):
 
 
 def test_clean_approval_conclusion_names_every_check(tmp_path, db_path):
-    path = write_invoice(tmp_path, "three.txt", "Vendor: Northwind Supply\nTotal: 1750.00\n")
+    path = write_invoice(tmp_path, "three.txt", "Vendor: Northwind Supply\nWidgetA WidgetB GadgetX\nTotal: 1750.00\n")
     body = extraction(
         vendor="Northwind Supply",
         line_items=_three_lines((250, 500, 750)),
@@ -882,7 +882,7 @@ def test_approval_with_warnings_lists_the_finding_messages(tmp_path, db_path):
     path = write_invoice(
         tmp_path,
         "noted.txt",
-        "Vendor: Northwind Supply\nWire transfer only.\nTotal: 520.00\n",
+        "Vendor: Northwind Supply\nWidgetA\nWire transfer only.\nTotal: 520.00\n",
     )
     body = extraction(
         vendor="Northwind Supply",
@@ -919,7 +919,7 @@ def test_approval_with_warnings_lists_the_finding_messages(tmp_path, db_path):
 
 
 def test_approval_over_the_threshold_names_critique(tmp_path, db_path):
-    path = write_invoice(tmp_path, "large.txt", "Vendor: Northwind Supply\nTotal: 12500.00\n")
+    path = write_invoice(tmp_path, "large.txt", "Vendor: Northwind Supply\nWidgetA WidgetB GadgetX\nTotal: 12500.00\n")
     body = extraction(
         vendor="Northwind Supply",
         line_items=[
