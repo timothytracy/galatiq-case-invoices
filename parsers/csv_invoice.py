@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from models import ExtractedInvoice, LineItem, SourceInfo
-from parsers.common import _blank, _build, _make_item, _money, _rate, _read, _source
+from parsers.common import _build, _filled, _make_item, _read, _source
 
 _COLUMN_FIELDS = {
     "invoicenumber": "invoice_number",
@@ -142,27 +142,8 @@ def _apply_summary(label: str, value: str, header: dict[str, str]) -> None:
 
 
 def _from_header(header: dict[str, str], items: list[LineItem], source: SourceInfo) -> ExtractedInvoice:
-    warnings = []
-    if not items:
-        warnings.append("no line items recognized")
-    return _build(
-        vendor=_blank(header.get("vendor")),
-        invoice_number_raw=_blank(header.get("invoice_number")),
-        revision=_blank(header.get("revision")),
-        invoice_date=_blank(header.get("invoice_date")),
-        due_date=_blank(header.get("due_date")),
-        currency=_blank(header.get("currency")) or "USD",
-        line_items=items,
-        subtotal=_money(header.get("subtotal")),
-        tax_rate=_rate(header.get("tax_rate")),
-        tax_amount=_money(header.get("tax_amount")),
-        shipping=_money(header.get("shipping")),
-        total=_money(header.get("total")),
-        payment_terms=_blank(header.get("payment_terms")),
-        notes=_blank(header.get("notes")),
-        source=source,
-        warnings=warnings,
-    )
+    warnings = [] if items else ["no line items recognized"]
+    return _filled(source, items, header, warnings)
 
 
 def _header_key(text: str) -> str:

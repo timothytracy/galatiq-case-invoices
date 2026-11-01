@@ -1,14 +1,12 @@
-"""Payment. The mock gateway runs only with a PASS audit's authorization.
-
-The used-key set is process memory. A retried graph step sees the same key
-and does not pay again. A persistent payments ledger is the production fix.
-"""
+"""Payment. The mock gateway runs only with an unused PASS-audit authorization."""
 
 from decimal import Decimal
 
 from models import Finding, PaymentAuthorization, PaymentRecord, PipelineState
 from pipeline.stage_log import stage_log
-from rules import HOLD_CODES, PAYMENT_REFUSED, POLICY, REJECT_CODES, finding_codes, non_usd_message
+from decision.invoice_fields import non_usd_message
+from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_codes
+from decision.policy import POLICY
 
 # Keys already accepted in this process.
 _USED_KEYS: set[str] = set()

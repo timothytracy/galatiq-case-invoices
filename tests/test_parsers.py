@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from db import CREATE_INVENTORY, SEED, create_database, inventory_rows
+from db import CREATE_INVENTORY, SEED, create_database, load_stock
 from models import ApprovalDecision, ApprovalReasoning, ExtractedInvoice, LineItem, SourceInfo
 from parsers import parse_file
 from decision.invoice_fields import normalize_invoice_number, normalize_item_name
@@ -56,7 +56,7 @@ def test_setup_script_is_idempotent(tmp_path):
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
     assert "4 rows" in first.stdout
-    assert inventory_rows(db_path) == [
+    assert load_stock(db_path) == [
         ("FakeItem", 0),
         ("GadgetX", 5),
         ("WidgetA", 15),

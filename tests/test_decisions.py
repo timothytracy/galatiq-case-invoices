@@ -7,12 +7,11 @@ from pathlib import Path
 import pytest
 
 from db import SEED, create_database
-from decision.findings import injection_phrase
+from decision.findings import assess, injection_phrase
 from decision.wording import KEY_REASON_TO_CODE, threshold_only_concern
 from graph import run_invoice
 from llm_client import LLMError
 from parsers import parse_file
-from rules import assess
 from scripts.eval import grade, load_answer_key
 from tests.fake_llm_eval import handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of

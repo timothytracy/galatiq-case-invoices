@@ -1,9 +1,4 @@
-"""Create the local inventory database used by validation.
-
-Usage:
-    python3 setup_db.py
-    python3 setup_db.py path/to/inventory.db
-"""
+"""Create the local inventory database: python3 setup_db.py [path]"""
 
 import argparse
 import sqlite3

@@ -1,11 +1,8 @@
-"""Grok client.
+"""Grok via the OpenAI SDK at https://api.x.ai/v1.
 
-Uses the OpenAI SDK against https://api.x.ai/v1. The README's
-`from xai import Grok` snippet is not a real client and is not used here.
-
-A missing XAI_API_KEY raises MissingAPIKey. There is no fallback.
-Timeouts, 429, 5xx, network errors, and JSON that is still invalid after the
-schema-repair loop are retried in memory. 400, 401, and 403 are not retried.
+A missing XAI_API_KEY raises MissingAPIKey. Timeouts, 429, 5xx, network
+errors, and JSON that is still invalid after the schema repair are retried.
+Other 4xx errors are not.
 """
 
 import json
@@ -17,7 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from rules import POLICY
+from decision.policy import POLICY
 
 DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
 BASE_URL = "https://api.x.ai/v1"
@@ -36,11 +33,7 @@ class MissingAPIKey(RuntimeError):
 
 
 class LLMError(Exception):
-    """One failed model call, already classified.
-
-    log, when set, is copied onto the attempt record. Approval puts the
-    rejected conclusion, the risks, and the matched phrase there.
-    """
+    """One failed model call. log is copied onto the attempt record."""
 
     def __init__(
         self,
@@ -71,7 +64,7 @@ class SleepClock:
 
 
 def load_dotenv(path: Path | None = None) -> None:
-    """Load KEY=VALUE lines. Existing variables win. Values are never printed."""
+    """Load KEY=VALUE lines. Existing variables win."""
 
     env_path = path or Path(".env")
     if not env_path.is_file():
@@ -100,7 +93,7 @@ def read_max_attempts() -> int:
 
 
 def backoff_seconds(failed_attempt: int, rng: random.Random) -> float:
-    """1, 2, 4, 8, 16 seconds, plus up to 25 percent jitter."""
+    """1, 2, 4, 8, 16 seconds, plus up to 25% jitter."""
 
     index = min(failed_attempt - 1, len(BACKOFF_SECONDS) - 1)
     base = BACKOFF_SECONDS[index]
@@ -114,11 +107,7 @@ def classify_exception(exc: BaseException) -> LLMError:
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
     text = str(exc)
-    if status == 429:
-        return LLMError("http_429", True, text)
-    if status in (400, 401, 403):
-        return LLMError(f"http_{status}", False, text)
-    if isinstance(status, int) and status >= 500:
+    if status == 429 or (isinstance(status, int) and status >= 500):
         return LLMError(f"http_{status}", True, text)
     if isinstance(status, int) and 400 <= status < 500:
         return LLMError(f"http_{status}", False, text)
@@ -149,11 +138,7 @@ def parse_json_object(text: str) -> dict:
 
 
 def structured_call(request, messages: list[dict], schema: type[BaseModel], check=None) -> BaseModel:
-    """Call the model, then give it one repair turn if the JSON does not validate.
-
-    check(parsed) runs after the JSON validates. It may raise LLMError so the
-    outer retry treats that reply as a failed attempt.
-    """
+    """One repair turn if the JSON does not validate. check may raise LLMError."""
 
     conversation = list(messages)
     error_text = "empty response"
@@ -192,7 +177,7 @@ def call_with_retries(
     attempt_log: list[dict],
     check=None,
 ) -> BaseModel:
-    """Retry a structured call. Sleep happens through clock so tests can fake time."""
+    """Retry a structured call. Sleep goes through clock so tests can fake time."""
 
     last_type = "unknown"
     for attempt in range(1, max_attempts + 1):

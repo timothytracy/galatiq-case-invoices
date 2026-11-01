@@ -1,8 +1,4 @@
-"""Audit. Compare the extraction with the raw text, then refuse to loosen it.
-
-The model returns PASS, SEND_BACK, or ESCALATE. Python recomputes the hard
-rules and keeps whichever result is stricter.
-"""
+"""Audit. The model returns PASS, SEND_BACK, or ESCALATE. Python will not loosen it."""
 
 import hashlib
 import json
@@ -14,18 +10,11 @@ from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
 from pipeline.stage_log import _stopped, agent_finding, stage_log
-from rules import (
-    HOLD_CODES,
-    MAX_SEND_BACKS,
-    REJECT_CODES,
-    WARNING_CODES,
-    assess,
-    explain,
-    finding_codes,
-    resolve_as_of,
-    show_money,
-    today_line,
-)
+from decision.invoice_fields import show_money
+from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, finding_codes
+from decision.policy import MAX_SEND_BACKS
+from decision.findings import assess
+from decision.wording import explain, resolve_as_of, today_line
 
 
 def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
@@ -277,8 +266,18 @@ def _ignored_audit_note(
     return f"{codes}. {text}".strip() if text else codes
 
 
+def _box(verdict, outcome, conclusion, feedback=None, evidence=None) -> dict:
+    return {
+        "verdict": verdict,
+        "outcome": outcome,
+        "feedback": [] if feedback is None else feedback,
+        "conclusion": conclusion,
+        "evidence": [] if evidence is None else evidence,
+    }
+
+
 def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
-    """Apply the audit checks. The result is never looser than the rules or the model."""
+    """Never looser than the rules or the model. PASS on a reject means do not send it back."""
 
     hard = [finding for finding in findings if finding.severity == "blocking" and finding.code in REJECT_CODES]
     holds = [finding for finding in findings if finding.code in HOLD_CODES]
@@ -288,33 +287,20 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
             text_notes.append(
                 f"total {show_money(state.invoice.total)} was not found in the raw text"
             )
-
+    conclusion = decision.reasoning.conclusion
     if hard or decision.decision == "reject":
-        # The model cannot loosen a hard failure. PASS means "do not send this
-        # back"; the outcome stays reject, so the router logs it and does not pay.
-        return {
-            "verdict": "PASS",
-            "outcome": "reject",
-            "feedback": [],
-            "conclusion": " ".join(finding.message for finding in hard) or decision.reasoning.conclusion,
-            "evidence": [finding.message for finding in hard],
-        }
+        messages = [finding.message for finding in hard]
+        return _box("PASS", "reject", " ".join(messages) or conclusion, evidence=messages)
     if holds and decision.decision == "approve":
-        return {
-            "verdict": "ESCALATE",
-            "outcome": "hold",
-            "feedback": [],
-            "conclusion": " ".join(finding.message for finding in holds),
-            "evidence": [finding.message for finding in holds],
-        }
+        messages = [finding.message for finding in holds]
+        return _box("ESCALATE", "hold", " ".join(messages), evidence=messages)
     if not concerns_addressed(state.critique_concerns, decision):
-        return {
-            "verdict": "ESCALATE",
-            "outcome": "hold",
-            "feedback": [],
-            "conclusion": "Critique concerns were not addressed.",
-            "evidence": [f"Unaddressed critique concern: {item}" for item in state.critique_concerns],
-        }
+        return _box(
+            "ESCALATE",
+            "hold",
+            "Critique concerns were not addressed.",
+            evidence=[f"Unaddressed critique concern: {item}" for item in state.critique_concerns],
+        )
 
     verdict = model_verdict
     if text_notes and verdict == "PASS":
@@ -322,43 +308,21 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
         feedback = text_notes + feedback
     if verdict == "SEND_BACK":
         if state.send_backs >= MAX_SEND_BACKS:
-            return {
-                "verdict": "ESCALATE",
-                "outcome": "hold",
-                "feedback": feedback,
-                "conclusion": "Audit send-back cap reached. Hold, no payment.",
-                "evidence": feedback or ["send-back cap reached"],
-            }
-        used = feedback or ["re-check the extracted fields against the raw text"]
-        return {
-            "verdict": "SEND_BACK",
-            "outcome": None,
-            "feedback": used,
-            "conclusion": decision.reasoning.conclusion,
-            "evidence": [],
-        }
+            return _box(
+                "ESCALATE",
+                "hold",
+                "Audit send-back cap reached. Hold, no payment.",
+                feedback,
+                feedback or ["send-back cap reached"],
+            )
+        return _box(
+            "SEND_BACK",
+            None,
+            conclusion,
+            feedback or ["re-check the extracted fields against the raw text"],
+        )
     if verdict == "ESCALATE" or decision.decision == "hold":
-        outcome = "hold"
-        return {
-            "verdict": "ESCALATE",
-            "outcome": outcome,
-            "feedback": [],
-            "conclusion": decision.reasoning.conclusion,
-            "evidence": [],
-        }
-    # PASS. An approve stays approve. Anything else stays as strict as it was.
+        return _box("ESCALATE", "hold", conclusion)
     if decision.decision == "approve":
-        return {
-            "verdict": "PASS",
-            "outcome": "approve",
-            "feedback": [],
-            "conclusion": decision.reasoning.conclusion,
-            "evidence": [],
-        }
-    return {
-        "verdict": "PASS",
-        "outcome": decision.decision,
-        "feedback": [],
-        "conclusion": decision.reasoning.conclusion,
-        "evidence": [],
-    }
+        return _box("PASS", "approve", conclusion)
+    return _box("PASS", decision.decision, conclusion)

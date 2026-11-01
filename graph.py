@@ -1,8 +1,4 @@
-"""LangGraph wiring. Stage behavior lives in the pipeline package.
-
-Cycles: critique goes back to approval, and the audit can go back to ingestion.
-Conditional edges are the routing rules. This file does not decide an invoice.
-"""
+"""LangGraph wiring. Critique returns to approval. Audit can return to ingestion."""
 
 import random
 from datetime import date
@@ -13,7 +9,8 @@ from langgraph.graph import END, START, StateGraph
 from llm_client import SleepClock, read_max_attempts
 from models import PipelineState
 from pipeline import approve, audit, critique, ingest, payment, reject_log, validate
-from rules import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, POLICY, resolve_as_of
+from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, POLICY
+from decision.wording import resolve_as_of
 
 RECURSION_LIMIT = 80
 
@@ -25,27 +22,15 @@ def build_graph(llm, db_path, *, clock=None, rng=None, max_attempts=None, as_of:
     as_of = resolve_as_of(as_of)
     db_path = str(db_path)
 
-    def ingestion_node(state: PipelineState) -> dict:
-        return ingest(state, llm, clock, rng, attempts, as_of)
-
-    def validation_node(state: PipelineState) -> dict:
-        return validate(state, db_path, as_of)
-
-    def approval_node(state: PipelineState) -> dict:
-        return approve(state, llm, db_path, clock, rng, attempts, as_of)
-
-    def critique_node(state: PipelineState) -> dict:
-        return critique(state, llm, clock, rng, attempts, as_of)
-
-    def audit_node(state: PipelineState) -> dict:
-        return audit(state, llm, db_path, clock, rng, attempts, as_of)
-
     graph = StateGraph(PipelineState)
-    graph.add_node("ingestion", ingestion_node)
-    graph.add_node("validation", validation_node)
-    graph.add_node("approval", approval_node)
-    graph.add_node("critique", critique_node)
-    graph.add_node("audit", audit_node)
+    graph.add_node("ingestion", lambda state: ingest(state, llm, clock, rng, attempts, as_of))
+    graph.add_node("validation", lambda state: validate(state, db_path, as_of))
+    graph.add_node(
+        "approval",
+        lambda state: approve(state, llm, db_path, clock, rng, attempts, as_of),
+    )
+    graph.add_node("critique", lambda state: critique(state, llm, clock, rng, attempts, as_of))
+    graph.add_node("audit", lambda state: audit(state, llm, db_path, clock, rng, attempts, as_of))
     graph.add_node("payment", payment)
     graph.add_node("reject_log", reject_log)
 

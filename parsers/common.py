@@ -1,14 +1,10 @@
-"""Fields every format reader fills in the same way.
-
-Invoice numbers and item codes are normalized here so a JSON file and a text
-file reach the rules with the same shape.
-"""
+"""Fields every format reader fills the same way."""
 
 from decimal import Decimal
 from pathlib import Path
 
 from models import ExtractedInvoice, LineItem, SourceInfo
-from rules import as_money, normalize_invoice_number, normalize_item_name
+from decision.invoice_fields import as_money, normalize_invoice_number, normalize_item_name
 
 
 def _build(
@@ -102,6 +98,35 @@ def _blank(value) -> str | None:
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _filled(
+    source: SourceInfo,
+    items: list[LineItem],
+    fields: dict,
+    warnings=None,
+) -> ExtractedInvoice:
+    """Build an invoice from a header dict. Money and blank strings are normalized here."""
+
+    return _build(
+        source=source,
+        line_items=items,
+        vendor=fields.get("vendor"),
+        vendor_address=fields.get("vendor_address"),
+        invoice_number_raw=fields.get("invoice_number"),
+        revision=fields.get("revision"),
+        invoice_date=fields.get("invoice_date"),
+        due_date=fields.get("due_date"),
+        currency=_blank(fields.get("currency")) or "USD",
+        subtotal=_money(fields.get("subtotal")),
+        tax_rate=_rate(fields.get("tax_rate")),
+        tax_amount=_money(fields.get("tax_amount")),
+        shipping=_money(fields.get("shipping")),
+        total=_money(fields.get("total")),
+        payment_terms=fields.get("payment_terms"),
+        notes=fields.get("notes"),
+        warnings=warnings,
+    )
 
 
 def _source(path: Path, kind: str, raw: str) -> SourceInfo:

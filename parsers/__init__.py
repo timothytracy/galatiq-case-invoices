@@ -1,8 +1,4 @@
-"""Deterministic invoice readers. No network and no per-file special cases.
-
-Printed totals are kept even when the arithmetic is wrong, so validation can
-see the mismatch instead of a silently corrected number.
-"""
+"""Deterministic readers. Printed totals are kept even when the arithmetic is wrong."""
 
 from pathlib import Path
 
@@ -11,7 +7,7 @@ from parsers.common import _read
 from parsers.csv_invoice import parse_csv_file
 from parsers.json_invoice import parse_json_file
 from parsers.pdf_invoice import parse_pdf_file, pdf_text
-from parsers.text_invoice import fix_ocr_digits, parse_text, parse_text_file
+from parsers.text_invoice import parse_text_file
 from parsers.xml_invoice import parse_xml_file
 
 
@@ -36,16 +32,3 @@ def parse_file(path: Path) -> ExtractedInvoice:
     if suffix == ".txt":
         return parse_text_file(path)
     raise ValueError(f"unsupported invoice type: {suffix or path.name}")
-
-
-__all__ = [
-    "fix_ocr_digits",
-    "parse_csv_file",
-    "parse_file",
-    "parse_json_file",
-    "parse_pdf_file",
-    "parse_text",
-    "parse_text_file",
-    "parse_xml_file",
-    "read_raw",
-]

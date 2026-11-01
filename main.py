@@ -1,11 +1,4 @@
-"""Process one invoice.
-
-    python3 main.py --invoice_path=data/invoices/invoice_1001.txt
-
-A missing XAI_API_KEY stops the program before any invoice is touched.
-main.py creates inventory.db only when that file is missing. The run itself
-opens the database read-only.
-"""
+"""Process one invoice: python3 main.py --invoice_path=data/invoices/invoice_1001.txt"""
 
 import argparse
 import json
@@ -15,7 +8,7 @@ from pathlib import Path
 from db import create_database
 from graph import run_invoice
 from llm_client import GrokClient, MissingAPIKey
-from rules import result_codes
+from decision.outcome import result_codes
 
 
 def main(argv: list[str] | None = None) -> int:
