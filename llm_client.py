@@ -17,9 +17,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
+from rules import POLICY
+
 DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
 BASE_URL = "https://api.x.ai/v1"
-DEFAULT_MAX_ATTEMPTS = 5
+DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
 

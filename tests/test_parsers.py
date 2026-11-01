@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from db import CREATE_INVENTORY, SEED, create_database, inventory_rows
 from models import ApprovalDecision, ApprovalReasoning, ExtractedInvoice, LineItem, SourceInfo
 from parsers import parse_file
-from rules import normalize_invoice_number, normalize_item_name
+from decision.invoice_fields import normalize_invoice_number, normalize_item_name
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
@@ -96,9 +96,19 @@ def test_models_round_trip_and_reject_a_bad_decision():
         ),
     )
     assert decision.revisions == []
+    held = ApprovalDecision(
+        decision="hold",
+        reasoning=ApprovalReasoning(
+            rules_applied=["stock"],
+            evidence=["x"],
+            risks_considered=["none"],
+            conclusion="hold",
+        ),
+    )
+    assert held.decision == "hold"
     with pytest.raises(ValidationError):
         ApprovalDecision(
-            decision="hold",
+            decision="manual_review",
             reasoning=ApprovalReasoning(
                 rules_applied=["stock"],
                 evidence=["x"],
@@ -112,6 +122,7 @@ def test_name_normalization():
     assert normalize_invoice_number("1002") == "INV-1002"
     assert normalize_invoice_number("INV 1012") == "INV-1012"
     assert normalize_item_name("Widget A") == ("WidgetA", None)
+    assert normalize_item_name("widget-a") == ("widgeta", None)
     assert normalize_item_name("WidgetA (rush order)") == ("WidgetA", "rush order")
 
 
@@ -160,3 +171,17 @@ def test_parser_keeps_the_traps_visible():
 
     revised = parse_file(INVOICES / "invoice_1004_revised.json")
     assert revised.revision == "R1"
+
+    from parsers.text_invoice import parse_text
+    from models import SourceInfo
+
+    broken = (
+        "Vendor: Widgets Inc.\n"
+        "Invoice Number: INV-1\n"
+        "Due Date: 2026-02-01\n"
+        "WidgetA qty: 1 unit price: $100.00\n"
+        "Total: $2O0.00\n"
+    )
+    kept = parse_text(broken, SourceInfo(path="x.txt", filename="x.txt", format="txt", raw_text=broken))
+    assert kept.total is None
+    assert "2O0" in broken

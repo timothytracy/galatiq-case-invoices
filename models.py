@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-Outcome = Literal["approve", "reject", "manual_review"]
+Outcome = Literal["approve", "reject", "hold"]
 AuditVerdict = Literal["PASS", "SEND_BACK", "ESCALATE"]
 
 
@@ -59,6 +59,12 @@ class ExtractedInvoice(BaseModel):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    # True only when the extraction model flags instructions aimed at the system.
+    # A reject also needs the deterministic phrase check in rules.py.
+    embedded_instructions: bool = False
+    # Set by extraction when the address looks non-commercial. Warning only.
+    noncommercial_address: bool = False
+    address_reason: str | None = None
     source: SourceInfo
     warnings: list[str] = Field(default_factory=list)
 
@@ -72,14 +78,34 @@ class ExtractedInvoice(BaseModel):
 
 
 class Finding(BaseModel):
-    """One rule observation. code stays an open string."""
+    """One problem a stage raised.
+
+    code is a stable short name such as STOCK_SHORTFALL.
+    severity is info, warning, or blocking.
+    item is the line or invoice field this finding is about, or null.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     code: str
     message: str
-    severity: Literal["error", "warning"] = "error"
+    severity: Literal["info", "warning", "blocking"] = "blocking"
     item: str | None = None
+
+
+class PaymentAuthorization(BaseModel):
+    """Sign-off produced only by a PASS audit. Payment refuses to run without one.
+
+    key is one-time for this process. The audit builds it from the invoice
+    file path and a hash of the file text.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vendor: str
+    amount: Decimal
+    currency: str
+    key: str = Field(min_length=1)
 
 
 class ValidationReport(BaseModel):
@@ -109,6 +135,8 @@ class ApprovalDecision(BaseModel):
 
     decision: Outcome
     reasoning: ApprovalReasoning
+    reason_code: str | None = None
+    action: str | None = None
     revisions: list[ApprovalReasoning] = Field(default_factory=list)
     amount: Decimal | None = None
     currency: str | None = None
@@ -141,6 +169,7 @@ class StageRecord(BaseModel):
         "audit",
         "payment",
         "reject_log",
+        "hold",
     ]
     invoice_file: str
     timestamp: str
@@ -163,7 +192,9 @@ class Assessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     outcome: Outcome
+    reason_code: str | None = None
     reason: str
+    action: str | None = None
     findings: list[Finding]
     currency: str
 
@@ -200,6 +231,10 @@ class ExtractionSchema(BaseModel):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    revision: str | None = None
+    embedded_instructions: bool = False
+    noncommercial_address: bool = False
+    address_reason: str | None = None
 
 
 class ReasoningDraft(BaseModel):
@@ -228,6 +263,8 @@ class AuditDraft(BaseModel):
     verdict: AuditVerdict
     feedback: list[str] = Field(default_factory=list)
     notes: str = ""
+    # Finding codes this verdict is based on. Empty means the concern is free text.
+    cited_codes: list[str] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):
@@ -250,3 +287,7 @@ class PipelineState(BaseModel):
     logs: list[dict] = Field(default_factory=list)
     attempts: list[dict] = Field(default_factory=list)
     agent_error: str | None = None
+    findings: list[Finding] = Field(default_factory=list)
+    authorization: PaymentAuthorization | None = None
+    reason_code: str | None = None
+    action: str | None = None

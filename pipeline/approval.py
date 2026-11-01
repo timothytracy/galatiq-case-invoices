@@ -8,29 +8,40 @@ log keeps the conclusion, the risks, and the phrase that matched.
 """
 
 import json
+import re
 
 from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
-from models import ApprovalDecision, ApprovalReasoning, PipelineState, ReasoningDraft
-from pipeline.stage_log import _stopped, stage_log
-from rules import PASSED_RULES, evidence_lines
+from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
+from pipeline.stage_log import _stopped, agent_finding, stage_log
+from rules import PASSED_RULES, evidence_lines, resolve_as_of, today_line
 
 # Long enough to read the flagged sentence. Short enough to keep a log line small.
 _LOG_LIMIT = 500
 
 
-def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> dict:
+def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+    as_of = resolve_as_of(as_of)
     if state.agent_error:
-        return {"outcome": "manual_review"}
+        return {"outcome": "hold"}
     invoice = state.invoice
     report = state.validation
     if invoice is None or report is None:
-        return _stopped(state, "reject", "Approval had no invoice.", "approval", [], agent_error=None)
+        reason = "Approval had no invoice."
+        return _stopped(
+            state,
+            "reject",
+            reason,
+            "approval",
+            [],
+            agent_error=None,
+            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
+        )
 
     stock = dict(load_stock(db_path))
     step_attempts: list[dict] = []
     evidence = evidence_lines(invoice, stock, report.findings)
-    decision_name = "manual_review" if state.critique_stricter else "approve"
+    decision_name = "hold" if state.critique_stricter else "approve"
 
     def reject_bad_wording(draft: ReasoningDraft) -> None:
         matched = reasoning_rejection(draft, decision_name)
@@ -49,7 +60,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     try:
         draft = call_with_retries(
             llm.request,
-            _reason_messages(state, invoice, report, evidence),
+            _reason_messages(state, invoice, report, evidence, as_of),
             ReasoningDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -58,7 +69,15 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
             check=reject_bad_wording,
         )
     except AgentStepFailed as exc:
-        return _stopped(state, "manual_review", str(exc), "approval", step_attempts, agent_error=str(exc))
+        return _stopped(
+            state,
+            "hold",
+            str(exc),
+            "approval",
+            step_attempts,
+            agent_error=str(exc),
+            finding=agent_finding(exc),
+        )
     risks = list(draft.risks_considered)
     for concern in state.critique_concerns:
         line = f"Critique concern: {concern}"
@@ -66,7 +85,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
             risks.append(line)
     conclusion = draft.conclusion
     if state.critique_stricter:
-        conclusion = conclusion + " Critique made the decision stricter: manual review, no payment."
+        conclusion = conclusion + " Critique made the decision stricter: hold, no payment."
     reasoning = ApprovalReasoning(
         rules_applied=list(PASSED_RULES),
         evidence=evidence,
@@ -114,6 +133,9 @@ _NOT_APPROVE = (
     "don't approve",
     "can't approve",
 )
+# "approved" alone does not match. "should/cannot/must not be approved" does,
+# because each of those contains "not" before "approv".
+_APPROVE_REFUSAL = re.compile(r"(?i)not\s+(?:be\s+)?approv")
 
 
 def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
@@ -134,6 +156,8 @@ def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
                 if phrase in _NOT_APPROVE:
                     return "approve-contradiction"
                 return phrase
+        if decision == "approve" and _APPROVE_REFUSAL.search(lowered):
+            return "approve-contradiction"
     return None
 
 
@@ -143,7 +167,8 @@ def reasoning_output_failed(draft: ReasoningDraft, decision: str) -> bool:
     return reasoning_rejection(draft, decision) is not None
 
 
-def _reason_messages(state, invoice, report, evidence) -> list[dict]:
+def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]:
+    as_of = resolve_as_of(as_of)
     concerns = ""
     if state.critique_concerns:
         concerns = "Critique concerns to address:\n" + "\n".join(
@@ -164,16 +189,26 @@ def _reason_messages(state, invoice, report, evidence) -> list[dict]:
             "role": "system",
             "content": (
                 "TASK reason\n"
+                f"{today_line(as_of)}\n"
                 "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
                 "and conclusion (string). The decision is already fixed by the rules. "
-                "Cite only the evidence you are given. Return JSON only."
+                "The user message is a valid JSON object of invoice facts. "
+                "Cite only the evidence you are given. "
+                "Warning-only findings are recorded for the reviewer and are not reasons to refuse: "
+                "a total near the threshold, a descriptor on an item name, a price variance, "
+                "a single fraud signal, and a non-commercial address. "
+                "Mention any of those neutrally as notes. Return JSON only."
             ),
         },
         {
             "role": "user",
             "content": "\n".join(
                 part
-                for part in (json.dumps(payload), prior, concerns)
+                for part in (
+                    "Invoice facts (a valid JSON object):\n" + json.dumps(payload),
+                    prior,
+                    concerns,
+                )
                 if part
             ),
         },

@@ -3,7 +3,8 @@
 import json
 from datetime import datetime, timezone
 
-from models import StageRecord
+from models import Finding, StageRecord
+from rules import explain, finding_codes
 
 
 def stage_log(filename: str, stage: str, result: dict) -> dict:
@@ -18,10 +19,36 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
     return payload
 
 
-def _stopped(state, outcome, reason, stage, step_attempts, agent_error) -> dict:
-    result = {"outcome": outcome, "reason": reason, "attempts": step_attempts}
+def agent_finding(exc) -> Finding:
+    """The finding for a model step that will not be retried again."""
+
+    code = "BAD_REASONING" if getattr(exc, "error_type", "") == "bad_reasoning" else "SYSTEM_ERROR"
+    return Finding(code=code, message=str(exc), severity="warning")
+
+
+def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=None) -> dict:
+    """Stop the graph. The finding list decides the outcome; outcome is the caller's hint."""
+
+    findings = list(state.findings)
+    if finding is not None:
+        findings.append(finding)
+    decided, code, explained, action = explain(findings, state.invoice)
+    if not findings:
+        decided = outcome
+        explained = reason
+    result = {
+        "outcome": decided,
+        "reason": explained,
+        "reason_code": code,
+        "action": action,
+        "attempts": step_attempts,
+        "codes": finding_codes(findings),
+    }
     return {
-        "outcome": outcome,
+        "outcome": decided,
+        "reason_code": code,
+        "action": action,
+        "findings": findings,
         "agent_error": agent_error,
         "attempts": state.attempts + step_attempts,
         "logs": state.logs + [stage_log(state.filename, stage, result)],

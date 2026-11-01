@@ -27,7 +27,7 @@ def _tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: l
 def _failure_decision(state: PipelineState, reason: str) -> ApprovalDecision:
     invoice = state.invoice
     return ApprovalDecision(
-        decision="manual_review",
+        decision="hold",
         reasoning=ApprovalReasoning(
             rules_applied=["A failed agent step does not continue to payment."],
             evidence=[reason],
