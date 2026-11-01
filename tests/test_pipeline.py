@@ -233,20 +233,37 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
 
 
 def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
-    path = write_invoice(tmp_path, "big.txt", "WidgetA 1\nTotal: 12000.00\n")
+    # Reference prices, so the total is over the threshold without a price spike.
+    path = write_invoice(tmp_path, "big.txt", "WidgetA 15, WidgetB 10, GadgetX 5\nTotal: 12500.00\n")
     body = extraction(
         line_items=[
             {
                 "item": "WidgetA",
                 "description": "WidgetA",
-                "quantity": 1,
-                "unit_price": 12000,
-                "amount": 12000,
+                "quantity": 15,
+                "unit_price": 250,
+                "amount": 3750,
                 "note": None,
-            }
+            },
+            {
+                "item": "WidgetB",
+                "description": "WidgetB",
+                "quantity": 10,
+                "unit_price": 500,
+                "amount": 5000,
+                "note": None,
+            },
+            {
+                "item": "GadgetX",
+                "description": "GadgetX",
+                "quantity": 5,
+                "unit_price": 750,
+                "amount": 3750,
+                "note": None,
+            },
         ],
-        subtotal=12000,
-        total=12000,
+        subtotal=12500,
+        total=12500,
     )
     handler, counts = scripted(body)
     result = run(path, db_path, handler)

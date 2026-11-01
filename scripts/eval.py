@@ -43,26 +43,29 @@ def load_answer_key(path: Path | None = None) -> dict:
 def grade(result: dict, expected: dict) -> dict:
     """Compare one graph result to one answer-key row.
 
-    Outcome and primary reason code decide ok. Warnings are informational.
+    Outcome and reason code decide ok. also_accepted_reasons, when present, is
+    a list of reason texts in the same form as primary_reason. A predicted code
+    matches the primary or any of those. Warnings are informational.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()
     expected_outcome = str(expected["outcome"]).upper()
     actual_code = result.get("reason_code")
     expected_name = expected["primary_reason"]
-    if expected_name not in KEY_REASON_TO_CODE:
-        expected_code = expected_name
-        known = False
-    else:
+    if expected_name in KEY_REASON_TO_CODE:
         expected_code = KEY_REASON_TO_CODE[expected_name]
-        known = True
+    else:
+        expected_code = expected_name
+    names = [expected_name]
+    names.extend(expected.get("also_accepted_reasons") or [])
+    accepted = {KEY_REASON_TO_CODE[name] for name in names if name in KEY_REASON_TO_CODE}
     codes = set(result_codes(result))
     messages = " ".join(_messages(result)).lower()
     expected_warnings = list(expected.get("warnings") or [])
     matched = [item for item in expected_warnings if _warning_hit(item, codes, messages)]
     return {
         "outcome_ok": actual_outcome == expected_outcome,
-        "reason_ok": known and actual_code == expected_code,
+        "reason_ok": actual_code in accepted,
         "actual_outcome": actual_outcome,
         "expected_outcome": expected_outcome,
         "actual_code": actual_code,

@@ -16,7 +16,7 @@ critique_cap = 1
 audit_send_back_cap = 3
 model_retry_attempts = 5
 near_threshold_ratio = "0.02"
-price_fraud_ratio = "0.50"
+price_spike_ratio = "0.50"
 
 [reference_prices]
 WidgetA = "250"
@@ -34,6 +34,7 @@ def test_shipped_policy_matches_todays_behavior(tmp_path):
     assert policy.critique_cap == 1
     assert policy.audit_send_back_cap == 3
     assert policy.model_retry_attempts == 5
+    assert policy.price_spike_ratio == Decimal("0.50")
 
     copy = load_policy(_write(tmp_path, GOOD))
     assert copy == policy
@@ -53,6 +54,7 @@ def _write(directory: Path, text: str) -> Path:
         (GOOD.replace("audit_send_back_cap = 3", "audit_send_back_cap = -1"), "audit_send_back_cap"),
         (GOOD.replace('allowed_currencies = ["USD"]', "allowed_currencies = []"), "allowed_currencies"),
         (GOOD.replace('money_tolerance = "0.01"', 'money_tolerance = "-0.01"'), "money_tolerance"),
+        (GOOD.replace('price_spike_ratio = "0.50"', 'price_spike_ratio = "-0.01"'), "price_spike_ratio"),
     ],
 )
 def test_bad_policy_names_the_key(tmp_path, text, key):

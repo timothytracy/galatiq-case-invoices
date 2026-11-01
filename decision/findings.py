@@ -163,10 +163,16 @@ def collect_findings(
         )
     findings.extend(fraud)
 
+    # USD only. abs(unit_price) so a -250 credit matches a 250 reference.
     if currency in POLICY.allowed_currencies:
+        spike_at = Decimal("1") + POLICY.price_spike_ratio
+        spike_pct = f"{POLICY.price_spike_ratio * 100:.0f}"
         for line in invoice.line_items:
             ref = POLICY.reference_prices.get(canonical_item(line.item, stock))
-            if ref is None or line.unit_price is None or not different(line.unit_price, ref):
+            if ref is None or line.unit_price is None:
+                continue
+            price = abs(line.unit_price)
+            if not different(price, ref):
                 continue
             findings.append(
                 _finding(
@@ -178,17 +184,17 @@ def collect_findings(
                     item=line.item,
                 )
             )
-            if line.unit_price > ref * (Decimal("1") + POLICY.price_fraud_ratio):
-                high = _finding(
-                    "FRAUD_SIGNAL",
-                    (
-                        f"Unit price {show_money(line.unit_price)} for {line.item} "
-                        "is well above the reference price."
-                    ),
-                    item=line.item,
+            if price >= ref * spike_at:
+                findings.append(
+                    _finding(
+                        "PRICE_SPIKE",
+                        (
+                            f"Unit price {show_money(line.unit_price)} for {line.item} "
+                            f"is {spike_pct}% or more above the reference price {show_money(ref)}."
+                        ),
+                        item=line.item,
+                    )
                 )
-                findings.append(high)
-                fraud.append(high)
 
     for line in invoice.line_items:
         if line.description and re.search(r"\([^)]+\)", line.description) and line.note:

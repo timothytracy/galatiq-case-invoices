@@ -27,14 +27,14 @@ class Policy(BaseModel):
     audit_send_back_cap: int = Field(ge=0)
     model_retry_attempts: int = Field(ge=1)
     near_threshold_ratio: Decimal
-    price_fraud_ratio: Decimal
+    price_spike_ratio: Decimal
     reference_prices: dict[str, Decimal]
 
     @field_validator(
         "scrutiny_threshold",
         "money_tolerance",
         "near_threshold_ratio",
-        "price_fraud_ratio",
+        "price_spike_ratio",
         mode="before",
     )
     @classmethod
@@ -54,7 +54,7 @@ class Policy(BaseModel):
             raise ValueError("must be greater than zero")
         return value
 
-    @field_validator("money_tolerance", "price_fraud_ratio")
+    @field_validator("money_tolerance", "price_spike_ratio")
     @classmethod
     def _non_negative(cls, value: Decimal) -> Decimal:
         if value < 0:

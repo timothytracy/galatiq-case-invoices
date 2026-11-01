@@ -28,10 +28,12 @@ model_retry_attempts = 5
 # A total this close under scrutiny_threshold, and still under it, is a warning.
 near_threshold_ratio = "0.02"
 
-# A unit price this far above the reference is one fraud signal ("well above").
-# Any difference, including this one, is also a price-variance warning.
-# 0.50 means more than 50% above the reference price.
-price_fraud_ratio = "0.50"
+# abs(unit_price) >= reference * (1 + this ratio) is a PRICE_SPIKE hold.
+# The next step is to verify the price with the vendor.
+# 0.50 means 50% or more above the USD reference. A smaller difference stays
+# a price-variance warning. The spike line keeps that warning. It is not a
+# fraud signal.
+price_spike_ratio = "0.50"
 
 # USD reference unit prices. A difference is a warning and does not change the
 # outcome. Non-USD invoices are not compared, because nothing is converted.
