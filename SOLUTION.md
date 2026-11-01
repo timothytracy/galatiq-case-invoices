@@ -16,7 +16,7 @@ The labeled sets are small on purpose. [data/answer_key.json](data/answer_key.js
 
 Five rules keep the system predictable.
 
-1. **Code decides.** Every problem a stage raises is a finding with a stable code. `outcome_from_findings` in `decision/outcome.py` is the one place that turns that list into approve, reject, or hold. The same findings always produce the same outcome.
+1. **Code decides.** Every problem a stage raises is a finding with a stable code. `outcome_from_findings` in `decision/outcome.py` is the one place the validation outcome is computed. The same findings always produce the same outcome. The audit can still set a hold of its own, reason `AUDIT_ESCALATED`.
 2. **Grok extracts and flags.** The model reads the document, writes a short approval note, critiques a large bill, and returns an audit verdict. The outcome comes from the findings.
 3. **Critique and audit can only tighten.** Either step may move an approve toward a hold. The [fact guard](#the-fact-guard) then sets aside a narrow set of claims that contradict facts the code already checked. The captain's wording of that rule is the ground-rule bullet in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md#ground-rules).
 4. **One invoice, one graph.** `run_invoice` compiles a new graph per file. Nothing in `PipelineState` is kept for the next file.
@@ -96,18 +96,18 @@ flowchart TD
   done -->|"reject or hold"| stopNode
 ```
 
-The approval sentence is written in Python from the checks and the finding text. Grok supplies `risks_considered`. On the second visit, after critique, `critique_rounds` is 1, so the threshold check falls through to audit. A stricter critique is still audited, and audit keeps that hold.
+The approval sentence is written in Python from the checks and the finding text. Grok supplies `risks_considered`. On the second visit, after critique, `critique_rounds` is 1, so the threshold check falls through to audit. A stricter critique is still audited, and audit keeps that hold unless it sends the extraction back. A send-back returns the invoice to ingestion and resets the critique counter.
 
 ### Decision precedence
 
-Reject wins over hold. Hold wins over approve. Warnings stay on the record and do not decide the outcome by themselves. Two `FRAUD_SIGNAL` findings count as a hold even when a `FRAUD_CLUSTER` row was not stored yet.
+Reject wins over hold. Hold wins over approve. Warnings stay on the record and do not decide the outcome by themselves. Two or more `FRAUD_SIGNAL` findings count as a hold even when a `FRAUD_CLUSTER` row was not stored yet.
 
 ```mermaid
 flowchart TD
   findings["Findings on one invoice"] --> rejectGate{"A blocking reject code?"}
-  rejectGate -->|yes| rejectBox["Reject: STOCK_SHORTFALL, UNKNOWN_ITEM, EMBEDDED_INSTRUCTIONS"]
-  rejectGate -->|no| holdGate{"A hold code, or two FRAUD_SIGNAL findings?"}
-  holdGate -->|yes| holdBox["Hold: NON_USD, PRICE_SPIKE, FRAUD_CLUSTER, REVISED_INVOICE"]
+  rejectGate -->|yes| rejectBox["Reject, e.g. STOCK_SHORTFALL, UNKNOWN_ITEM, EMBEDDED_INSTRUCTIONS"]
+  rejectGate -->|no| holdGate{"A hold code, or two or more FRAUD_SIGNAL findings?"}
+  holdGate -->|yes| holdBox["Hold, e.g. NON_USD, PRICE_SPIKE, FRAUD_CLUSTER, REVISED_INVOICE"]
   holdGate -->|no| approveBox["Approve. No reason code."]
 ```
 
@@ -215,7 +215,7 @@ The deterministic readers under `parsers/` are the offline stand-in and the test
 
 `pipeline/validation.py` is Python only. It loads the stock snapshot read-only and calls `assess` in `decision/findings.py`. That pass checks required fields (vendor, due date, line items, total), quantities, unknown items, summed stock, line math within 0.01, currency, revisions, credit notes, fraud wording, USD price spikes, and the phrase check for embedded instructions.
 
-Embedded instructions reject only when the model flag is set and the text matches an imperative phrase aimed at the system. The bare word "approve" does not match. A non-commercial address is a warning. The deterministic address cue is an apartment marker. An O-to-0 reading is kept only when the math then reconciles, and it is recorded as `OCR_FIX`.
+Embedded instructions reject only when the model flag is set and the text matches an imperative phrase aimed at the system. The bare word "approve" does not match. A non-commercial vendor address is recorded as a warning (`NONCOMMERCIAL_ADDRESS`), following the captain's ruling on 1004; the policy's Hold-table row for it is not applied as a hold. The deterministic address cue is an apartment marker. An O-to-0 reading is kept only when the math then reconciles, and it is recorded as `OCR_FIX`.
 
 If the assessment is approve, the graph continues with the outcome cleared. A reject or a hold is stored and `reject_log` is next.
 
@@ -229,7 +229,7 @@ Wording that refuses the input, or that fights an approve decision, is retried a
 
 `pipeline/critique.py` runs when the USD total is over 10000 and this pass has not been critiqued yet. A send-back resets that counter. The model returns concerns and a `stricter` flag. It may only make the decision stricter. A concern that says nothing beyond the dollar threshold is dropped before the fact guard. The guard then applies the three critique rules in [The fact guard](#the-fact-guard).
 
-On a successful critique, the decision becomes a hold when the model sets `stricter`, the current decision is approve, and at least one concern remains. That adds a `CRITIQUE_HOLD` finding, approval records the hold, and audit keeps it. When the flag stays clear, approval stays an approve. Either result returns to approval, and the next route is audit.
+On a successful critique, the decision becomes a hold when the model sets `stricter`, the current decision is approve, and at least one concern remains. That adds a `CRITIQUE_HOLD` finding and approval records the hold. Audit keeps that hold unless it sends the extraction back. A send-back returns the invoice to ingestion and resets the critique counter. When the flag stays clear, approval stays an approve. Either result returns to approval, and the next route is audit.
 
 ### Audit
 
@@ -278,7 +278,7 @@ The live model is Grok through the xAI API. `GrokClient` uses the OpenAI SDK at 
 
 **Before the fix.** On main `a9c09649`, three live runs of the unseen 21 scored 20/21 every time. The 20 samples scored 20/20 in the same session. The miss was stable across all three runs: `invoice_2106.txt`. The key says approve. The run said hold, reason `CRITIQUE_HOLD`.
 
-The bill is $11,500. WidgetA 15 at $250, WidgetB 8 at $500, and GadgetX 5 at $750 are the reference prices, and the lines add up. Extraction was correct. WidgetB's 8 is within the 10 in stock, and a quantity equal to stock would have passed too. The over-$10,000 critique invented a stock concern: "WidgetB requested 8 vs available 10". The audit also called the invoice date 2026-04-16 and the due date 2026-05-16 future dates.
+The bill is $11,500. WidgetA 15 at $250, WidgetB 8 at $500, and GadgetX 5 at $750 are the reference prices, and the lines add up. Extraction was correct. WidgetB's 8 is within the 10 in stock, and a quantity equal to stock would have passed too. The over-$10,000 critique invented a stock concern. In two of the three runs it said "Stock discrepancy for WidgetB (requested 8 vs available 10)". The third run said something similar. The audit also called the invoice date 2026-04-16 and the due date 2026-05-16 future dates.
 
 **The fix.** Pull request 14 gives critique and audit the code-verified facts, and adds the narrow fact guard above. Each set-aside is logged. Prompts were not tuned to chase the score. The guard's head is `e068908e`, merged as `2869b95`. The ground-rule sentence for that guard landed in pull request 15, merged as `7f3295b`.
 
@@ -298,7 +298,7 @@ The Streamlit app in [ui/app.py](ui/app.py) is the review screen. The launch lin
 - **Results.** A filter for all, approve, reject, or hold, then a table of invoice, outcome, reason code, amount, and reason.
 - **Invoice detail.** Outcome, reason code, total, payment status, the reason, the next action, and the payment detail. Then the extracted header, the line items as a table, the findings, and the agent trail. Raw text sits in an expander. The selector opens on the paid invoice with the most warnings, when any paid invoice has one.
 - **Hold queue.** Only invoices whose outcome is hold. Each row shows the reason code, the amount, the payment status, and the next action. A reviewer records approve or reject and a note. The note is required. The file is `output/reviews/hold_reviews.json`. The caption on the screen says the review is a local note: it does not call payment, and it does not change the pipeline outcome.
-- **Metrics.** Counts for the three outcomes, USD totals for each, and the average time per invoice when the run has timings. Amounts in any other currency are listed underneath and are left out of the USD totals. Nothing is converted.
+- **Metrics.** Counts for the three outcomes, and USD totals for each. The average-time box is always shown. It reads `n/a` when the run has no timings, and a seconds value when it does. Amounts in any other currency are listed underneath and are left out of the USD totals. Nothing is converted.
 
 Until a run is in the session, the other four screens say to process an invoice or load a run file.
 
@@ -311,6 +311,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
 # set XAI_API_KEY in .env
+source .venv/bin/activate
 python3 setup_db.py
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 python3 scripts/eval.py
@@ -321,12 +322,14 @@ python3 scripts/eval.py
 The default eval scores `data/invoices/` against `data/answer_key.json`. The extra set uses the two flags the script already accepts:
 
 ```bash
+source .venv/bin/activate
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json
 ```
 
-The review screen, from the module docstring:
+The review screen, from the module docstring. Activate the same venv so `streamlit` is the one just installed:
 
 ```bash
+source .venv/bin/activate
 streamlit run ui/app.py
 ```
 
