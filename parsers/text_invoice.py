@@ -86,7 +86,10 @@ def _parse_fields(text: str, source: SourceInfo) -> ExtractedInvoice:
                 r"(?im)^\s*Amt:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
                 r"(?im)^\s*Total:\s*\$?\s*([0-9,]+\.\d{2})\s*$",
             ),
-            "payment_terms": _first(text, r"(?im)^\s*(?:Payment\s+Terms|Pymnt\s+Terms|Terms):\s*(.+?)\s*$"),
+            "payment_terms": _first(
+                text,
+                r"(?im)^\s*(?:Payment\s+Terms|Pymnt\s+Terms|Terms):\s*(.+?)\s*$",
+            ),
             "notes": _first(text, r"(?im)^\s*Notes:\s*(.+?)\s*$"),
         },
         warnings,

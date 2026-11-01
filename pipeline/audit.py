@@ -284,7 +284,9 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
     text_notes = []
     if state.invoice is not None and state.invoice.total is not None:
         if not amount_in_text(state.invoice.total, state.raw_text or ""):
-            text_notes.append(f"total {show_money(state.invoice.total)} was not found in the raw text")
+            text_notes.append(
+                f"total {show_money(state.invoice.total)} was not found in the raw text"
+            )
     conclusion = decision.reasoning.conclusion
     if hard or decision.decision == "reject":
         messages = [finding.message for finding in hard]

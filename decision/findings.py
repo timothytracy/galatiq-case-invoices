@@ -56,7 +56,12 @@ _INJECTION = re.compile(
 _APARTMENT = re.compile(r"\b(?:apt|apartment)\b", re.IGNORECASE)
 
 
-def _finding(code: str, message: str, severity: str = "warning", item: str | None = None) -> Finding:
+def _finding(
+    code: str,
+    message: str,
+    severity: str = "warning",
+    item: str | None = None,
+) -> Finding:
     return Finding(code=code, message=message, severity=severity, item=item)
 
 
@@ -119,7 +124,12 @@ def collect_findings(
     for item, qty in summed_quantities(invoice, stock).items():
         if item not in stock:
             findings.append(
-                _finding("UNKNOWN_ITEM", f"{item} is not in the inventory database.", "blocking", item)
+                _finding(
+                    "UNKNOWN_ITEM",
+                    f"{item} is not in the inventory database.",
+                    "blocking",
+                    item,
+                )
             )
         elif qty > Decimal(stock[item]):
             findings.append(
@@ -148,7 +158,9 @@ def collect_findings(
         fraud.append(_finding("FRAUD_SIGNAL", "Wire transfer is a fraud signal."))
     new_account = bool(_NEW_ACCOUNT.search(blob))
     if new_account:
-        fraud.append(_finding("FRAUD_SIGNAL", "A new remittance or bank account is a fraud signal."))
+        fraud.append(
+            _finding("FRAUD_SIGNAL", "A new remittance or bank account is a fraud signal.")
+        )
     findings.extend(fraud)
 
     if currency in POLICY.allowed_currencies:
@@ -209,13 +221,27 @@ def collect_findings(
         findings.append(_finding("NONCOMMERCIAL_ADDRESS", address_note, item="vendor_address"))
     if invoice.due_date and not _dated(invoice.due_date):
         findings.append(
-            _finding("UNPARSED_DATE", f"Due date {invoice.due_date!r} is not a date.", item="due_date")
+            _finding(
+                "UNPARSED_DATE",
+                f"Due date {invoice.due_date!r} is not a date.",
+                item="due_date",
+            )
         )
     if _raw_has_ocr_o(raw_text) and math_reconciles(invoice):
-        findings.append(_finding("OCR_FIX", "OCR O-to-0 fix applied because the math reconciles.", "info"))
+        findings.append(
+            _finding(
+                "OCR_FIX",
+                "OCR O-to-0 fix applied because the math reconciles.",
+                "info",
+            )
+        )
     if invoice.embedded_instructions and injection_phrase(_blob(raw_text, invoice.notes)):
         findings.append(
-            _finding("EMBEDDED_INSTRUCTIONS", "Embedded instructions aimed at the system.", "blocking")
+            _finding(
+                "EMBEDDED_INSTRUCTIONS",
+                "Embedded instructions aimed at the system.",
+                "blocking",
+            )
         )
 
     rejected = any(item.severity == "blocking" and item.code in REJECT_CODES for item in findings)
@@ -255,7 +281,11 @@ def assess(
     )
 
 
-def evidence_lines(invoice: ExtractedInvoice, stock: dict[str, int], findings: list[Finding]) -> list[str]:
+def evidence_lines(
+    invoice: ExtractedInvoice,
+    stock: dict[str, int],
+    findings: list[Finding],
+) -> list[str]:
     """Facts the reasoning may cite. Built from the invoice, the stock, and the findings."""
 
     if invoice.total is None:
@@ -333,7 +363,11 @@ def _address_note(invoice: ExtractedInvoice) -> str | None:
 
 
 def _near_threshold(total: Decimal | None, currency: str) -> bool:
-    if total is None or currency not in POLICY.allowed_currencies or total >= APPROVAL_THRESHOLD_USD:
+    if (
+        total is None
+        or currency not in POLICY.allowed_currencies
+        or total >= APPROVAL_THRESHOLD_USD
+    ):
         return False
     return (APPROVAL_THRESHOLD_USD - total) <= APPROVAL_THRESHOLD_USD * POLICY.near_threshold_ratio
 

@@ -100,7 +100,12 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _filled(source: SourceInfo, items: list[LineItem], fields: dict, warnings=None) -> ExtractedInvoice:
+def _filled(
+    source: SourceInfo,
+    items: list[LineItem],
+    fields: dict,
+    warnings=None,
+) -> ExtractedInvoice:
     """Build an invoice from a header dict. Money and blank strings are normalized here."""
 
     return _build(

@@ -114,7 +114,13 @@ _BAD_INPUT = (
     "not valid json", "invalid json", "invalid input", "cannot be parsed",
     "unparseable", "unable to parse", "unable to process", "cannot be reliably extracted",
 )
-_NOT_APPROVE = ("unable to approve", "not to approve", "not approve", "don't approve", "can't approve")
+_NOT_APPROVE = (
+    "unable to approve",
+    "not to approve",
+    "not approve",
+    "don't approve",
+    "can't approve",
+)
 # "should/cannot/must not be approved" contains "not" before "approv".
 _APPROVE_REFUSAL = re.compile(r"(?i)not\s+(?:be\s+)?approv")
 
@@ -167,16 +173,17 @@ def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]
                 "TASK reason\n"
                 f"{today_line(as_of)}\n"
                 "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
-                "and conclusion (one sentence that names the checks that passed, such as "
-                "stock, math, and currency, and any noted warnings; not a bare approve "
-                "or hold). Do not describe the input format. "
+                "and conclusion (one sentence). Name the checks that passed, such as "
+                "stock, math, and currency, and only warnings that appear in findings. "
+                "If findings is empty, say there are no warnings. Not a bare approve or hold. "
+                "Do not describe the input format. "
                 "The decision is already fixed by the rules. "
                 "The user message is a valid JSON object of invoice facts. "
                 "Cite only the evidence you are given. "
-                "Warning-only findings are recorded for the reviewer and are not reasons to refuse: "
-                "a total near the threshold, a descriptor on an item name, a price variance, "
-                "a single fraud signal, and a non-commercial address. "
-                "Mention any of those neutrally as notes. Return JSON only."
+                "Warning types that, if present in findings, are notes for the reviewer "
+                "and are not reasons to refuse: a total near the threshold, a descriptor "
+                "on an item name, a price variance, a single fraud signal, and a "
+                "non-commercial address. Return JSON only."
             ),
         },
         {

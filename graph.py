@@ -25,7 +25,10 @@ def build_graph(llm, db_path, *, clock=None, rng=None, max_attempts=None, as_of:
     graph = StateGraph(PipelineState)
     graph.add_node("ingestion", lambda state: ingest(state, llm, clock, rng, attempts, as_of))
     graph.add_node("validation", lambda state: validate(state, db_path, as_of))
-    graph.add_node("approval", lambda state: approve(state, llm, db_path, clock, rng, attempts, as_of))
+    graph.add_node(
+        "approval",
+        lambda state: approve(state, llm, db_path, clock, rng, attempts, as_of),
+    )
     graph.add_node("critique", lambda state: critique(state, llm, clock, rng, attempts, as_of))
     graph.add_node("audit", lambda state: audit(state, llm, db_path, clock, rng, attempts, as_of))
     graph.add_node("payment", payment)
