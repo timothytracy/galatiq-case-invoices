@@ -288,6 +288,7 @@ def test_unknown_item_and_code_go_back_to_the_model(tmp_path, db_path, monkeypat
     assert code_schema["properties"]["code"]["enum"] == (
         list(REJECT_CODES) + list(HOLD_CODES) + list(WARNING_CODES)
     )
+    assert "ITEM_NOT_IN_SOURCE" in code_schema["properties"]["code"]["enum"]
     bodies = [
         json.loads(message["content"])
         for message in model.tool_requests[1]["messages"]
