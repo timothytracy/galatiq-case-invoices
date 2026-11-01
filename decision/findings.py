@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 
-from models import ExtractedInvoice, Finding
+from models import Assessment, ExtractedInvoice, Finding
 
 from decision.invoice_fields import (
     as_money,
@@ -18,6 +18,7 @@ from decision.invoice_fields import (
 )
 from decision.outcome import REJECT_CODES
 from decision.policy import APPROVAL_THRESHOLD_USD, POLICY
+from decision.wording import explain
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%d-%B-%Y", "%B %d, %Y", "%b %d, %Y")
 _MISSING_TEXT = {
@@ -235,10 +236,32 @@ def collect_findings(
     return findings, currency
 
 
+def assess(
+    invoice: ExtractedInvoice,
+    raw_text: str,
+    stock: dict[str, int],
+) -> Assessment:
+    """Apply the hard rules to one invoice. The file is judged on its own."""
+
+    found, currency = collect_findings(invoice, raw_text, stock)
+    outcome, code, reason, action = explain(found, invoice, stock)
+    return Assessment(
+        outcome=outcome,
+        reason_code=code,
+        reason=reason,
+        action=action,
+        findings=found,
+        currency=currency,
+    )
+
+
 def evidence_lines(invoice: ExtractedInvoice, stock: dict[str, int], findings: list[Finding]) -> list[str]:
     """Facts the reasoning may cite. Built from the invoice, the stock, and the findings."""
 
-    lines = ["total is missing" if invoice.total is None else f"total {show_money(invoice.total)} {invoice.currency}"]
+    if invoice.total is None:
+        lines = ["total is missing"]
+    else:
+        lines = [f"total {show_money(invoice.total)} {invoice.currency}"]
     for item, qty in summed_quantities(invoice, stock).items():
         if item in stock:
             lines.append(f"{item} quantity {show_qty(qty)} compared with stock {stock[item]}")

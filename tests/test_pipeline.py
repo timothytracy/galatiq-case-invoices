@@ -44,7 +44,7 @@ from scripts.eval import print_bad_reasoning
 from decision.invoice_fields import resolve_currency
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, outcome_from_findings
 from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, MAX_SEND_BACKS
-from decision.wording import assess
+from decision.findings import assess
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -3,9 +3,8 @@
 import re
 from datetime import date
 
-from models import Assessment, ExtractedInvoice, Finding, Outcome
+from models import ExtractedInvoice, Finding, Outcome
 
-from decision.findings import collect_findings
 from decision.invoice_fields import show_qty, summed_quantities
 from decision.outcome import (
     PAYMENT_REFUSED,
@@ -96,7 +95,11 @@ PASSED_RULES = [
 
 # Glue left behind once the threshold phrase is removed.
 _FILLER = set(
-    "a an the is are was were be being been this that it its of to for and or but only just because so very too".split()
+    (
+        "a an the is are was were be being been "
+        "this that it its of to for and or but "
+        "only just because so very too"
+    ).split()
 )
 _AMOUNT = r"(?:\$\s*)?10[,.]?000|\$?\s*10k"
 _THRESHOLD_PHRASE = re.compile(
@@ -137,25 +140,6 @@ def threshold_only_concern(text: str) -> bool:
     leftover = _THRESHOLD_PHRASE.sub(" ", text)
     words = re.findall(r"[a-z0-9%]+", leftover.lower())
     return not [word for word in words if word not in _FILLER]
-
-
-def assess(
-    invoice: ExtractedInvoice,
-    raw_text: str,
-    stock: dict[str, int],
-) -> Assessment:
-    """Apply the hard rules to one invoice. The file is judged on its own."""
-
-    findings, currency = collect_findings(invoice, raw_text, stock)
-    outcome, code, reason, action = explain(findings, invoice, stock)
-    return Assessment(
-        outcome=outcome,
-        reason_code=code,
-        reason=reason,
-        action=action,
-        findings=findings,
-        currency=currency,
-    )
 
 
 def explain(

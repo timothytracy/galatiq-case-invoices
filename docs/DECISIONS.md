@@ -27,7 +27,7 @@ python3 scripts/export_graph.py
 
 ## Caps
 
-The numbers live in `policy.toml`. `rules.py` loads that file at startup and rejects a missing key, a wrong type, or a nonsense value (negative cap, empty currency list) with an error that names the key.
+The numbers live in `policy.toml`. `decision/policy.py` loads that file at startup and rejects a missing key, a wrong type, or a nonsense value (negative cap, empty currency list) with an error that names the key.
 
 | Knob | Value | Where |
 |---|---|---|
@@ -47,7 +47,7 @@ There is no durable work list and no extra database table. When the attempts are
 
 Python decides. The model writes.
 
-- Every problem a stage raises is a `Finding` (`code`, `message`, `severity`, `item`). `outcome_from_findings` is the one place that turns that list into an outcome: a blocking reject-class code rejects, a hold-class code holds, and neither approves. Reject wins over hold. Warnings stay on the finding list and do not decide. The plain-English reason names the lower-precedence findings too. `KEY_REASON_TO_CODE` in `rules.py` is the only map from the answer key's finding names to these codes.
+- Every problem a stage raises is a `Finding` (`code`, `message`, `severity`, `item`). `outcome_from_findings` is the one place that turns that list into an outcome: a blocking reject-class code rejects, a hold-class code holds, and neither approves. Reject wins over hold. Warnings stay on the finding list and do not decide. The plain-English reason names the lower-precedence findings too. `KEY_REASON_TO_CODE` in `decision/wording.py` is the only map from the answer key's finding names to these codes.
 - Validation sums quantities per item and compares them to the fixed snapshot. `quantity > stock` fails. `quantity == stock` passes. Approving an invoice does not change stock. The README table says INV-1001, INV-1004, and INV-1006 all pass, and WidgetA on those three is 10 + 3 + 5 = 18, which is more than 15, so the stock balance cannot be decrementing.
 - Line math is recomputed. Printed line amounts, the subtotal, and subtotal + tax + shipping must match within 0.01.
 - Currency other than USD is a hold. The message names the code that was found, for example `Non-USD currency (EUR).` `€`, `EUR`, `euro`, and `euros` count, in any case, as do currency fields in JSON, XML, and CSV. A missing currency on a document with `$` amounts is USD. Nothing is converted.

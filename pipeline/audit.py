@@ -13,7 +13,8 @@ from pipeline.stage_log import _stopped, agent_finding, stage_log
 from decision.invoice_fields import show_money
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, finding_codes
 from decision.policy import MAX_SEND_BACKS
-from decision.wording import assess, explain, resolve_as_of, today_line
+from decision.findings import assess
+from decision.wording import explain, resolve_as_of, today_line
 
 
 def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
