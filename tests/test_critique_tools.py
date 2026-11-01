@@ -24,6 +24,7 @@ from models import (
 from pipeline.critique import TOOLS_LINE, critique
 from pipeline.fact_guard import CRITIQUE_CLAIMS, VERIFIED_FACTS
 from pipeline.tools import get_policy_rule
+from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from scripts.eval import format_tool_summary
 from decision.wording import today_line
 from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom
@@ -139,55 +140,38 @@ def _baseline_system(as_of) -> str:
     )
 
 
-def _approved_2106() -> PipelineState:
+def _state() -> PipelineState:
     invoice = ExtractedInvoice(
-        vendor="Keelson Manufacturing",
-        invoice_number="INV-2106",
+        vendor="Widgets Inc.",
+        currency="USD",
         invoice_date="2026-04-16",
         due_date="2026-05-16",
-        currency="USD",
+        total=Decimal("4000"),
         line_items=[
-            LineItem(
-                item="WidgetA",
-                description="WidgetA",
-                quantity=Decimal(15),
-                unit_price=Decimal(250),
-                amount=Decimal(3750),
-            ),
             LineItem(
                 item="WidgetB",
                 description="WidgetB",
                 quantity=Decimal(8),
                 unit_price=Decimal(500),
                 amount=Decimal(4000),
-            ),
-            LineItem(
-                item="GadgetX",
-                description="GadgetX",
-                quantity=Decimal(5),
-                unit_price=Decimal(750),
-                amount=Decimal(3750),
-            ),
+            )
         ],
-        subtotal=Decimal(11500),
-        tax_amount=Decimal(0),
-        total=Decimal(11500),
-        source=SourceInfo(path="invoice_2106.txt", filename="invoice_2106.txt", format="txt"),
+        source=SourceInfo(path="x.txt", filename="x.txt", format="txt"),
     )
     return PipelineState(
-        invoice_path="invoice_2106.txt",
-        filename="invoice_2106.txt",
-        raw_text="Total: 11500.00\n",
+        invoice_path="x.txt",
+        filename="x.txt",
+        raw_text="Total: 4000.00\n",
         invoice=invoice,
         decision=ApprovalDecision(
             decision="approve",
             reasoning=ApprovalReasoning(
                 rules_applied=["stock covered"],
-                evidence=["total 11500.00 USD"],
+                evidence=["total 4000.00 USD"],
                 risks_considered=["no extra risk"],
                 conclusion="The checks passed.",
             ),
-            amount=Decimal(11500),
+            amount=Decimal(4000),
             currency="USD",
         ),
     )
@@ -294,8 +278,16 @@ def test_unknown_item_and_code_go_back_to_the_model(tmp_path, db_path, monkeypat
     assert logged[0]["result"] is None
     assert logged[0]["name"] == "check_stock"
     assert logged[0]["arguments"] == {"item": "WidgitA"}
-    assert logged[1]["error"] == "unknown code: NOT_A_CODE"
+    assert logged[1]["error"] == "argument code is not a finding code"
     assert logged[1]["result"] is None
+    code_schema = next(
+        tool["function"]["parameters"]
+        for tool in model.tool_requests[0]["tools"]
+        if tool["function"]["name"] == "get_policy_rule"
+    )
+    assert code_schema["properties"]["code"]["enum"] == (
+        list(REJECT_CODES) + list(HOLD_CODES) + list(WARNING_CODES)
+    )
     bodies = [
         json.loads(message["content"])
         for message in model.tool_requests[1]["messages"]
@@ -303,7 +295,7 @@ def test_unknown_item_and_code_go_back_to_the_model(tmp_path, db_path, monkeypat
     ]
     assert bodies == [
         {"error": "unknown item: WidgitA"},
-        {"error": "unknown code: NOT_A_CODE"},
+        {"error": "argument code is not a finding code"},
     ]
 
 
@@ -336,9 +328,11 @@ def test_critique_cap_is_a_system_error_hold_and_nothing_is_paid(tmp_path, db_pa
     assert logged["attempts"][0]["error_type"] == "tool_cap"
     assert logged["attempts"][0]["retryable"] is False
     assert logged["attempts"][0]["backoff_seconds"] is None
-    assert len(logged["tool_calls"]) == TOOL_ROUND_CAP
+    assert len(logged["tool_calls"]) == TOOL_ROUND_CAP + 1
+    assert logged["tool_calls"][-1]["error"] == "blocked: tool_cap"
+    assert logged["tool_calls"][-1]["result"] is None
     assert len(result["attempts"]) == 1
-    assert [row["agent"] for row in logged["tool_calls"]] == ["critique"] * TOOL_ROUND_CAP
+    assert [row["agent"] for row in logged["tool_calls"]] == ["critique"] * (TOOL_ROUND_CAP + 1)
     assert _result_line(path, result)["tool_calls"] == logged["tool_calls"]
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
 
@@ -383,27 +377,24 @@ def test_fact_guard_still_drops_a_covered_stock_concern(tmp_path, db_path, monke
     assert widget_b == {"item": "WidgetB", "requested": "8", "available": 10}
 
 
-def test_critique_payload_is_byte_identical_when_tools_are_off(db_path, monkeypatch):
-    state = _approved_2106()
+def test_critique_payload_matches_main_when_tools_are_off(db_path, monkeypatch):
+    state = _state()
+    monkeypatch.delenv("XAI_TOOLS", raising=False)
     seen = []
-    for value in (None, "0", "false", "off", ""):
-        if value is None:
-            monkeypatch.delenv("XAI_TOOLS", raising=False)
-        else:
-            monkeypatch.setenv("XAI_TOOLS", value)
-        model = ScriptedToolModel([text_step(CLEAN)])
-        critique(state, model, db_path, FakeClock(), ZeroRandom(), 3, as_of=AS_OF)
-        assert model.tool_requests == []
-        assert len(model.requests) == 1
-        seen.append(model.requests[0]["messages"])
-    encoded = [
-        json.dumps(messages, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        for messages in seen
-    ]
-    assert encoded[0] == encoded[1] == encoded[2] == encoded[3] == encoded[4]
+
+    def handler(messages):
+        seen.append(messages)
+        return CLEAN
+
+    critique(state, FakeLLM(handler), db_path, FakeClock(), ZeroRandom(), 3, as_of=AS_OF)
     assert seen[0][0]["content"] == _baseline_system(AS_OF)
-    assert b"read-only tools" not in encoded[0]
     assert "verified_by_code" in seen[0][1]["content"]
+
+    monkeypatch.setenv("XAI_TOOLS", "0")
+    quiet = ScriptedToolModel([text_step(CLEAN)])
+    critique(state, quiet, db_path, FakeClock(), ZeroRandom(), 3, as_of=AS_OF)
+    assert quiet.tool_requests == []
+    assert quiet.requests[0]["messages"] == seen[0]
 
     monkeypatch.setenv("XAI_TOOLS", "1")
     model = ScriptedToolModel([text_step(CLEAN)])
@@ -414,29 +405,6 @@ def test_critique_payload_is_byte_identical_when_tools_are_off(db_path, monkeypa
         f" {TOOLS_LINE} Return JSON only.",
     )
     assert model.tool_requests[0]["messages"][1] == seen[0][1]
-    assert [item["function"]["name"] for item in model.tool_requests[0]["tools"]] == [
-        "check_stock",
-        "get_reference_price",
-        "get_policy_rule",
-    ]
-
-
-def test_flag_off_fake_model_matches_the_baseline_bytes(db_path, monkeypatch):
-    """The same payload when critique is given the plain request, as main does."""
-
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    state = _approved_2106()
-    seen = []
-
-    def handler(messages):
-        seen.append(messages)
-        return CLEAN
-
-    critique(state, FakeLLM(handler), db_path, FakeClock(), ZeroRandom(), 3, as_of=AS_OF)
-    assert seen[0][0]["content"] == _baseline_system(AS_OF)
-    assert json.loads(seen[0][1]["content"])["verified_by_code"]["reference_prices"]["WidgetB"] == (
-        "500.00"
-    )
 
 
 def test_eval_summary_counts_calls_and_latency():

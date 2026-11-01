@@ -153,21 +153,24 @@ def parse_json_object(text: str) -> dict:
 
 
 def structured_call(request, messages: list[dict], schema: type[BaseModel], check=None) -> BaseModel:
-    """One repair turn if the JSON does not validate. check may raise LLMError."""
+    """One repair turn if the JSON does not validate. check may raise LLMError.
+
+    A tool step's repair() is a plain completion: no tools, so it cannot spend
+    the tool budget. Any other request is called the same way on both turns.
+    """
 
     conversation = list(messages)
     error_text = "empty response"
-    for _ in range(SCHEMA_REPAIR_LIMIT):
-        text = request(conversation)
+    plain = getattr(request, "repair", None)
+    for turn in range(SCHEMA_REPAIR_LIMIT):
+        if turn and plain is not None:
+            text = plain(conversation)
+        else:
+            text = request(conversation)
         try:
             parsed = schema.model_validate(parse_json_object(text))
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             error_text = str(exc)[:2000]
-            # The repair is a second call on the same step and shares the tool budget.
-            # A bare second call is closed; this is the one reopen.
-            reopen = getattr(request, "allow_repair", None)
-            if reopen is not None:
-                reopen()
             conversation = conversation + [
                 {"role": "assistant", "content": text},
                 {
@@ -290,21 +293,18 @@ class GrokClient:
 class ToolStep:
     """Caps and the tool log for one agent step.
 
-    The repair turn and every retry share the counts. A new tool_request()
-    starts at zero. call_with_retries calls set_attempt(1) at the next step,
-    which assigns a new log list. Calling this object again after it has
-    finished raises. The schema repair reopens it through allow_repair.
+    Retries share the counts. set_attempt(1) starts a new step and a new log.
+    The schema repair goes through repair(), which sends no tools.
     """
 
-    def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
+    def __init__(self, llm, registry, agent: str | None = None) -> None:
         self.llm = llm
         self.registry = registry
         self.agent = agent
-        self.log = [] if tool_log is None else tool_log
+        self.log = []
         self.rounds = 0
         self.calls = 0
         self.attempt = 1
-        self._closed = False
 
     def set_attempt(self, attempt: int) -> None:
         """call_with_retries reports the attempt. 1 starts a step. A retry does not."""
@@ -315,34 +315,32 @@ class ToolStep:
             # A new list. clear() would wipe a list the caller still holds.
             self.log = []
         self.attempt = attempt
-        self._closed = False
 
-    def allow_repair(self) -> None:
-        """structured_call is about to call again. Keep the counts and the log."""
+    def repair(self, messages, timeout=60) -> str:
+        """Plain JSON fix. No tools, so this turn cannot hit the tool cap."""
 
-        self._closed = False
+        try:
+            return self.llm.request(messages, timeout)
+        except LLMError as exc:
+            exc.log.setdefault("tool_calls", list(self.log))
+            raise
 
     def __call__(self, messages, timeout=60) -> str:
-        if self._closed:
-            raise RuntimeError(
-                "ToolStep already finished; build a new tool_request for the next step"
-            )
-        self._closed = True
         if not tools_enabled():
             return self.llm.request(messages, timeout)
         return _tool_loop(self, messages, timeout)
 
 
-def tool_request(llm, registry, tool_log: list | None = None, agent: str | None = None) -> ToolStep:
+def tool_request(llm, registry, agent: str | None = None) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
     Flag off: llm.request, the same payload as today.
     Flag on: run tool calls until the model returns plain content, then return
-    that text. Parsing and the one repair turn stay in structured_call.
-    Read step.log after call_with_retries. A passed-in list is for a direct call.
+    that text. The repair turn, if any, is repair() and sends no tools.
+    Read step.log after the call.
     """
 
-    return ToolStep(llm, registry, tool_log, agent)
+    return ToolStep(llm, registry, agent)
 
 
 def _tool_loop(step: ToolStep, messages, timeout) -> str:
@@ -366,6 +364,10 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
         next_calls = step.calls + len(calls)
         if next_round > TOOL_ROUND_CAP or next_calls > TOOL_CALL_CAP:
             which = "rounds" if next_round > TOOL_ROUND_CAP else "calls"
+            for call in calls:
+                step.log.append(
+                    _record(step, call, next_round, None, "blocked: tool_cap", time.perf_counter())
+                )
             raise LLMError(
                 "tool_cap",
                 False,

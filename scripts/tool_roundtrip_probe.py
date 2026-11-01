@@ -46,32 +46,30 @@ def main() -> int:
     if not os.environ.get("XAI_API_KEY", "").strip():
         print("XAI_API_KEY is not set", file=sys.stderr)
         return 2
-    log: list = []
+    step = None
     try:
-        client = GrokClient()
-        text = tool_request(client, example_registry(), log)(
-            [{"role": "user", "content": PROMPT}]
-        )
+        step = tool_request(GrokClient(), example_registry())
+        text = step([{"role": "user", "content": PROMPT}])
     except MissingAPIKey:
         print("XAI_API_KEY is not set", file=sys.stderr)
         return 2
     except LLMError as exc:
         print(_show(str(exc)), file=sys.stderr)
-        print(_show({"tool_calls": log}))
+        print(_show({"tool_calls": [] if step is None else step.log}))
         return 1
     except Exception as exc:
         print(_show(f"{type(exc).__name__}: {exc}"), file=sys.stderr)
-        print(_show({"tool_calls": log}))
+        print(_show({"tool_calls": [] if step is None else step.log}))
         return 1
 
     try:
         answer = parse_json_object(text)
     except (json.JSONDecodeError, ValueError):
-        print(_show({"tool_calls": log, "final_text": text}))
+        print(_show({"tool_calls": step.log, "final_text": text}))
         print("final message was not a JSON object", file=sys.stderr)
         return 1
-    print(_show({"tool_calls": log, "answer": answer}))
-    if not log:
+    print(_show({"tool_calls": step.log, "answer": answer}))
+    if not step.log:
         print("no tool call was made", file=sys.stderr)
         return 1
     return 0

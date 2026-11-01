@@ -112,10 +112,17 @@ _ITEM = {
     "required": ["item"],
 }
 
+# Built from the decision tables so a new code shows up here without a second list.
+_FINDING_CODES = list(REJECT_CODES) + list(HOLD_CODES) + list(WARNING_CODES)
+
 _CODE = {
     "type": "object",
     "properties": {
-        "code": {"type": "string", "description": "A finding code, such as PRICE_SPIKE"},
+        "code": {
+            "type": "string",
+            "description": "One finding code.",
+            "enum": _FINDING_CODES,
+        },
     },
     "required": ["code"],
 }
@@ -128,7 +135,6 @@ def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
     do not open inventory.db. An unknown item or code raises ToolInputError.
     """
 
-    prices = POLICY.reference_prices
     return ToolRegistry(
         [
             Tool(
@@ -144,12 +150,8 @@ def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
             Tool(
                 name="get_reference_price",
                 description="Read-only. USD reference unit price for one item.",
-                parameters={
-                    "type": "object",
-                    "properties": {"item": {"type": "string"}},
-                    "required": ["item"],
-                },
-                function=partial(get_reference_price, prices=prices),
+                parameters=_ITEM,
+                function=get_reference_price,
             ),
             Tool(
                 name="get_policy_rule",
@@ -171,9 +173,7 @@ def check_stock(arguments: dict, invoice, stock: dict[str, int]) -> dict:
     matched = _matched_name(item, stock)
     if matched is None:
         raise ToolInputError(f"unknown item: {item}")
-    requested = Decimal(0)
-    if invoice is not None:
-        requested = summed_quantities(invoice, stock).get(matched, Decimal(0))
+    requested = summed_quantities(invoice, stock).get(matched, Decimal(0))
     available = int(stock[matched])
     return {
         "item": item,
@@ -184,11 +184,11 @@ def check_stock(arguments: dict, invoice, stock: dict[str, int]) -> dict:
     }
 
 
-def get_reference_price(arguments: dict, prices: dict | None = None) -> dict:
+def get_reference_price(arguments: dict) -> dict:
     """USD reference price from policy.toml. Unknown items are an input error."""
 
     item = arguments["item"]
-    table = POLICY.reference_prices if prices is None else prices
+    table = POLICY.reference_prices
     matched = _matched_name(item, table)
     if matched is None:
         raise ToolInputError(f"unknown item: {item}")
@@ -258,4 +258,7 @@ def _schema_error(parameters: dict, arguments: dict) -> str | None:
             return f"argument {name} must be a {expected}"
         if not isinstance(value, kind):
             return f"argument {name} must be a {expected}"
+        allowed = (properties.get(name) or {}).get("enum")
+        if isinstance(allowed, list) and value not in allowed:
+            return f"argument {name} is not a finding code"
     return None
