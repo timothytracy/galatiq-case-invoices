@@ -80,13 +80,11 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         new_decision = _tighten(decision, guarded["outcome"], guarded["conclusion"], guarded["evidence"])
 
     findings = list(state.findings) or list(fresh.findings)
+    note_text = None
     if ignored is not None:
+        note_text = f"Audit note, not an escalation: {ignored}"
         findings = findings + [
-            Finding(
-                code="AUDIT_NOTE",
-                message=f"Audit note, not an escalation: {ignored}",
-                severity="info",
-            )
+            Finding(code="AUDIT_NOTE", message=note_text, severity="info")
         ]
     extra = _audit_finding(guarded, findings)
     if extra is not None:
@@ -105,6 +103,8 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         "outcome": guarded["outcome"],
         "feedback": guarded["feedback"],
         "notes": draft.notes,
+        "cited_codes": [str(code).strip().upper() for code in draft.cited_codes if str(code).strip()],
+        "audit_note": note_text,
         "attempts": step_attempts,
         "decision": new_decision.model_dump(mode="json"),
         "codes": finding_codes(findings),

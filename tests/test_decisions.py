@@ -426,6 +426,94 @@ def test_new_remittance_over_10k_is_a_hold_and_under_is_a_warning(tmp_path, db_p
     assert warned["payment"].status == "paid"
 
 
+def test_warning_notes_are_not_a_reason_to_refuse(tmp_path, db_path):
+    from decimal import Decimal
+
+    from models import (
+        ExtractedInvoice,
+        Finding,
+        LineItem,
+        PipelineState,
+        ReasoningDraft,
+        SourceInfo,
+        ValidationReport,
+    )
+    from pipeline.approval import _reason_messages, reasoning_rejection
+
+    invoice = ExtractedInvoice(
+        vendor="Widgets Inc.",
+        due_date="2026-04-30",
+        currency="USD",
+        total=Decimal("500"),
+        line_items=[
+            LineItem(item="WidgetA", description="WidgetA", quantity=Decimal("2"), unit_price=Decimal("250"))
+        ],
+        source=SourceInfo(path="x.txt", filename="x.txt", format="txt"),
+    )
+    report = ValidationReport(
+        passed=True,
+        findings=[
+            Finding(
+                code="NONCOMMERCIAL_ADDRESS",
+                message="Vendor address looks non-commercial and is noted.",
+                severity="warning",
+            )
+        ],
+    )
+    state = PipelineState(invoice_path="x.txt", filename="x.txt", invoice=invoice, validation=report)
+    prompt = _reason_messages(state, invoice, report, ["total 500.00 USD"])[0]["content"]
+    assert "not reasons to refuse" in prompt
+    assert "non-commercial address" in prompt
+    assert "single fraud signal" in prompt
+
+    refused = ReasoningDraft(
+        risks_considered=["address noted"],
+        conclusion=(
+            "Invoice should not be approved due to clear evidence of fraudulent vendor details"
+        ),
+    )
+    assert reasoning_rejection(refused, "approve") == "approve-contradiction"
+    for line in ("cannot be approved", "not be approved", "must not be approved"):
+        draft = ReasoningDraft(risks_considered=["none"], conclusion=line)
+        assert reasoning_rejection(draft, "approve") == "approve-contradiction"
+    assert reasoning_rejection(
+        ReasoningDraft(risks_considered=["PO approved by Pat"], conclusion="Approved."),
+        "approve",
+    ) is None
+
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+    replies = [
+        json.dumps(
+            {
+                "risks_considered": ["address noted"],
+                "conclusion": "Invoice should not be approved due to fraudulent vendor details",
+            }
+        ),
+        json.dumps(
+            {
+                "risks_considered": ["non-commercial address is a note"],
+                "conclusion": "The checks passed. The address is noted.",
+            }
+        ),
+    ]
+
+    def handler(messages):
+        name = task_of(messages)
+        if name == "extract":
+            return extraction()
+        if name == "reason":
+            return replies.pop(0)
+        if name == "audit":
+            return json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
+        raise AssertionError(name)
+
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert result["decision"].reasoning.conclusion == "The checks passed. The address is noted."
+    assert result["attempts"][0]["matched"] == "approve-contradiction"
+
+
 def test_threshold_only_concern_keeps_a_real_sentence():
     assert threshold_only_concern("total exceeds $10,000")
     assert threshold_only_concern("total is over the $10,000 threshold")
@@ -466,6 +554,11 @@ def test_warning_only_audit_citation_is_suppressed(tmp_path, db_path):
     assert result["payment"].status == "paid"
     assert "AUDIT_NOTE" in codes(result)
     assert "AUDIT_ESCALATED" not in codes(result)
+    logged = next(row for row in result["logs"] if row["stage"] == "audit")
+    assert logged["result"]["cited_codes"] == ["NONCOMMERCIAL_ADDRESS", "FRAUD_SIGNAL"]
+    assert logged["result"]["audit_note"] == next(
+        finding.message for finding in result["findings"] if finding.code == "AUDIT_NOTE"
+    )
 
 
 def test_warning_only_suppression_is_noted_on_a_hold(db_path):

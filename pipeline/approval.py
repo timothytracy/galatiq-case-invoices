@@ -8,6 +8,7 @@ log keeps the conclusion, the risks, and the phrase that matched.
 """
 
 import json
+import re
 
 from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
@@ -132,6 +133,9 @@ _NOT_APPROVE = (
     "don't approve",
     "can't approve",
 )
+# "approved" alone does not match. "should/cannot/must not be approved" does,
+# because each of those contains "not" before "approv".
+_APPROVE_REFUSAL = re.compile(r"(?i)not\s+(?:be\s+)?approv")
 
 
 def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
@@ -152,6 +156,8 @@ def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
                 if phrase in _NOT_APPROVE:
                     return "approve-contradiction"
                 return phrase
+        if decision == "approve" and _APPROVE_REFUSAL.search(lowered):
+            return "approve-contradiction"
     return None
 
 
@@ -187,7 +193,11 @@ def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]
                 "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
                 "and conclusion (string). The decision is already fixed by the rules. "
                 "The user message is a valid JSON object of invoice facts. "
-                "Cite only the evidence you are given. Return JSON only."
+                "Cite only the evidence you are given. "
+                "Warning-only findings are recorded for the reviewer and are not reasons to refuse: "
+                "a total near the threshold, a descriptor on an item name, a price variance, "
+                "a single fraud signal, and a non-commercial address. "
+                "Mention any of those neutrally as notes. Return JSON only."
             ),
         },
         {
