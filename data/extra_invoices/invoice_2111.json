@@ -1,0 +1,22 @@
+{
+  "invoice_number": "INV-2111",
+  "revision": "R1",
+  "vendor": {
+    "name": "Fieldstone Components",
+    "address": "50 Industrial Blvd, Dayton, OH 45414"
+  },
+  "date": "2026-04-06",
+  "due_date": "2026-05-06",
+  "line_items": [
+    {"item": "GadgetX", "quantity": 2, "unit_price": 750.00, "amount": 1500.00},
+    {"item": "WidgetA", "quantity": 4, "unit_price": 250.00, "amount": 1000.00}
+  ],
+  "subtotal": 2500.00,
+  "tax_rate": 0,
+  "tax_amount": 0.00,
+  "shipping": 0.00,
+  "total": 2500.00,
+  "currency": "USD",
+  "payment_terms": "Net 30",
+  "notes": "Revised invoice. Replaces the 2026-03-30 issue of INV-2111 after the PO added two GadgetX."
+}

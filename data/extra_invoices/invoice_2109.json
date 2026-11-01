@@ -1,0 +1,20 @@
+{
+  "invoice_number": "INV-2109",
+  "vendor": {
+    "name": "Dockside Alloy",
+    "address": "14 Pier Street, Toledo, OH 43604"
+  },
+  "date": "2026-04-07",
+  "due_date": "2026-05-07",
+  "line_items": [
+    {"item": "WidgetA", "quantity": 3, "unit_price": -250.00, "amount": -750.00}
+  ],
+  "subtotal": -750.00,
+  "tax_rate": 0,
+  "tax_amount": 0.00,
+  "shipping": 0.00,
+  "total": -750.00,
+  "currency": "USD",
+  "payment_terms": "Net 30",
+  "notes": "PO-3007. Ship to pier 2."
+}

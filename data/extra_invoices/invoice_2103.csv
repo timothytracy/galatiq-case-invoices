@@ -1,0 +1,20 @@
+field,value
+invoice_number,INV-2103
+vendor,Copperline Fasteners
+date,2026-04-02
+due_date,2026-05-02
+payment_terms,Wire transfer only
+notes,PO-6620. Dock appointment is flexible.
+item,WidgetA
+quantity,4
+unit_price,250.00
+amount,1000.00
+item,GadgetX
+quantity,1
+unit_price,750.00
+amount,750.00
+subtotal,1750.00
+tax,0.00
+shipping,0.00
+total,1750.00
+currency,USD

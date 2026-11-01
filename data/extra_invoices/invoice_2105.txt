@@ -1,0 +1,19 @@
+INVOICE
+
+Vendor: Quarry Lane Fasteners
+Invoice Number: INV-2105
+Date: 2026-04-14
+Due Date: 2026-05-14
+
+Items:
+  WidgetA    qty: 6     unit price: $250.00
+  WidgetB    qty: 10    unit price: $500.00
+  GadgetX    qty: 4     unit price: $750.00
+
+Subtotal: $9,500.00
+Tax (4%): $380.00
+Total Amount: $9,880.00
+
+Payment Terms: Net 30
+Notes: Packing list is in the same envelope. Ship to the west bay.
+        The receiver is out on Thursdays.

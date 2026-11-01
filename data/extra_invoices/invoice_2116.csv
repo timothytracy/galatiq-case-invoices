@@ -1,0 +1,6 @@
+Invoice Number,Vendor,Date,Due Date,Item,Qty,Unit Price,Line Total
+INV-2116,Trestle Holm Supply,2026-04-21,2026-05-21,WidgetB,12,500.00,6000.00
+INV-2116,Trestle Holm Supply,2026-04-21,2026-05-21,GadgetX,2,750.00,1500.00
+,,,,,,Subtotal:,7500.00
+,,,,,,Tax (0%):,0.00
+,,,,,,Total:,7500.00

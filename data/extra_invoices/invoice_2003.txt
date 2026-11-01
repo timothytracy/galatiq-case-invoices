@@ -1,0 +1,20 @@
+INVOICE
+
+Vendor: Harbor Components
+Invoice Number: INV-2003
+Date: 2026-03-01
+Due Date: 2026-04-15
+
+VOID quote Q-1844, dated 2026-02-01, WidgetA 12, quote total 4500.00.
+
+Items:
+  WidgetA    qty: 8    unit price: $250.00
+  WidgetB    qty: 4    unit price: $500.00
+
+Subtotal: $4,000.00
+Tax (0%): $0.00
+Shipping: $50.00
+Total Amount: $4,050.00
+
+Payment Terms: Net 45
+Notes: PO-3301.
