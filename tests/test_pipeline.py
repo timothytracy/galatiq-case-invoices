@@ -46,8 +46,9 @@ from rules import (
     APPROVAL_THRESHOLD_USD,
     CRITIQUE_CAP,
     MAX_SEND_BACKS,
+    HOLD_CODES,
     REJECT_CODES,
-    REVIEW_CODES,
+    WARNING_CODES,
     assess,
     outcome_from_findings,
     resolve_currency,
@@ -66,9 +67,9 @@ README_OUTCOMES = {
     "invoice_1008.txt": "reject",
     "invoice_1016.json": "reject",
     "invoice_1009.json": "reject",
-    "invoice_1012.pdf": "manual_review",
-    "invoice_1012.txt": "manual_review",
-    "invoice_1014.xml": "manual_review",
+    "invoice_1012.pdf": "hold",
+    "invoice_1012.txt": "hold",
+    "invoice_1014.xml": "hold",
 }
 
 
@@ -301,7 +302,7 @@ def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
     assert APPROVAL_THRESHOLD_USD == Decimal("10000")
 
 
-def test_manual_review_does_not_pay(tmp_path, db_path):
+def test_renamed_vendor_is_a_hold_and_does_not_pay(tmp_path, db_path):
     path = write_invoice(
         tmp_path,
         "rename.txt",
@@ -324,7 +325,8 @@ def test_manual_review_does_not_pay(tmp_path, db_path):
     )
     handler, counts = scripted(body)
     result = run(path, db_path, handler)
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "VENDOR_RENAMED"
     assert status(result) == "not_paid"
     assert "payment" not in stages(result)
     assert counts["audit"] == 0
@@ -355,7 +357,8 @@ def test_three_send_backs_then_escalate(tmp_path, db_path):
     assert counts["audit"] == 4
     assert sum(1 for row in result["logs"] if row["stage"] == "ingestion") == 4
     assert result["audit_verdict"] == "ESCALATE"
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "AUDIT_ESCALATED"
     assert result["findings"][-1].code == "AUDIT_ESCALATED"
     assert status(result) == "not_paid"
     assert "payment" not in stages(result)
@@ -453,8 +456,8 @@ def test_audit_cannot_pay_non_usd(db_path):
         return json.dumps({"verdict": "PASS", "feedback": [], "notes": "pay"})
 
     out = audit(state, FakeLLM(handler), db_path, FakeClock(), ZeroRandom(), 5)
-    assert out["outcome"] == "manual_review"
-    assert "non-USD currency (EUR), manual review required" in out["decision"].reasoning.conclusion
+    assert out["outcome"] == "hold"
+    assert "Non-USD currency (EUR)." in out["decision"].reasoning.conclusion
 
 
 def test_non_usd_invoice_cannot_reach_payment(tmp_path, db_path):
@@ -464,11 +467,15 @@ def test_non_usd_invoice_cannot_reach_payment(tmp_path, db_path):
     ])
     handler, counts = scripted(body)
     result = run(path, db_path, handler)
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "NON_USD"
     assert status(result) == "not_paid"
     assert "payment" not in stages(result)
     assert counts["reason"] == 0
-    assert result["decision"].reasoning.conclusion == "non-USD currency (EUR), manual review required"
+    assert result["decision"].reasoning.conclusion == (
+        "Non-USD currency (EUR). Finance confirms the currency and amount. "
+        "Nothing is converted and nothing is paid."
+    )
     assert result["findings"][0].code == "NON_USD"
     assert result["findings"][0].item == "currency"
 
@@ -543,7 +550,7 @@ def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
     assert "payment" in stages(result)
 
 
-def test_bad_reasoning_every_time_is_unpaid_manual_review(tmp_path, db_path):
+def test_bad_reasoning_every_time_is_an_unpaid_hold(tmp_path, db_path):
     path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA 2\nTotal: 500.00\n")
     handler, counts = scripted(extraction(), reasons=[_BAD_REASON])
     clock = FakeClock()
@@ -553,7 +560,8 @@ def test_bad_reasoning_every_time_is_unpaid_manual_review(tmp_path, db_path):
     assert counts["reason"] == max_attempts
     assert len(result["attempts"]) == max_attempts
     assert [row["error_type"] for row in result["attempts"]] == ["bad_reasoning"] * max_attempts
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BAD_REASONING"
     assert status(result) == "not_paid"
     assert result["agent_error"] == f"agent step failed after {max_attempts} attempts: bad_reasoning"
     assert result["findings"][-1].code == "BAD_REASONING"
@@ -605,7 +613,7 @@ def test_bad_reasoning_attempt_log_contains_the_rejected_text(tmp_path, db_path,
     )
     handler, _counts = scripted(extraction(), reasons=[contradict])
     stopped = run(path, db_path, handler, clock=FakeClock(), max_attempts=1)
-    assert stopped["outcome"] == "manual_review"
+    assert stopped["outcome"] == "hold"
     assert status(stopped) == "not_paid"
     rejected = stopped["attempts"][0]
     assert rejected["matched"] == "approve-contradiction"
@@ -636,7 +644,7 @@ def test_reasoning_output_failed_covers_refusal_and_normal_wording():
         conclusion="Invalid input - unable to process or approve.",
     )
     assert reasoning_output_failed(flake, "approve") is True
-    assert reasoning_output_failed(flake, "manual_review") is True
+    assert reasoning_output_failed(flake, "hold") is True
 
     unparseable = ReasoningDraft(
         risks_considered=["The input is unparseable."],
@@ -668,10 +676,10 @@ def test_reasoning_output_failed_covers_refusal_and_normal_wording():
         risks_considered=["amount is high"],
         conclusion="Do not approve. Manual review, no payment.",
     )
-    assert reasoning_output_failed(hold, "manual_review") is False
+    assert reasoning_output_failed(hold, "hold") is False
 
 
-def test_exhausted_retries_are_manual_review_and_unpaid(tmp_path, db_path):
+def test_exhausted_retries_are_a_hold_and_unpaid(tmp_path, db_path):
     path = write_invoice(tmp_path, "clean.txt", "Total: 500.00\n")
 
     def handler(_messages):
@@ -680,10 +688,12 @@ def test_exhausted_retries_are_manual_review_and_unpaid(tmp_path, db_path):
     clock = FakeClock()
     result = run(path, db_path, handler, clock=clock, max_attempts=3)
     assert clock.slept == [1.0, 2.0]
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "SYSTEM_ERROR"
     assert status(result) == "not_paid"
     assert result["agent_error"] == "agent step failed after 3 attempts: http_429"
-    assert result["findings"][-1].code == "AGENT_FAILED"
+    assert result["findings"][-1].code == "SYSTEM_ERROR"
+    assert "Rerun the invoice" in (result["action"] or "")
     assert "payment" not in stages(result)
     assert [row["error_type"] for row in result["attempts"]] == ["http_429", "http_429", "http_429"]
 
@@ -695,7 +705,8 @@ def test_non_retryable_error_skips_the_backoff(tmp_path, db_path):
     result = run_invoice(path, db_path, fake, clock=clock, rng=ZeroRandom(), max_attempts=5)
     assert clock.slept == []
     assert len(fake.calls) == 1
-    assert result["outcome"] == "manual_review"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "SYSTEM_ERROR"
     assert status(result) == "not_paid"
     assert result["agent_error"] == "agent step failed after 1 attempts: http_401"
     assert "payment" not in stages(result)
@@ -801,18 +812,19 @@ def test_labels_cover_all_20_and_match_the_readme_table():
     assert "MegaSprocket" in by_file["invoice_1008.txt"].reason
     assert "WidgetC" in by_file["invoice_1016.json"].reason
     assert "negative" in by_file["invoice_1009.json"].reason.lower()
-    assert by_file["invoice_1014.xml"].reason == "non-USD currency (EUR), manual review required"
+    assert by_file["invoice_1014.xml"].reason.startswith("Non-USD currency (EUR).")
     assert "formerly" in by_file["invoice_1012.pdf"].reason
-    assert by_file["invoice_1004_revised.json"].outcome == "approve"
-    assert "stock 5" in by_file["invoice_1004_revised.json"].reason
+    assert by_file["invoice_1004_revised.json"].outcome == "hold"
+    assert "revision" in by_file["invoice_1004_revised.json"].reason.lower()
+    assert by_file["invoice_1004.json"].outcome == "approve"
+    assert by_file["invoice_1004_revised.json"].outcome == "hold"
     for left, right in (
-        ("invoice_1004.json", "invoice_1004_revised.json"),
         ("invoice_1011.pdf", "invoice_1011.txt"),
         ("invoice_1012.pdf", "invoice_1012.txt"),
         ("invoice_1013.json", "invoice_1013.pdf"),
     ):
         assert by_file[left].outcome == by_file[right].outcome
-    counts = {"approve": 0, "reject": 0, "manual_review": 0}
+    counts = {"approve": 0, "reject": 0, "hold": 0}
     from db import SEED
 
     stock = dict(SEED)
@@ -825,9 +837,9 @@ def test_labels_cover_all_20_and_match_the_readme_table():
         assert fresh.outcome == outcome_from_findings(fresh.findings)
         assert "duplicate" not in row.reason.lower()
         for finding in fresh.findings:
-            assert finding.code in REJECT_CODES or finding.code in REVIEW_CODES
+            assert finding.code in REJECT_CODES or finding.code in HOLD_CODES or finding.code in WARNING_CODES
             assert finding.severity in {"info", "warning", "blocking"}
-    assert counts == {"approve": 8, "reject": 9, "manual_review": 3}
+    assert counts == {"approve": 7, "reject": 9, "hold": 4}
 
 
 def test_committed_diagram_matches_the_graph():
@@ -848,7 +860,7 @@ def test_outcome_from_findings_rejects_holds_or_approves():
     assert outcome_from_findings([note]) == "approve"
     assert outcome_from_findings([soft]) == "approve"
     assert outcome_from_findings([stock]) == "reject"
-    assert outcome_from_findings([hold]) == "manual_review"
+    assert outcome_from_findings([hold]) == "hold"
     assert outcome_from_findings([hold, stock]) == "reject"
 
 

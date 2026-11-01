@@ -3,10 +3,11 @@
 from db import load_stock
 from models import Finding, PipelineState, ValidationReport
 from pipeline.stage_log import _stopped, stage_log
-from rules import assess, finding_codes
+from rules import assess, finding_codes, resolve_as_of, today_line
 
 
-def validate(state: PipelineState, db_path) -> dict:
+def validate(state: PipelineState, db_path, as_of=None) -> dict:
+    as_of = resolve_as_of(as_of)
     invoice = state.invoice
     if invoice is None:
         reason = "No invoice was extracted."
@@ -32,7 +33,11 @@ def validate(state: PipelineState, db_path) -> dict:
         "passed": report.passed,
         "outcome": assessment.outcome,
         "reason": assessment.reason,
+        "reason_code": assessment.reason_code,
+        "action": assessment.action,
         "currency": assessment.currency,
+        "as_of": as_of.isoformat(),
+        "date_context": today_line(as_of),
         "findings": [finding.model_dump(mode="json") for finding in report.findings],
         "codes": finding_codes(report.findings),
     }
@@ -41,5 +46,7 @@ def validate(state: PipelineState, db_path) -> dict:
         "validation": report,
         "findings": list(assessment.findings),
         "outcome": outcome,
+        "reason_code": assessment.reason_code,
+        "action": assessment.action,
         "logs": state.logs + [stage_log(state.filename, "validation", result)],
     }

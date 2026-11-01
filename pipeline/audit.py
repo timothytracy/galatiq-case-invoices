@@ -14,29 +14,40 @@ from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
 from pipeline.stage_log import _stopped, agent_finding, stage_log
-from rules import MAX_SEND_BACKS, REJECT_CODES, assess, finding_codes, show_money
+from rules import (
+    HOLD_CODES,
+    MAX_SEND_BACKS,
+    REJECT_CODES,
+    assess,
+    explain,
+    finding_codes,
+    resolve_as_of,
+    show_money,
+    today_line,
+)
 
 
-def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> dict:
+def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+    as_of = resolve_as_of(as_of)
     invoice = state.invoice
     decision = state.decision
     if invoice is None or decision is None:
         reason = "Audit had no decision."
         return _stopped(
             state,
-            "manual_review",
+            "hold",
             reason,
             "audit",
             [],
             agent_error=state.agent_error,
-            finding=Finding(code="AGENT_FAILED", message=reason, severity="warning"),
+            finding=Finding(code="SYSTEM_ERROR", message=reason, severity="warning"),
         )
 
     step_attempts: list[dict] = []
     try:
         draft = call_with_retries(
             llm.request,
-            _audit_messages(state, invoice, decision),
+            _audit_messages(state, invoice, decision, as_of),
             AuditDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -46,7 +57,7 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
     except AgentStepFailed as exc:
         return _stopped(
             state,
-            "manual_review",
+            "hold",
             str(exc),
             "audit",
             step_attempts,
@@ -94,6 +105,8 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
     }
     if guarded["verdict"] == "SEND_BACK":
         update["outcome"] = None
+        update["reason_code"] = None
+        update["action"] = None
         update["feedback"] = guarded["feedback"]
         update["send_backs"] = state.send_backs + 1
         update["decision"] = None
@@ -101,7 +114,15 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> 
         update["critique_concerns"] = []
         update["critique_stricter"] = False
     else:
+        _outcome, code, _reason, action = explain(kept, state.invoice)
+        if guarded["outcome"] == "approve":
+            code, action = None, None
         update["outcome"] = guarded["outcome"]
+        update["reason_code"] = code
+        update["action"] = action
+        update["decision"] = new_decision.model_copy(
+            update={"decision": guarded["outcome"], "reason_code": code, "action": action}
+        )
     return update
 
 
@@ -129,21 +150,21 @@ def issue_authorization(state: PipelineState) -> PaymentAuthorization | None:
 def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     """A hold the audit itself added, when the rules did not already record one."""
 
-    if guarded["verdict"] != "ESCALATE" or guarded["outcome"] != "manual_review":
+    if guarded["verdict"] != "ESCALATE" or guarded["outcome"] != "hold":
         return None
-    if any(finding.code in {"NON_USD", "VENDOR_RENAMED", "FRAUD_SIGNAL"} for finding in findings):
+    if any(finding.code in HOLD_CODES for finding in findings):
         return None
     authored = {
-        "Audit send-back cap reached. Manual review, no payment.",
+        "Audit send-back cap reached. Hold, no payment.",
         "Critique concerns were not addressed.",
     }
     message = guarded["conclusion"]
     if message not in authored:
-        message = "Audit escalated the invoice to manual review."
+        message = "Audit escalated the invoice to a hold."
     return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
 
 
-def _audit_messages(state, invoice, decision) -> list[dict]:
+def _audit_messages(state, invoice, decision, as_of) -> list[dict]:
     findings = []
     if state.validation is not None:
         findings = [finding.model_dump(mode="json") for finding in state.validation.findings]
@@ -159,6 +180,7 @@ def _audit_messages(state, invoice, decision) -> list[dict]:
             "role": "system",
             "content": (
                 "TASK audit\n"
+                f"{today_line(as_of)}\n"
                 "Compare the extracted fields with the raw text. Check the decision against the "
                 "findings. Re-check the line math and any fraud signals. Check that critique "
                 "concerns were addressed. Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
@@ -209,9 +231,8 @@ def _whole_number_in_text(whole: str, raw: str) -> bool:
 def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
     """Apply the audit checks. The result is never looser than the rules or the model."""
 
-    hard = [finding for finding in findings if finding.code in REJECT_CODES]
-    non_usd = [finding for finding in findings if finding.code == "NON_USD"]
-    fraud = [finding for finding in findings if finding.code in {"FRAUD_SIGNAL", "VENDOR_RENAMED"}]
+    hard = [finding for finding in findings if finding.severity == "blocking" and finding.code in REJECT_CODES]
+    holds = [finding for finding in findings if finding.code in HOLD_CODES]
     text_notes = []
     if state.invoice is not None and state.invoice.total is not None:
         if not amount_in_text(state.invoice.total, state.raw_text or ""):
@@ -229,26 +250,18 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
             "conclusion": " ".join(finding.message for finding in hard) or decision.reasoning.conclusion,
             "evidence": [finding.message for finding in hard],
         }
-    if non_usd:
+    if holds and decision.decision == "approve":
         return {
             "verdict": "ESCALATE",
-            "outcome": "manual_review",
+            "outcome": "hold",
             "feedback": [],
-            "conclusion": non_usd[0].message,
-            "evidence": [finding.message for finding in non_usd],
-        }
-    if fraud and decision.decision == "approve":
-        return {
-            "verdict": "ESCALATE",
-            "outcome": "manual_review",
-            "feedback": [],
-            "conclusion": " ".join(finding.message for finding in fraud),
-            "evidence": [finding.message for finding in fraud],
+            "conclusion": " ".join(finding.message for finding in holds),
+            "evidence": [finding.message for finding in holds],
         }
     if not concerns_addressed(state.critique_concerns, decision):
         return {
             "verdict": "ESCALATE",
-            "outcome": "manual_review",
+            "outcome": "hold",
             "feedback": [],
             "conclusion": "Critique concerns were not addressed.",
             "evidence": [f"Unaddressed critique concern: {item}" for item in state.critique_concerns],
@@ -262,9 +275,9 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
         if state.send_backs >= MAX_SEND_BACKS:
             return {
                 "verdict": "ESCALATE",
-                "outcome": "manual_review",
+                "outcome": "hold",
                 "feedback": feedback,
-                "conclusion": "Audit send-back cap reached. Manual review, no payment.",
+                "conclusion": "Audit send-back cap reached. Hold, no payment.",
                 "evidence": feedback or ["send-back cap reached"],
             }
         used = feedback or ["re-check the extracted fields against the raw text"]
@@ -275,8 +288,8 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
             "conclusion": decision.reasoning.conclusion,
             "evidence": [],
         }
-    if verdict == "ESCALATE" or decision.decision == "manual_review":
-        outcome = "manual_review"
+    if verdict == "ESCALATE" or decision.decision == "hold":
+        outcome = "hold"
         return {
             "verdict": "ESCALATE",
             "outcome": outcome,

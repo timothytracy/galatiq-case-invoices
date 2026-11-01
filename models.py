@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-Outcome = Literal["approve", "reject", "manual_review"]
+Outcome = Literal["approve", "reject", "hold"]
 AuditVerdict = Literal["PASS", "SEND_BACK", "ESCALATE"]
 
 
@@ -59,6 +59,9 @@ class ExtractedInvoice(BaseModel):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    # True only when the extraction model flags instructions aimed at the system.
+    # A reject also needs the deterministic phrase check in rules.py.
+    embedded_instructions: bool = False
     source: SourceInfo
     warnings: list[str] = Field(default_factory=list)
 
@@ -129,6 +132,8 @@ class ApprovalDecision(BaseModel):
 
     decision: Outcome
     reasoning: ApprovalReasoning
+    reason_code: str | None = None
+    action: str | None = None
     revisions: list[ApprovalReasoning] = Field(default_factory=list)
     amount: Decimal | None = None
     currency: str | None = None
@@ -183,7 +188,9 @@ class Assessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     outcome: Outcome
+    reason_code: str | None = None
     reason: str
+    action: str | None = None
     findings: list[Finding]
     currency: str
 
@@ -220,6 +227,8 @@ class ExtractionSchema(BaseModel):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
+    revision: str | None = None
+    embedded_instructions: bool = False
 
 
 class ReasoningDraft(BaseModel):
@@ -272,3 +281,5 @@ class PipelineState(BaseModel):
     agent_error: str | None = None
     findings: list[Finding] = Field(default_factory=list)
     authorization: PaymentAuthorization | None = None
+    reason_code: str | None = None
+    action: str | None = None

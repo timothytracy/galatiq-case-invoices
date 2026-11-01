@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from models import Finding, PaymentAuthorization, PaymentRecord, PipelineState
 from pipeline.stage_log import stage_log
-from rules import PAYMENT_REFUSED, POLICY, REJECT_CODES, REVIEW_CODES, finding_codes, non_usd_message
+from rules import HOLD_CODES, PAYMENT_REFUSED, POLICY, REJECT_CODES, finding_codes, non_usd_message
 
 # Keys already accepted in this process.
 _USED_KEYS: set[str] = set()
@@ -68,7 +68,7 @@ def _payment_blocked(state: PipelineState) -> str:
         return non_usd_message(invoice.currency)
     if state.validation is not None:
         for finding in state.validation.findings:
-            if finding.code in REJECT_CODES or finding.code in REVIEW_CODES:
+            if finding.code in REJECT_CODES or finding.code in HOLD_CODES:
                 return finding.message
     return ""
 

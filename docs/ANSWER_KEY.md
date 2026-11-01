@@ -1,6 +1,6 @@
 # Answer key: original sample invoices
 
-This is the expected outcome for each of the 20 files in `data/invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). That includes its precedence rule: **Reject over Hold over Approve**. When a Reject condition applies, any Hold findings or fraud signals are still recorded in Warnings and named in the reason. This file is docs only and is not wired into eval. The machine-readable copy is `data/answer_key.json`.
+This is the expected outcome for each of the 20 files in `data/invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). That includes its precedence rule: **Reject over Hold over Approve**. When a Reject condition applies, any Hold findings or fraud signals are still recorded in Warnings and named in the reason. `scripts/eval.py` scores each file's outcome and primary reason code against the machine-readable copy, `data/answer_key.json`. Warning matches are printed and do not change the exit code.
 
 How each file was decided:
 - Each file was read on its own. PDF and text twins each get their own row.
@@ -9,7 +9,7 @@ How each file was decided:
 
 Notes on the columns:
 - **Primary reason code.** The policy names findings but defines no code identifiers, so this column uses the policy's own finding names.
-- **Price warnings.** The repo has no reference price table. These warnings compare against the price the other sample invoices use for the same item, and they change no outcome.
+- **Price warnings.** USD reference prices live in `policy.toml` (WidgetA 250, WidgetB 500, GadgetX 750), the prices the samples use. A difference is a warning and changes no outcome. Non-USD invoices are not price-checked.
 - **Source.** `README` means the README scenario table specifies how that invoice is grouped. The outcome itself comes from the policy.
 
 | File | Invoice # | Outcome | Primary reason code | Warnings | Reason | Human action (HOLD) / Vendor next step (REJECT) | Source |

@@ -61,6 +61,8 @@ def _result_line(path: Path, result: dict) -> dict:
         "record": "result",
         "file": path.name,
         "outcome": result.get("outcome"),
+        "reason_code": result.get("reason_code"),
+        "action": result.get("action"),
         "payment_status": payment_status(result),
         "codes": result_codes(result),
     }

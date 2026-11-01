@@ -4,9 +4,10 @@
 # XAI_MAX_ATTEMPTS still overrides model_retry_attempts for a single run.
 
 # A total in an allowed currency above this goes to critique, then back to approval.
+# Being over this amount is not a risk finding.
 scrutiny_threshold = "10000"
 
-# Currencies that can be paid. Anything else is manual review. Nothing is converted.
+# Currencies that can be paid. Anything else is a hold. Nothing is converted.
 allowed_currencies = ["USD"]
 
 # Header fields that must be present. line_items means the lines list.
@@ -18,8 +19,29 @@ money_tolerance = "0.01"
 # Critique passes before the graph leaves the loop. 1 means one pass.
 critique_cap = 1
 
-# Send-backs the audit may use. The next one escalates to manual review.
+# Send-backs the audit may use. The next one escalates to a hold.
 audit_send_back_cap = 3
 
-# Model calls per step. After this the invoice is manual review and is not paid.
+# Model calls per step. After this the invoice is a hold and is not paid.
 model_retry_attempts = 5
+
+# A total this close under scrutiny_threshold, and still under it, is a warning.
+near_threshold_ratio = "0.02"
+
+# A unit price this far above the reference is one fraud signal ("well above").
+# Any difference, including this one, is also a price-variance warning.
+# 0.50 means more than 50% above the reference price.
+price_fraud_ratio = "0.50"
+
+# A vendor address is noted, not held, when it matches one of these.
+# Commercial suffixes (St, Blvd, Ave, Rd, Road, Street) are not in the list.
+residential_address_markers = ["Terrace", "Lane", "Court", "Circle", "Place", "Way", "Trail"]
+civic_address_markers = ["Pennsylvania Ave", "Pennsylvania Avenue", "White House"]
+
+# USD reference unit prices. A difference is a warning and does not change the
+# outcome. Non-USD invoices are not compared, because nothing is converted.
+# The inventory table stays the four README stock rows; prices live here.
+[reference_prices]
+WidgetA = "250"
+WidgetB = "500"
+GadgetX = "750"

@@ -13,15 +13,16 @@ from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
 from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
 from pipeline.stage_log import _stopped, agent_finding, stage_log
-from rules import PASSED_RULES, evidence_lines
+from rules import PASSED_RULES, evidence_lines, resolve_as_of, today_line
 
 # Long enough to read the flagged sentence. Short enough to keep a log line small.
 _LOG_LIMIT = 500
 
 
-def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -> dict:
+def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+    as_of = resolve_as_of(as_of)
     if state.agent_error:
-        return {"outcome": "manual_review"}
+        return {"outcome": "hold"}
     invoice = state.invoice
     report = state.validation
     if invoice is None or report is None:
@@ -39,7 +40,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     stock = dict(load_stock(db_path))
     step_attempts: list[dict] = []
     evidence = evidence_lines(invoice, stock, report.findings)
-    decision_name = "manual_review" if state.critique_stricter else "approve"
+    decision_name = "hold" if state.critique_stricter else "approve"
 
     def reject_bad_wording(draft: ReasoningDraft) -> None:
         matched = reasoning_rejection(draft, decision_name)
@@ -58,7 +59,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     try:
         draft = call_with_retries(
             llm.request,
-            _reason_messages(state, invoice, report, evidence),
+            _reason_messages(state, invoice, report, evidence, as_of),
             ReasoningDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -69,7 +70,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
     except AgentStepFailed as exc:
         return _stopped(
             state,
-            "manual_review",
+            "hold",
             str(exc),
             "approval",
             step_attempts,
@@ -83,7 +84,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int) -
             risks.append(line)
     conclusion = draft.conclusion
     if state.critique_stricter:
-        conclusion = conclusion + " Critique made the decision stricter: manual review, no payment."
+        conclusion = conclusion + " Critique made the decision stricter: hold, no payment."
     reasoning = ApprovalReasoning(
         rules_applied=list(PASSED_RULES),
         evidence=evidence,
@@ -160,7 +161,8 @@ def reasoning_output_failed(draft: ReasoningDraft, decision: str) -> bool:
     return reasoning_rejection(draft, decision) is not None
 
 
-def _reason_messages(state, invoice, report, evidence) -> list[dict]:
+def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]:
+    as_of = resolve_as_of(as_of)
     concerns = ""
     if state.critique_concerns:
         concerns = "Critique concerns to address:\n" + "\n".join(
@@ -181,6 +183,7 @@ def _reason_messages(state, invoice, report, evidence) -> list[dict]:
             "role": "system",
             "content": (
                 "TASK reason\n"
+                f"{today_line(as_of)}\n"
                 "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
                 "and conclusion (string). The decision is already fixed by the rules. "
                 "The user message is a valid JSON object of invoice facts. "

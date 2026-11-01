@@ -1,8 +1,8 @@
 """One function per graph node. graph.py only wires them.
 
 Hard rules live in rules.py. Extraction, approval wording, critique, and the
-audit verdict are model calls. A failed model call becomes manual_review and
-is not paid.
+audit verdict are model calls. A failed model call becomes a hold tracked as
+a system error and is not paid.
 """
 
 from pipeline.approval import approve

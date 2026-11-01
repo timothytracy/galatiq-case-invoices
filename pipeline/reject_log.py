@@ -3,21 +3,35 @@
 from models import PaymentRecord, PipelineState
 from pipeline.decisions import _decision_from_validation, _failure_decision, _tighten
 from pipeline.stage_log import stage_log
-from rules import finding_codes
+from rules import ACTION, explain, finding_codes
 
 
 def reject_log(state: PipelineState) -> dict:
-    outcome = "manual_review" if state.agent_error else (state.outcome or "reject")
+    findings = list(state.findings)
+    outcome, code, reason, action = explain(findings, state.invoice)
+    if state.agent_error and code not in {"SYSTEM_ERROR", "BAD_REASONING"}:
+        outcome, code, action = "hold", "SYSTEM_ERROR", ACTION["SYSTEM_ERROR"]
+        reason = f"{state.agent_error} {action}"
+    elif state.outcome in {"reject", "hold"}:
+        outcome = state.outcome
     if state.agent_error:
-        reason = state.agent_error
         decision = _failure_decision(state, reason)
     elif state.decision is not None:
         decision = state.decision
         if decision.decision != outcome:
-            decision = _tighten(decision, outcome, decision.reasoning.conclusion, [])
-        reason = decision.reasoning.conclusion
+            decision = _tighten(decision, outcome, reason, [reason])
+        else:
+            decision = decision.model_copy(
+                update={
+                    "reasoning": decision.reasoning.model_copy(update={"conclusion": reason}),
+                }
+            )
     else:
-        reason, decision = _decision_from_validation(state, outcome)
+        _, decision = _decision_from_validation(state, outcome)
+        decision = decision.model_copy(
+            update={"reasoning": decision.reasoning.model_copy(update={"conclusion": reason})}
+        )
+    decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
 
     invoice = state.invoice
     record = PaymentRecord(
@@ -36,6 +50,8 @@ def reject_log(state: PipelineState) -> dict:
     }
     return {
         "outcome": outcome,
+        "reason_code": code,
+        "action": action,
         "decision": decision,
         "payment": record,
         "logs": state.logs + [stage_log(state.filename, "reject_log", result)],

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from models import ExtractedInvoice, LineItem, SourceInfo
 from parsers.common import _build, _make_item, _money, _rate, _read, _source
+from rules import math_reconciles
 
 # A letter O inside a token that already contains a digit is treated as zero.
 # "2O26" and "$3,500.O0" change. "NOTES" does not, because that O has no digit.
@@ -36,7 +37,17 @@ def parse_text_file(path: Path) -> ExtractedInvoice:
 
 
 def parse_text(raw: str, source: SourceInfo) -> ExtractedInvoice:
-    text = fix_ocr_digits(raw)
+    """Read one text invoice. An O-to-0 fix is kept only when the math then adds up."""
+
+    fixed = fix_ocr_digits(raw)
+    if fixed != raw:
+        candidate = _parse_fields(fixed, source)
+        if math_reconciles(candidate):
+            return candidate
+    return _parse_fields(raw, source)
+
+
+def _parse_fields(text: str, source: SourceInfo) -> ExtractedInvoice:
     items = _line_items(text)
     tax_rate, tax_amount = _find_tax(text)
     warnings = []
