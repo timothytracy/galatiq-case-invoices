@@ -195,7 +195,7 @@
       "outcome": "REJECT",
       "primary_reason": "Missing required field",
       "warnings": [],
-      "reason": "WidgetA 8 x $250.00 and WidgetB 2 x $500.00, the $3,000.00 subtotal, and $0.00 tax all agree. The only garbled figure is the total, printed $3,5OO.00. Reading O as 0 makes that total $3,500.00, which does not match, so the fix is not applied. The unfixed total is not a number, so the required total is missing. Keeping the fix would have been a total mismatch instead. This missing-total reject is the result of refusing the fix.",
+      "reason": "WidgetA 8 x $250.00 and WidgetB 2 x $500.00, the $3,000.00 subtotal, and $0.00 tax all agree. The only garbled figure is the total, printed $3,5OO.00. Reading O as 0 makes that total $3,500.00, which does not match, so the fix is not applied. The deterministic parser then leaves the total empty, which is Missing required field. A live run takes the total from Grok's extraction and will probably read 3500, which is Total or line-math mismatch. The outcome is REJECT either way. NEEDS CAPTAIN CALL: accept either reason code, or require one. Recommendation: accept either. Primary recorded here is Missing required field.",
       "next_step": "Resend the invoice with the missing field filled in.",
       "source": "Policy judgment"
     },
@@ -214,7 +214,7 @@
     "Labels follow docs/DECISION_POLICY.md. Reference prices are policy.toml: WidgetA 250, WidgetB 500, GadgetX 750. A unit price more than 50% above the reference is one fraud signal. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.",
     "No pipeline, main.py, scripts/eval.py, or Grok call was run on these files. pypdf (already pinned) was used only to read the text layer of the two PDFs.",
     "NEEDS CAPTAIN CALL: invoice_2109.json and invoice_2110.xml, negative unit price versus the reference. Options are (a) warn as written, (b) compare the magnitude so there is no price warning, (c) skip the price check on credit notes only. Recommendation is (b). Both rows are labeled provisionally per (b), with no price warning. The schema has no captain-call field, so the call is in each reason and in docs/EXTRA_ANSWER_KEY.md.",
-    "invoice_2115.txt: the O-to-0 reading of the total does not reconcile, so the fix is refused and the required total is missing. The lines, subtotal, and tax agree. Keeping the fix would have been a total mismatch.",
+    "NEEDS CAPTAIN CALL: invoice_2115.txt. Outcome REJECT is settled. The deterministic parser leaves the total empty (Missing required field). A live run takes the total from Grok's extraction and will probably read 3500 (Total or line-math mismatch). Options: accept either reason code, or require one. Recommendation: accept either. Primary recorded is Missing required field.",
     "invoice_2116.csv is a fresh stock-shortfall reject. PR #5 invoice_2004.csv was not restored.",
     "Invoices 2001, 2003, 2005, 2006, and 2008 are copied from PR #5 and relabeled, except notes that told the reader the answer were neutralized. 2002, 2004, and 2007 were dropped. See docs/EXTRA_ANSWER_KEY.md.",
     "A forced Grok failure is described in docs/EXTRA_ANSWER_KEY.md as a test double and is not implemented here. There is no invoice file for it, because the outcome does not depend on the bill."
