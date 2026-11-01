@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Outcome = Literal["approve", "reject", "hold"]
 AuditVerdict = Literal["PASS", "SEND_BACK", "ESCALATE"]
@@ -175,8 +175,29 @@ class ReasoningDraft(_Loose):
     conclusion: str = ""
 
 
+class FactConcern(_Loose):
+    """One critique or audit concern the code can check against a verified fact.
+
+    category is stock, totals, date, or other. item is the inventory name for a
+    stock concern. field is invoice_date or due_date for a date, or total or the
+    line item for totals. A plain string has no category, so it is other.
+    """
+
+    category: str = "other"
+    item: str = ""
+    field: str = ""
+    text: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_string(cls, value):
+        if isinstance(value, str):
+            return {"category": "other", "text": value}
+        return value
+
+
 class CritiqueDraft(_Loose):
-    concerns: list[str] = Field(default_factory=list)
+    concerns: list[FactConcern] = Field(default_factory=list)
     stricter: bool = False
 
 
@@ -186,6 +207,7 @@ class AuditDraft(_Loose):
     notes: str = ""
     # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
+    concerns: list[FactConcern] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):

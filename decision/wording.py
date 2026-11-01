@@ -15,6 +15,13 @@ from decision.outcome import (
 )
 from decision.policy import APPROVAL_THRESHOLD_USD, MONEY, POLICY, Policy
 
+def price_spike_reason(ratio: Decimal | None = None) -> str:
+    """Answer-key name for a price spike. The percent is the configured ratio."""
+
+    used = POLICY.price_spike_ratio if ratio is None else ratio
+    return f"Unit price {used * 100:.0f}% or more above reference"
+
+
 # The answer key names findings in the policy's words. This is the only map.
 KEY_REASON_TO_CODE = {
     "None (all checks pass)": None,
@@ -32,7 +39,7 @@ KEY_REASON_TO_CODE = {
     "Renamed vendor": "VENDOR_RENAMED",
     "Two or more fraud signals": "FRAUD_CLUSTER",
     "New remittance account": "NEW_REMITTANCE",
-    "Unit price 50% or more above reference": "PRICE_SPIKE",
+    price_spike_reason(): "PRICE_SPIKE",
     "Grok or system failure after retries": "SYSTEM_ERROR",
 }
 

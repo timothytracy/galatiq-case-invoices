@@ -15,7 +15,7 @@ from decision.wording import KEY_REASON_TO_CODE, threshold_only_concern
 from graph import run_invoice
 from llm_client import LLMError
 from parsers import parse_file
-from scripts.eval import grade, load_answer_key
+from scripts.eval import grade, invoice_lookup, load_answer_key
 from tests.fake_llm_eval import handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
@@ -293,7 +293,8 @@ def test_price_spike_loses_to_a_reject(tmp_path, db_path):
     assert result["reason_code"] == "STOCK_SHORTFALL"
     assert "PRICE_SPIKE" in codes(result)
     assert "PRICE_VARIANCE" in codes(result)
-    assert "50% or more above" in result["decision"].reasoning.conclusion
+    percent = f"{POLICY.price_spike_ratio * 100:.0f}"
+    assert f"{percent}% or more above" in result["decision"].reasoning.conclusion
     assert result["payment"].status == "not_paid"
 
 
@@ -811,6 +812,48 @@ def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_pa
     assert "looks like a home" in noted.message
 
 
+def test_price_spike_compares_the_rounded_unit_price():
+    """374.996 rounds to 375.00, which meets the spike. 374.994 rounds to 374.99."""
+
+    from models import ExtractedInvoice, LineItem, SourceInfo
+
+    stock = dict(SEED)
+    percent = f"{POLICY.price_spike_ratio * 100:.0f}"
+
+    def priced(unit_price: str):
+        amount = Decimal(unit_price)
+        invoice = ExtractedInvoice(
+            vendor="Widgets Inc.",
+            due_date="2026-04-30",
+            currency="USD",
+            subtotal=amount,
+            tax_amount=Decimal("0"),
+            shipping=Decimal("0"),
+            total=amount,
+            line_items=[
+                LineItem(
+                    item="WidgetA",
+                    description="WidgetA",
+                    quantity=Decimal("1"),
+                    unit_price=amount,
+                    amount=amount,
+                )
+            ],
+            source=SourceInfo(path="x.txt", filename="x.txt", format="txt", raw_text="Total"),
+        )
+        return assess(invoice, "Total\n", stock)
+
+    held = priced("374.996")
+    assert held.outcome == "hold"
+    assert held.reason_code == "PRICE_SPIKE"
+    assert f"{percent}% or more above" in held.reason
+    under = priced("374.994")
+    assert under.outcome == "approve"
+    assert under.reason_code is None
+    assert any(finding.code == "PRICE_VARIANCE" for finding in under.findings)
+    assert all(finding.code != "PRICE_SPIKE" for finding in under.findings)
+
+
 def test_eval_help_makes_no_api_call():
     import os
     import subprocess
@@ -828,6 +871,8 @@ def test_eval_help_makes_no_api_call():
     )
     assert proc.returncode == 0
     assert "answer_key" in proc.stdout
+    assert "--answer-key" in proc.stdout
+    assert "data/answer_key.json" in proc.stdout
     assert "XAI_API_KEY" not in proc.stderr
 
 
@@ -849,7 +894,7 @@ def test_answer_key_names_map_and_grade():
     assert not missed["reason_ok"]
 
 
-def test_grade_accepts_alternative_reasons():
+def test_grade_accepts_alternative_reasons(capsys):
     expected = {
         "outcome": "HOLD",
         "primary_reason": "Revised invoice",
@@ -861,6 +906,7 @@ def test_grade_accepts_alternative_reasons():
     other = {"outcome": "hold", "reason_code": "NON_USD", "findings": []}
     assert grade(spike, expected)["outcome_ok"]
     assert grade(spike, expected)["reason_ok"]
+    assert capsys.readouterr().err == ""
     assert grade(revised, expected)["reason_ok"]
     missed = grade(other, expected)
     assert missed["outcome_ok"] and not missed["reason_ok"]
@@ -877,7 +923,27 @@ def test_grade_accepts_alternative_reasons():
         "warnings": [],
     }
     assert grade(revised, unknown)["reason_ok"]
+    warned = capsys.readouterr().err
+    assert "not a real reason" in warned
+    assert "also_accepted_reasons" in warned
     assert not grade(other, unknown)["reason_ok"]
+
+
+def test_answer_key_lookup_keeps_the_extra_invoice_prefix():
+    sample = invoice_lookup(ROOT / "data" / "invoices" / "invoice_1001.txt")
+    assert sample == "data/invoices/invoice_1001.txt"
+    extra_path = Path("data/extra_invoices/invoice_2106.txt")
+    assert invoice_lookup(extra_path) == "data/extra_invoices/invoice_2106.txt"
+    assert invoice_lookup(ROOT / extra_path) == "data/extra_invoices/invoice_2106.txt"
+    key = load_answer_key(ROOT / "data" / "extra_answer_key.json")
+    folder = ROOT / "data" / "extra_invoices"
+    files = [
+        path
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() in {".txt", ".pdf", ".json", ".csv", ".xml"}
+    ]
+    assert {invoice_lookup(path) for path in files} == set(key)
+    assert key["data/extra_invoices/invoice_2106.txt"]["outcome"] == "APPROVE"
 
 
 def test_sample_invoices_match_the_answer_key(db_path):

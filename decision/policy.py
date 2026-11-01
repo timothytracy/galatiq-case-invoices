@@ -54,11 +54,18 @@ class Policy(BaseModel):
             raise ValueError("must be greater than zero")
         return value
 
-    @field_validator("money_tolerance", "price_spike_ratio")
+    @field_validator("money_tolerance")
     @classmethod
     def _non_negative(cls, value: Decimal) -> Decimal:
         if value < 0:
             raise ValueError("must not be negative")
+        return value
+
+    @field_validator("price_spike_ratio")
+    @classmethod
+    def _spike_ratio(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("must be greater than zero")
         return value
 
     @field_validator("near_threshold_ratio")
