@@ -20,7 +20,7 @@
       "outcome": "APPROVE",
       "primary_reason": "None (all checks pass)",
       "warnings": [],
-      "reason": "WidgetA 8 (stock 15) and WidgetB 4 (stock 10) are in stock, and $4,000.00 + $0.00 tax + $50.00 shipping = $4,050.00. The quote due date, the draft quantity of 12, and the $4,500.00 quote total are marked void. \"Ignore the voided quote total\" tells a clerk which figure is void; it is not a system-directed phrase such as \"ignore previous instructions\" or \"skip review\".",
+      "reason": "WidgetA 8 (stock 15) and WidgetB 4 (stock 10) are in stock, and $4,000.00 + $0.00 tax + $50.00 shipping = $4,050.00. A voided quote Q-1844 on the page lists 2026-02-01, WidgetA 12, and 4500.00. The invoice due date, lines, and total are the bill.",
       "next_step": "None (paid).",
       "source": "PR #5, relabeled"
     },
@@ -135,10 +135,8 @@
       "invoice_number": "INV-2109",
       "outcome": "REJECT",
       "primary_reason": "Negative amount that is not a labeled credit note",
-      "warnings": [
-        "Unit price -$250.00 for WidgetA differs from the reference price $250.00."
-      ],
-      "reason": "WidgetA quantity 3 is positive and within stock 15, and 3 x -250.00 = -750.00 matches the printed total. The amount is negative and the invoice is not labeled a credit note or credit memo. The negative unit price is also a price warning and is not a fraud signal.",
+      "warnings": [],
+      "reason": "WidgetA quantity 3 is positive and within stock 15, and 3 x -250.00 = -750.00 matches the printed total. The amount is negative and the invoice is not labeled a credit note. NEEDS CAPTAIN CALL on the negative unit price against the $250.00 reference: (a) warn as written; (b) compare the magnitude, so no price warning; (c) skip the price check on credit notes only. Recommendation is (b). This row is labeled provisionally per (b), so there is no price warning. (c) would not apply, because this bill is not a credit note.",
       "next_step": "Resend with corrected amounts, or send a labeled credit note.",
       "source": "Policy judgment"
     },
@@ -146,10 +144,8 @@
       "invoice_number": "INV-2110",
       "outcome": "HOLD",
       "primary_reason": "Labeled credit note whose math reconciles",
-      "warnings": [
-        "Unit price -$500.00 for WidgetB differs from the reference price $500.00."
-      ],
-      "reason": "The invoice is labeled a credit note and a credit memo. WidgetB quantity 2 is positive and within stock 10, and 2 x -500.00 = -1,000.00 matches the total, so the negative amount is the credit and not a reject. A negative quantity was not used, so this hold is not competing with a bad-quantity reject.",
+      "warnings": [],
+      "reason": "The invoice is labeled a credit note and a credit memo. WidgetB quantity 2 is positive and within stock 10, and 2 x -500.00 = -1,000.00 matches the total, so the negative amount is the credit and not a reject. A negative quantity was not used, so this hold is not competing with a bad-quantity reject. NEEDS CAPTAIN CALL on the negative unit price against the $500.00 reference: (a) warn as written; (b) compare the magnitude, so no price warning; (c) skip the price check on credit notes only. Recommendation is (b). This row is labeled provisionally per (b), so there is no price warning. (c) would also clear this bill.",
       "next_step": "Accounting applies the credit. Nothing is paid.",
       "source": "Policy judgment"
     },
@@ -197,10 +193,19 @@
     "data/extra_invoices/invoice_2115.txt": {
       "invoice_number": "INV-2115",
       "outcome": "REJECT",
-      "primary_reason": "Total or line-math mismatch",
+      "primary_reason": "Missing required field",
       "warnings": [],
-      "reason": "The WidgetB unit price is printed \"$5OO.00\". Reading that O as 0 gives WidgetA 8 x $250.00 = $2,000.00 and WidgetB 2 x $500.00 = $1,000.00, subtotal $3,000.00, against a printed total of $3,500.00. The corrected numbers do not add up, so the O-to-0 fix is not applied. Leaving the O in place drops the WidgetB price as a number and the remaining WidgetA line ($2,000.00) still does not match the $3,000.00 subtotal or the $3,500.00 total. Either reading is a total mismatch.",
-      "next_step": "Resend with corrected totals.",
+      "reason": "WidgetA 8 x $250.00 and WidgetB 2 x $500.00, the $3,000.00 subtotal, and $0.00 tax all agree. The only garbled figure is the total, printed $3,5OO.00. Reading O as 0 makes that total $3,500.00, which does not match, so the fix is not applied. The unfixed total is not a number, so the required total is missing. Keeping the fix would have been a total mismatch instead. This missing-total reject is the result of refusing the fix.",
+      "next_step": "Resend the invoice with the missing field filled in.",
+      "source": "Policy judgment"
+    },
+    "data/extra_invoices/invoice_2116.csv": {
+      "invoice_number": "INV-2116",
+      "outcome": "REJECT",
+      "primary_reason": "Stock shortfall",
+      "warnings": [],
+      "reason": "WidgetB quantity 12 is more than the 10 in stock. GadgetX 2 is within stock 5. Both lines are at the reference prices, and 12 x $500.00 + 2 x $750.00 = $7,500.00. One line is over stock. The lines are not split pieces of the same item.",
+      "next_step": "Resend for the quantity in stock, or amend the PO.",
       "source": "Policy judgment"
     }
   },
@@ -208,8 +213,10 @@
     "Same schema as data/answer_key.json. primary_reason uses the finding names in KEY_REASON_TO_CODE. This file is not wired into eval.",
     "Labels follow docs/DECISION_POLICY.md. Reference prices are policy.toml: WidgetA 250, WidgetB 500, GadgetX 750. A unit price more than 50% above the reference is one fraud signal. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.",
     "No pipeline, main.py, scripts/eval.py, or Grok call was run on these files. pypdf (already pinned) was used only to read the text layer of the two PDFs.",
-    "No row is marked NEEDS CAPTAIN CALL. invoice_2115.txt rejects for a total mismatch on both the O-as-0 reading and the unfixed reading. invoice_2107.pdf is a reject when the model flags the memo; the phrase check matches.",
-    "Invoices 2001, 2003, 2005, 2006, and 2008 are copied from PR #5 and relabeled. 2002, 2004, and 2007 were dropped. See docs/EXTRA_ANSWER_KEY.md.",
-    "A forced Grok failure is described in docs/EXTRA_ANSWER_KEY.md and is not implemented in this set. There is no invoice file for it, because the outcome does not depend on the bill."
+    "NEEDS CAPTAIN CALL: invoice_2109.json and invoice_2110.xml, negative unit price versus the reference. Options are (a) warn as written, (b) compare the magnitude so there is no price warning, (c) skip the price check on credit notes only. Recommendation is (b). Both rows are labeled provisionally per (b), with no price warning. The schema has no captain-call field, so the call is in each reason and in docs/EXTRA_ANSWER_KEY.md.",
+    "invoice_2115.txt: the O-to-0 reading of the total does not reconcile, so the fix is refused and the required total is missing. The lines, subtotal, and tax agree. Keeping the fix would have been a total mismatch.",
+    "invoice_2116.csv is a fresh stock-shortfall reject. PR #5 invoice_2004.csv was not restored.",
+    "Invoices 2001, 2003, 2005, 2006, and 2008 are copied from PR #5 and relabeled, except notes that told the reader the answer were neutralized. 2002, 2004, and 2007 were dropped. See docs/EXTRA_ANSWER_KEY.md.",
+    "A forced Grok failure is described in docs/EXTRA_ANSWER_KEY.md as a test double and is not implemented here. There is no invoice file for it, because the outcome does not depend on the bill."
   ]
 }

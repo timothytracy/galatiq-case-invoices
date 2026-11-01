@@ -3,8 +3,9 @@ INVOICE
 Vendor: Harbor Components
 Invoice Number: INV-2003
 Date: 2026-03-01
-Quote due date (void, do not use): 2026-02-01
 Due Date: 2026-04-15
+
+VOID quote Q-1844, dated 2026-02-01, WidgetA 12, quote total 4500.00.
 
 Items:
   WidgetA    qty: 8    unit price: $250.00
@@ -16,4 +17,4 @@ Shipping: $50.00
 Total Amount: $4,050.00
 
 Payment Terms: Net 45
-Notes: Use the Due Date line. The quote due date above is void. A draft WidgetA quantity of 12 was replaced by 8. Ignore the voided quote total of $4,500.00.
+Notes: PO-3301.

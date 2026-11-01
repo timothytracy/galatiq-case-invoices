@@ -17,4 +17,4 @@ Total Amount: $11,000.00
 Payment Terms: Net 30
 Notes: The account ending 1044 is closed. Please remit to the new bank account:
        routing 000000000, account 000111222. Bank account updated 2026-04-01.
-       Call the number already on file before the first payment. PO-6610.
+       PO-6610.

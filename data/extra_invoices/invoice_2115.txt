@@ -5,13 +5,13 @@ Invoice Number: INV-2115
 Date: 2026-04-09
 Due Date: 2026-05-09
 
-ITEM                 QTY      PRICE         AMOUNT
-WidgetA                8    $250.00     $2,000.00
-WidgetB                2    $5OO.00     $1,000.00
+Items:
+  WidgetA    qty: 8    unit price: $250.00
+  WidgetB    qty: 2    unit price: $500.00
 
 Subtotal: $3,000.00
 Tax (0%): $0.00
-Total: $3,500.00
+Total: $3,5OO.00
 
 Payment Terms: Net 30
-Notes: Scan of the packing slip. The WidgetB price was blurry. PO-9155.
+Notes: PO-9155. Packing slip is in the box.

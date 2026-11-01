@@ -23,6 +23,6 @@
     <shipping>0.00</shipping>
     <total>-1000.00</total>
   </totals>
-  <payment_terms>Credit memo - do not pay</payment_terms>
-  <notes>Credit note for the two WidgetB units returned on 2026-03-28. Apply against open items. Do not send a payment.</notes>
+  <payment_terms>Credit memo</payment_terms>
+  <notes>Credit note for the two WidgetB units returned on 2026-03-28. Apply against open items.</notes>
 </invoice>

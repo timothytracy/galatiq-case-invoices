@@ -37,7 +37,7 @@ The system should handle four stages:
 
 ### Mock Invoice Data
 
-Sample invoices are provided in the `data/invoices/` directory in various formats (PDF, CSV, JSON, TXT). Use these as inputs for testing. The data intentionally includes a mix of clean entries and problematic ones — identifying and handling issues is part of the challenge.
+Sample invoices are provided in the `data/invoices/` directory in various formats (PDF, CSV, JSON, TXT). Use these as inputs for testing. The data intentionally includes a mix of clean entries and problematic ones — identifying and handling issues is part of the challenge. Held-out invoices and their answer key are in `data/extra_invoices/` and [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md).
 
 ### Mock Inventory Database (Required Setup)
 

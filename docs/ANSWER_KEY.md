@@ -43,5 +43,3 @@ The "clean invoice over $10,000 with a new bank account" Hold doesn't apply to a
 
 - **1003:** REJECT for a stock shortfall (FM-GC13 precedence rule). The urgency and wire-transfer signals are recorded as findings. This replaces the earlier HOLD call.
 - **1004:** APPROVE. A non-commercial address on an otherwise clean invoice that the README lists as passing is noted, not held (FM-GC14). invoice_1004_revised.json stays a HOLD because it is a revised invoice.
-
-The held-out extra invoices and the forced-Grok-failure note are in [docs/EXTRA_ANSWER_KEY.md](EXTRA_ANSWER_KEY.md).

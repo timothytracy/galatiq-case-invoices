@@ -20,6 +20,5 @@
                   SHIPPING:          $15O.OO
                   TOTAL:           $6,150.00
 
-  Notes: Deliver to dock lB. The mark
-         before B is the digit one.
+  Notes: Deliver to dock lB.
   Terms: Net 30
