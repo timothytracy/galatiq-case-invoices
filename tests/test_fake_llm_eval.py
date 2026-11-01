@@ -1,11 +1,11 @@
 """Sample-invoice graph output with the test fake LLM.
 
-Outcomes match data/labels.json. The snapshot includes finding codes and, on
-a paid invoice, the audit authorization. Wall-clock timestamps and absolute
-paths are normalized. The approval prompt text is not in this snapshot.
+The snapshot is one row per file: outcome, reason code, and reason.
+as_of is fixed inside run_samples, so the row does not depend on today's date.
 """
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,14 @@ def db_path(tmp_path):
     return path
 
 
-def test_fake_llm_eval_matches_captured_output(db_path):
+def test_fake_llm_eval_matches_captured_output(db_path, monkeypatch):
+    class Frozen(date):
+        @classmethod
+        def today(cls):
+            return cls(2035, 6, 1)
+
+    monkeypatch.setattr("decision.wording.date", Frozen)
     actual = run_samples(db_path)
     expected = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert actual == expected
+    assert actual["as_of"] == "2026-10-31"

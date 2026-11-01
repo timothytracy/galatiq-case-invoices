@@ -140,7 +140,7 @@ Outcomes are approve, reject, or hold. Reject wins over hold, and hold wins over
 
 Hard rules are Python: stock (summed per item, equal to stock passes, the snapshot does not decrease), line math within 0.01, and currency. Any non-USD invoice is a hold, with no conversion. A revised invoice, a renamed vendor, a reconciling credit note, and two or more fraud signals are holds. A USD total over 10000 goes through one critique pass and back to approval. Being over that threshold is not a risk. The audit can send the extraction back at most 3 times, then it escalates. Critique and audit can only make a decision stricter. Extraction, critique, and audit prompts are given today's date, and tests can inject that date. An OCR O-to-0 fix is kept only when the math then reconciles. Model calls retry in memory on timeout, 429, 5xx, network errors, JSON that is still invalid after the schema-repair loop, and approval wording that refuses the input or contradicts an approve decision (backoff 1, 2, 4, 8, 16 seconds, 5 attempts by default). Those knobs are `policy.toml`. Every problem a stage raises is a finding with a stable code. `outcome_from_findings` in `rules.py` turns that list into approve, reject, or hold. Payment runs only when a PASS audit has issued a one-time authorization for that vendor, amount, and currency.
 
-Decisions are in `docs/DECISIONS.md`. The approved decision policy is in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md).
+Decisions are in `docs/DECISIONS.md`. The pipeline implements the captain-approved policy in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md) and scores against [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md). Those two documents are the captain's text.
 
 ## Known limitations / cut scope
 

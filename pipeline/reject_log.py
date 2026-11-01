@@ -6,6 +6,12 @@ from pipeline.stage_log import stage_log
 from rules import ACTION, explain, finding_codes
 
 
+def _stage_name(outcome: str) -> str:
+    """Holds are logged as hold. Rejects stay on reject_log. The graph node is shared."""
+
+    return "hold" if outcome == "hold" else "reject_log"
+
+
 def reject_log(state: PipelineState) -> dict:
     findings = list(state.findings)
     outcome, code, reason, action = explain(findings, state.invoice)
@@ -54,5 +60,5 @@ def reject_log(state: PipelineState) -> dict:
         "action": action,
         "decision": decision,
         "payment": record,
-        "logs": state.logs + [stage_log(state.filename, "reject_log", result)],
+        "logs": state.logs + [stage_log(state.filename, _stage_name(outcome), result)],
     }

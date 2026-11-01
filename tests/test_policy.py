@@ -17,8 +17,6 @@ audit_send_back_cap = 3
 model_retry_attempts = 5
 near_threshold_ratio = "0.02"
 price_fraud_ratio = "0.50"
-residential_address_markers = ["Terrace", "Lane", "Court", "Circle", "Place", "Way", "Trail"]
-civic_address_markers = ["Pennsylvania Ave", "Pennsylvania Avenue", "White House"]
 
 [reference_prices]
 WidgetA = "250"

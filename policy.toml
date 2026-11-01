@@ -1,4 +1,4 @@
-# Business rules for one invoice run. rules.py loads this at startup.
+# Business rules for one invoice run. decision/policy.py loads this at startup.
 # A missing key, a wrong type, or a nonsense value stops the process
 # and names the key. Numbers below are the behavior this prototype ships with.
 # XAI_MAX_ATTEMPTS still overrides model_retry_attempts for a single run.
@@ -32,11 +32,6 @@ near_threshold_ratio = "0.02"
 # Any difference, including this one, is also a price-variance warning.
 # 0.50 means more than 50% above the reference price.
 price_fraud_ratio = "0.50"
-
-# A vendor address is noted, not held, when it matches one of these.
-# Commercial suffixes (St, Blvd, Ave, Rd, Road, Street) are not in the list.
-residential_address_markers = ["Terrace", "Lane", "Court", "Circle", "Place", "Way", "Trail"]
-civic_address_markers = ["Pennsylvania Ave", "Pennsylvania Avenue", "White House"]
 
 # USD reference unit prices. A difference is a warning and does not change the
 # outcome. Non-USD invoices are not compared, because nothing is converted.

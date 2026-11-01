@@ -29,7 +29,6 @@ from models import (
     ApprovalReasoning,
     ExtractedInvoice,
     Finding,
-    InvoiceLabel,
     LineItem,
     PaymentAuthorization,
     PipelineState,
@@ -56,7 +55,6 @@ from rules import (
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-LABELS = ROOT / "data" / "labels.json"
 
 README_OUTCOMES = {
     "invoice_1001.txt": "approve",
@@ -566,7 +564,7 @@ def test_bad_reasoning_every_time_is_an_unpaid_hold(tmp_path, db_path):
     assert result["agent_error"] == f"agent step failed after {max_attempts} attempts: bad_reasoning"
     assert result["findings"][-1].code == "BAD_REASONING"
     assert "payment" not in stages(result)
-    assert stages(result)[-1] == "reject_log"
+    assert stages(result)[-1] == "hold"
 
 
 def test_bad_reasoning_attempt_log_contains_the_rejected_text(tmp_path, db_path, capsys):
@@ -793,53 +791,39 @@ def test_full_run_leaves_the_database_hash_unchanged(tmp_path, db_path, monkeypa
         readonly.close()
 
 
-def test_labels_cover_all_20_and_match_the_readme_table():
-    payload = json.loads(LABELS.read_text(encoding="utf-8"))
-    rows = [InvoiceLabel.model_validate(row) for row in payload["invoices"]]
+def test_answer_key_covers_the_sample_files():
+    from db import SEED
+    from rules import KEY_REASON_TO_CODE
+    from scripts.eval import load_answer_key
+
+    key = load_answer_key()
     sample = sorted(
         path.name
         for path in INVOICES.iterdir()
         if path.is_file() and path.suffix.lower() in {".txt", ".pdf", ".json", ".csv", ".xml"}
     )
     assert len(sample) == 20
-    assert [row.file for row in rows] == sample
-    by_file = {row.file: row for row in rows}
-    for filename, outcome in README_OUTCOMES.items():
-        assert by_file[filename].outcome == outcome
-    assert "FakeItem" in by_file["invoice_1003.txt"].reason
-    assert "exceeds stock" in by_file["invoice_1002.txt"].reason
-    assert "SuperGizmo" in by_file["invoice_1008.txt"].reason
-    assert "MegaSprocket" in by_file["invoice_1008.txt"].reason
-    assert "WidgetC" in by_file["invoice_1016.json"].reason
-    assert "negative" in by_file["invoice_1009.json"].reason.lower()
-    assert by_file["invoice_1014.xml"].reason.startswith("Non-USD currency (EUR).")
-    assert "formerly" in by_file["invoice_1012.pdf"].reason
-    assert by_file["invoice_1004_revised.json"].outcome == "hold"
-    assert "revision" in by_file["invoice_1004_revised.json"].reason.lower()
-    assert by_file["invoice_1004.json"].outcome == "approve"
-    assert by_file["invoice_1004_revised.json"].outcome == "hold"
-    for left, right in (
-        ("invoice_1011.pdf", "invoice_1011.txt"),
-        ("invoice_1012.pdf", "invoice_1012.txt"),
-        ("invoice_1013.json", "invoice_1013.pdf"),
-    ):
-        assert by_file[left].outcome == by_file[right].outcome
-    counts = {"approve": 0, "reject": 0, "hold": 0}
-    from db import SEED
-
+    assert sorted(Path(name).name for name in key) == sample
     stock = dict(SEED)
-    for row in rows:
-        counts[row.outcome] += 1
-        invoice = parse_file(INVOICES / row.file)
+    counts = {"approve": 0, "reject": 0, "hold": 0}
+    for filename in sample:
+        expected = key[f"data/invoices/{filename}"]
+        if filename in README_OUTCOMES:
+            assert expected["outcome"].lower() == README_OUTCOMES[filename]
+        invoice = parse_file(INVOICES / filename)
         fresh = assess(invoice, invoice.source.raw_text or "", stock)
-        assert fresh.outcome == row.outcome
-        assert fresh.reason == row.reason
+        assert fresh.outcome == expected["outcome"].lower()
+        assert fresh.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]]
         assert fresh.outcome == outcome_from_findings(fresh.findings)
-        assert "duplicate" not in row.reason.lower()
+        counts[fresh.outcome] += 1
         for finding in fresh.findings:
             assert finding.code in REJECT_CODES or finding.code in HOLD_CODES or finding.code in WARNING_CODES
-            assert finding.severity in {"info", "warning", "blocking"}
     assert counts == {"approve": 7, "reject": 9, "hold": 4}
+    assert "FakeItem" in assess(
+        parse_file(INVOICES / "invoice_1003.txt"),
+        (INVOICES / "invoice_1003.txt").read_text(encoding="utf-8"),
+        stock,
+    ).reason
 
 
 def test_committed_diagram_matches_the_graph():

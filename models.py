@@ -62,6 +62,8 @@ class ExtractedInvoice(BaseModel):
     # True only when the extraction model flags instructions aimed at the system.
     # A reject also needs the deterministic phrase check in rules.py.
     embedded_instructions: bool = False
+    # Set by extraction when the vendor address looks like a home. Warning only.
+    noncommercial_address: bool = False
     source: SourceInfo
     warnings: list[str] = Field(default_factory=list)
 
@@ -166,6 +168,7 @@ class StageRecord(BaseModel):
         "audit",
         "payment",
         "reject_log",
+        "hold",
     ]
     invoice_file: str
     timestamp: str
@@ -229,6 +232,7 @@ class ExtractionSchema(BaseModel):
     notes: str | None = None
     revision: str | None = None
     embedded_instructions: bool = False
+    noncommercial_address: bool = False
 
 
 class ReasoningDraft(BaseModel):

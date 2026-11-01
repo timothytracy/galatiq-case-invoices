@@ -18,6 +18,7 @@ from rules import (
     HOLD_CODES,
     MAX_SEND_BACKS,
     REJECT_CODES,
+    WARNING_CODES,
     assess,
     explain,
     finding_codes,
@@ -67,12 +68,26 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
 
     stock = dict(load_stock(db_path))
     fresh = assess(invoice, state.raw_text, stock)
-    guarded = _guard_audit(state, decision, fresh.findings, draft.verdict, list(draft.feedback))
+    verdict = draft.verdict
+    feedback = list(draft.feedback)
+    ignored = _ignored_audit_note(verdict, feedback, draft.notes)
+    if ignored is not None:
+        verdict = "PASS"
+        feedback = []
+    guarded = _guard_audit(state, decision, fresh.findings, verdict, feedback)
     new_decision = decision
     if guarded["verdict"] != "SEND_BACK" and guarded["outcome"] not in (None, decision.decision):
         new_decision = _tighten(decision, guarded["outcome"], guarded["conclusion"], guarded["evidence"])
 
     findings = list(state.findings) or list(fresh.findings)
+    if ignored is not None and guarded.get("outcome") == "approve":
+        findings = findings + [
+            Finding(
+                code="AUDIT_NOTE",
+                message=f"Audit note, not an escalation: {ignored}",
+                severity="info",
+            )
+        ]
     extra = _audit_finding(guarded, findings)
     if extra is not None:
         findings = findings + [extra]
@@ -186,7 +201,13 @@ def _audit_messages(state, invoice, decision, as_of) -> list[dict]:
                 "concerns were addressed. Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
                 "feedback (list of field notes, required for SEND_BACK), and notes (string). "
                 "You can only make the outcome stricter. Never turn a hard failure or a non-USD "
-                "invoice into a payment. Return JSON only."
+                "invoice into a payment.\n"
+                "These codes are warnings only and never hold or reject: "
+                + ", ".join(WARNING_CODES)
+                + ". A single fraud signal never holds. "
+                "Do not ESCALATE or SEND_BACK because of a warning. "
+                "A printed date on or before today is not in the future. "
+                "Return JSON only."
             ),
         },
         {"role": "user", "content": json.dumps(payload)},
@@ -226,6 +247,85 @@ def _whole_number_in_text(whole: str, raw: str) -> bool:
     """A whole-dollar total can be printed without the trailing .00."""
 
     return re.search(rf"(?<![0-9]){re.escape(whole)}(?![0-9])", raw) is not None
+
+
+# A real problem names a reject or a hold. A warning, or a bare "future date", does not.
+_REAL_PROBLEM = (
+    "stock",
+    "missing",
+    "unknown item",
+    "mismatch",
+    "non-usd",
+    "non usd",
+    "revised",
+    "credit note",
+    "formerly",
+    "remittance",
+    "embedded",
+    "negative amount",
+    "unreadable",
+    "bad quantity",
+)
+_WARNING_ONLY = (
+    "fraud signal",
+    "single fraud",
+    "one fraud",
+    "near threshold",
+    "near_threshold",
+    "price variance",
+    "price_variance",
+    "non-commercial",
+    "noncommercial",
+    "descriptor",
+    "ocr",
+    "warning",
+)
+_CONCRETE_FIELD = (
+    "vendor",
+    "due date",
+    "due_date",
+    "line item",
+    "line_items",
+    "quantity",
+    "total",
+    "invoice number",
+    "invoice_number",
+    "unit price",
+    "unit_price",
+    "subtotal",
+    "tax",
+    "amount",
+)
+
+
+def escalation_is_unfounded(feedback: list[str], notes: str) -> bool:
+    """True when a SEND_BACK or ESCALATE cites only warnings, or nothing concrete.
+
+    A date called future is not one of our findings, so that sentence does not escalate.
+    """
+
+    blob = " ".join([*(feedback or []), notes or ""]).strip().lower()
+    if not blob:
+        return True
+    real = any(name in blob for name in _REAL_PROBLEM)
+    if "in the future" in blob or "future date" in blob:
+        return not real
+    if real:
+        return False
+    if any(name in blob for name in _WARNING_ONLY):
+        return True
+    if any(name in blob for name in _CONCRETE_FIELD):
+        return False
+    return True
+
+
+def _ignored_audit_note(verdict: str, feedback: list[str], notes: str) -> str | None:
+    if verdict not in {"SEND_BACK", "ESCALATE"}:
+        return None
+    if not escalation_is_unfounded(feedback, notes):
+        return None
+    text = " ".join(part for part in [*(feedback or []), notes or ""] if part).strip()
+    return text or "Audit cited no concrete finding or field."
 
 
 def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:

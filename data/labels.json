@@ -8,27 +8,27 @@
     {
       "file": "invoice_1002.txt",
       "outcome": "reject",
-      "reason": "GadgetX quantity 20 exceeds stock of 5. Resend for the quantity in stock, or amend the PO."
+      "reason": "GadgetX quantity 20 exceeds stock of 5."
     },
     {
       "file": "invoice_1003.txt",
       "outcome": "reject",
-      "reason": "FakeItem quantity 100 exceeds stock of 0. Also recorded: Urgency pressure is a fraud signal. Wire transfer is a fraud signal. Due date 'yesterday' is not a date. Resend for the quantity in stock, or amend the PO."
+      "reason": "FakeItem quantity 100 exceeds stock of 0."
     },
     {
       "file": "invoice_1004.json",
       "outcome": "approve",
-      "reason": "WidgetA 3 (stock 15), WidgetB 2 (stock 10) within stock and the printed total matches the lines. Also recorded: Vendor address looks non-commercial and is noted: 742 Evergreen Terrace, Springfield, IL 62704."
+      "reason": "WidgetA 3 (stock 15), WidgetB 2 (stock 10) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1004_revised.json",
-      "outcome": "hold",
-      "reason": "This invoice is marked as a revision. Also recorded: Vendor address looks non-commercial and is noted: 742 Evergreen Terrace, Springfield, IL 62704. Confirm it replaces the original and that the original was not paid."
+      "outcome": "approve",
+      "reason": "WidgetA 3 (stock 15), WidgetB 2 (stock 10), GadgetX 5 (stock 5) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1005.json",
       "outcome": "reject",
-      "reason": "GadgetX quantity 8 exceeds stock of 5. Also recorded: Vendor address looks non-commercial and is noted: 1600 Pennsylvania Ave, Washington, DC 20500. Resend for the quantity in stock, or amend the PO."
+      "reason": "GadgetX quantity 8 exceeds stock of 5."
     },
     {
       "file": "invoice_1006.csv",
@@ -38,22 +38,22 @@
     {
       "file": "invoice_1007.csv",
       "outcome": "reject",
-      "reason": "WidgetA quantity 20 exceeds stock of 15. WidgetB quantity 15 exceeds stock of 10. Also recorded: Printed total 15525.00 does not equal 15635.00 (subtotal + tax + shipping). Resend for the quantity in stock, or amend the PO. Resend with corrected totals."
+      "reason": "WidgetA quantity 20 exceeds stock of 15. WidgetB quantity 15 exceeds stock of 10. Printed total 15525.00 does not equal 15635.00 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1008.txt",
       "outcome": "reject",
-      "reason": "SuperGizmo is not in the inventory database. MegaSprocket is not in the inventory database. Also recorded: Total 9900.00 is within 2% under the 10000.00 threshold. Resend with the correct item name."
+      "reason": "SuperGizmo is not in the inventory database. MegaSprocket is not in the inventory database."
     },
     {
       "file": "invoice_1009.json",
       "outcome": "reject",
-      "reason": "WidgetA quantity -5 is negative or zero. Also recorded: Vendor is missing. Due date is missing. Negative amount is not a labeled credit note. Printed subtotal 1000.00 does not equal the line sum -250.00. Printed total -250.00 does not equal 1000.00 (subtotal + tax + shipping). Resend with corrected quantities. Resend with corrected amounts, or send a labeled credit note. Resend the invoice with the missing field filled in. Resend with corrected totals."
+      "reason": "WidgetA quantity -5 is negative or zero. Vendor is missing. Due date is missing. Printed subtotal 1000.00 does not equal the line sum -250.00. Printed total -250.00 does not equal 1000.00 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1010.txt",
       "outcome": "approve",
-      "reason": "WidgetA 12 (stock 15), WidgetB 4 (stock 10), GadgetX 2 (stock 5) within stock and the printed total matches the lines. Also recorded: Unit price 300.00 for WidgetA differs from the reference price 250.00. Descriptor on WidgetA (rush order): matched as WidgetA, 'rush order' kept as a note."
+      "reason": "WidgetA 12 (stock 15), WidgetB 4 (stock 10), GadgetX 2 (stock 5) within stock and the printed total matches the lines."
     },
     {
       "file": "invoice_1011.pdf",
@@ -67,28 +67,28 @@
     },
     {
       "file": "invoice_1012.pdf",
-      "outcome": "hold",
-      "reason": "The vendor name says formerly. Also recorded: Total 9975.00 is within 2% under the 10000.00 threshold. OCR O-to-0 fix applied because the math reconciles. Verify it is the same company."
+      "outcome": "manual_review",
+      "reason": "Vendor identity change (formerly) requires manual review."
     },
     {
       "file": "invoice_1012.txt",
-      "outcome": "hold",
-      "reason": "The vendor name says formerly. Also recorded: Total 9975.00 is within 2% under the 10000.00 threshold. OCR O-to-0 fix applied because the math reconciles. Verify it is the same company."
+      "outcome": "manual_review",
+      "reason": "Vendor identity change (formerly) requires manual review."
     },
     {
       "file": "invoice_1013.json",
       "outcome": "reject",
-      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Also recorded: Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping). Unit price 240.00 for WidgetA differs from the reference price 250.00. Unit price 480.00 for WidgetB differs from the reference price 500.00. Resend for the quantity in stock, or amend the PO. Resend with corrected totals."
+      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1013.pdf",
       "outcome": "reject",
-      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Also recorded: Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping). Unit price 240.00 for WidgetA differs from the reference price 250.00. Unit price 480.00 for WidgetB differs from the reference price 500.00. Resend for the quantity in stock, or amend the PO. Resend with corrected totals."
+      "reason": "WidgetA quantity 22 exceeds stock of 15. WidgetB quantity 18 exceeds stock of 10. GadgetX quantity 9 exceeds stock of 5. Printed total 22562.80 does not equal 22512.80 (subtotal + tax + shipping)."
     },
     {
       "file": "invoice_1014.xml",
-      "outcome": "hold",
-      "reason": "Non-USD currency (EUR). Finance confirms the currency and amount. Nothing is converted and nothing is paid."
+      "outcome": "manual_review",
+      "reason": "non-USD currency (EUR), manual review required"
     },
     {
       "file": "invoice_1015.csv",
@@ -98,7 +98,7 @@
     {
       "file": "invoice_1016.json",
       "outcome": "reject",
-      "reason": "WidgetC is not in the inventory database. Resend with the correct item name."
+      "reason": "WidgetC is not in the inventory database."
     }
   ]
 }

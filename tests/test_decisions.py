@@ -10,7 +10,7 @@ from db import SEED, create_database
 from graph import run_invoice
 from llm_client import LLMError
 from parsers import parse_file
-from rules import KEY_REASON_TO_CODE, assess, injection_phrase
+from rules import KEY_REASON_TO_CODE, assess, injection_phrase, threshold_only_concern
 from scripts.eval import grade, load_answer_key
 from tests.fake_llm_eval import handler_for
 
@@ -452,6 +452,126 @@ def test_new_remittance_over_10k_is_a_hold_and_under_is_a_warning(tmp_path, db_p
     assert "FRAUD_SIGNAL" in codes(warned)
     assert "NEW_REMITTANCE" not in codes(warned)
     assert warned["payment"].status == "paid"
+
+
+def test_threshold_only_concern_keeps_a_real_sentence():
+    assert threshold_only_concern("total exceeds $10,000")
+    assert threshold_only_concern("total is over the $10,000 threshold")
+    assert not threshold_only_concern("Total over $10,000 and unit price 40% above usual")
+    assert not threshold_only_concern("Large 10k invoice could be a duplicate")
+    assert not threshold_only_concern("Over threshold; due date already passed")
+    assert not threshold_only_concern("amount is high")
+
+
+def test_audit_ignores_a_warning_only_escalation(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+
+    def handler(messages):
+        name = task_of(messages)
+        if name == "extract":
+            return extraction()
+        if name == "reason":
+            return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+        if name == "audit":
+            return json.dumps(
+                {
+                    "verdict": "ESCALATE",
+                    "feedback": [],
+                    "notes": "non-commercial address is one fraud signal, triggers hold",
+                }
+            )
+        raise AssertionError(name)
+
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert "AUDIT_NOTE" in codes(result)
+    assert "AUDIT_ESCALATED" not in codes(result)
+
+
+def test_audit_ignores_an_escalation_with_no_concrete_field(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
+
+    def handler(messages):
+        name = task_of(messages)
+        if name == "extract":
+            return extraction()
+        if name == "reason":
+            return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+        if name == "audit":
+            return json.dumps(
+                {
+                    "verdict": "SEND_BACK",
+                    "feedback": ["please look again"],
+                    "notes": "January 2026 looks like it is in the future",
+                }
+            )
+        raise AssertionError(name)
+
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert result["send_backs"] == 0
+    assert "AUDIT_NOTE" in codes(result)
+
+
+def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_path):
+    from decimal import Decimal
+
+    from db import SEED
+    from models import ExtractedInvoice, LineItem, SourceInfo
+
+    stock = dict(SEED)
+
+    def invoice(address, flagged=False):
+        return ExtractedInvoice(
+            vendor="Widgets Inc.",
+            vendor_address=address,
+            due_date="2026-04-30",
+            currency="USD",
+            total=Decimal("500"),
+            subtotal=Decimal("500"),
+            noncommercial_address=flagged,
+            line_items=[
+                LineItem(
+                    item="WidgetA",
+                    description="WidgetA",
+                    quantity=Decimal("2"),
+                    unit_price=Decimal("250"),
+                    amount=Decimal("500"),
+                )
+            ],
+            source=SourceInfo(path="x.txt", filename="x.txt", format="txt", raw_text="Total: 500.00"),
+        )
+
+    home = assess(invoice("12 Oak St Apt 4"), "Total: 500.00\n", stock)
+    assert home.outcome == "approve"
+    assert any(finding.code == "NONCOMMERCIAL_ADDRESS" for finding in home.findings)
+    office = assess(invoice("1 Microsoft Way"), "Total: 500.00\n", stock)
+    assert office.outcome == "approve"
+    assert all(finding.code != "NONCOMMERCIAL_ADDRESS" for finding in office.findings)
+    flagged = assess(invoice("500 Commerce Blvd", flagged=True), "Total: 500.00\n", stock)
+    assert any(finding.code == "NONCOMMERCIAL_ADDRESS" for finding in flagged.findings)
+
+
+def test_eval_help_makes_no_api_call():
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    env.pop("XAI_API_KEY", None)
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "eval.py"), "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert "answer_key" in proc.stdout
+    assert "XAI_API_KEY" not in proc.stderr
 
 
 def test_answer_key_names_map_and_grade():

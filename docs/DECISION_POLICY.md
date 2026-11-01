@@ -1,6 +1,6 @@
 # Decision policy
 
-**Status:** Approved by the captain on 2026-10-31. The pipeline implements this policy.
+**Status:** Approved by the captain on 2026-10-31. Code changes to match this policy will follow; until they land, the pipeline's behavior may differ from it (see "Known follow-ups").
 
 ## Purpose
 
@@ -80,7 +80,5 @@ The captain's call: **a non-commercial address flagged on an otherwise clean inv
 
 ## Known follow-ups
 
-Both of these are now in the pipeline:
-
-- Agents are given today's date (injectable in tests). A printed date is future only when it is after that date, so April 2026 is not treated as future when today is later.
-- Critique does not treat a total over $10,000 as a risk by itself. A clean invoice over that threshold can be approved. The critique pass still runs, and it can only make the decision stricter for some other concern.
+- The agents must be given today's date. Dates in April 2026 are not in the future, but the audit has treated them as if they were.
+- The critique currently treats every invoice over $10,000 as risky just for being over the threshold, so clean invoices over $10,000 never get approved. That breaks the Approve rule above.

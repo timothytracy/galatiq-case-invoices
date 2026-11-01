@@ -5,8 +5,10 @@ The exit code is 0 only when every outcome and primary reason code match.
 Warning lines are printed and do not change the exit code.
 
     python3 scripts/eval.py
+    python3 scripts/eval.py --help
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -110,20 +112,30 @@ def _warning_hit(expected: str, codes: set[str], messages: str) -> bool:
     return text in messages
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Score each sample invoice against data/answer_key.json."
+    )
+    parser.add_argument(
+        "--invoices",
+        default=str(INVOICES),
+        help="Directory of invoice files (default: data/invoices)",
+    )
+    args = parser.parse_args(argv)
     try:
         GrokClient()
     except MissingAPIKey as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
+    invoices = Path(args.invoices)
     db_path = ROOT / "inventory.db"
     if not db_path.exists():
         create_database(db_path)
 
     key = load_answer_key()
     files = sorted(
-        path for path in INVOICES.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
+        path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
     )
     correct = 0
     for path in files:

@@ -56,7 +56,7 @@ Python decides. The model writes.
 - USD reference prices live in `policy.toml`: WidgetA 250, WidgetB 500, GadgetX 750. A different unit price is a warning. The inventory table is still the four README stock rows.
 - A revised invoice (a revision marker, or the words "revised invoice") is a hold. A labeled credit note whose math reconciles is a hold. Any other negative quantity or total is a reject.
 - Embedded instructions are a reject only when the extraction model flags them and the text matches an imperative system-directed phrase (`ignore previous instructions`, `approve this invoice`, `system:`, `skip review`). The bare word `approve` does not match.
-- A non-commercial address (a residential street type, or a civic marker such as Pennsylvania Ave) is noted and does not change the outcome. That is the captain's call for an otherwise clean invoice, and the same note is kept when a reject also applies.
+- A non-commercial address is a warning. The extraction model sets that flag. The only deterministic cue is an illustrative unit or apartment marker (`Apt`, `Unit`). It does not change the outcome.
 - The audit compares extracted fields with the raw text, checks the decision against the findings, recomputes the math and the fraud signals, and checks that critique concerns were named in the revised reasoning. It can only make the outcome stricter. It cannot turn a hard failure or a non-USD invoice into a payment.
 - Extraction, the risks and conclusion inside the approval reasoning, the critique, and the audit verdict are Grok calls. The client is the OpenAI SDK pointed at `https://api.x.ai/v1`. The model is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`. `rules_applied` and `evidence` are filled in Python from the real findings and amounts, so the model cannot invent the facts. Revisions append the previous reasoning when approval runs again after critique, and when the audit tightens a decision.
 
@@ -99,7 +99,7 @@ Each label is the rule result for that file alone. The one-line text is `data/la
 | invoice_1015.csv | approve | WidgetA 10, WidgetB 5, and GadgetX 2 are inside the snapshot. |
 | invoice_1016.json | reject | WidgetC is not in the database. README: unknown item. |
 
-Seven approve, nine reject, four hold. The machine-readable expected result is `data/answer_key.json`. `data/labels.json` is the same outcomes in the shape the older tests read.
+Seven approve, nine reject, four hold. `scripts/eval.py` scores outcome and primary reason code against `data/answer_key.json`. `data/labels.json` is the original label file and is not read by eval.
 
 ## Twins
 

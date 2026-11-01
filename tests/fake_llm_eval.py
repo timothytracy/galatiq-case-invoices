@@ -10,10 +10,7 @@ critique, and audit replies match the defaults in tests/test_pipeline.py.
 """
 
 import json
-import re
-from contextlib import redirect_stdout
-from decimal import Decimal
-from io import StringIO
+from datetime import date
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -25,9 +22,9 @@ from parsers import parse_file
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-LABELS = ROOT / "data" / "labels.json"
 SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
-TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+# Fixed so the sample run does not depend on the wall clock or the time zone.
+AS_OF = date(2026, 10, 31)
 
 
 class ZeroRandom:
@@ -121,85 +118,45 @@ def handler_for(path: Path):
     return handler
 
 
-def _jsonable(value):
-    if isinstance(value, BaseModel):
-        return _jsonable(value.model_dump(mode="json"))
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, Decimal):
-        return format(value, "f")
-    if isinstance(value, Path):
-        return str(value)
-    return value
-
-
-def _stabilize(value, invoices_dir: Path):
-    """Drop wall-clock timestamps and make invoice paths repo-relative.
-
-    The pipeline prints a UTC timestamp on every stage log. That is the only
-    value that changes between two identical runs.
-    """
-
-    prefix = str(invoices_dir.resolve())
-    prefix_plain = str(invoices_dir)
-
-    def walk(item):
-        if isinstance(item, dict):
-            return {key: walk(inner) for key, inner in item.items()}
-        if isinstance(item, list):
-            return [walk(inner) for inner in item]
-        if isinstance(item, str):
-            text = item.replace(prefix, "data/invoices").replace(prefix_plain, "data/invoices")
-            return TIMESTAMP.sub("TIMESTAMP", text)
-        return item
-
-    return walk(value)
+def _reason(result: dict) -> str | None:
+    decision = result.get("decision")
+    if decision is None:
+        return None
+    if isinstance(decision, BaseModel):
+        return decision.reasoning.conclusion
+    return decision["reasoning"]["conclusion"]
 
 
 def run_samples(db_path: Path) -> dict:
-    """Same per-file loop as scripts/eval.py, with the test fake injected."""
+    """One row per sample file: outcome, reason code, and the reason text.
 
-    labels = {
-        row["file"]: row["outcome"]
-        for row in json.loads(LABELS.read_text(encoding="utf-8"))["invoices"]
-    }
+    as_of is fixed. The row does not include stage logs or today's date.
+    """
+
     files = sorted(
         path for path in INVOICES.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
     )
     rows = []
-    correct = 0
     for path in files:
-        stdout = StringIO()
-        with redirect_stdout(stdout):
-            result = run_invoice(
-                path,
-                db_path,
-                FakeLLM(handler_for(path)),
-                clock=FakeClock(),
-                rng=ZeroRandom(),
-                max_attempts=5,
-            )
-        actual = result.get("outcome")
-        expected = labels.get(path.name)
-        ok = actual == expected
-        correct += int(ok)
-        summary = (
-            f"{path.name}\toutcome={actual}\texpected={expected}\t"
-            f"payment={payment_status(result)}\t{'ok' if ok else 'MISS'}"
+        result = run_invoice(
+            path,
+            db_path,
+            FakeLLM(handler_for(path)),
+            clock=FakeClock(),
+            rng=ZeroRandom(),
+            max_attempts=5,
+            as_of=AS_OF,
         )
         rows.append(
             {
-                "summary": summary,
-                "stdout": _stabilize(stdout.getvalue(), INVOICES),
-                "state": _stabilize(_jsonable(dict(result)), INVOICES),
+                "file": path.name,
+                "outcome": result.get("outcome"),
+                "reason_code": result.get("reason_code"),
+                "reason": _reason(result),
+                "payment": payment_status(result),
             }
         )
-    return {
-        "score": f"score {correct}/{len(files)}",
-        "invoices": rows,
-    }
+    return {"as_of": AS_OF.isoformat(), "invoices": rows}
 
 
 def main() -> int:
@@ -209,8 +166,11 @@ def main() -> int:
         create_database(db_path)
     report = run_samples(db_path)
     for row in report["invoices"]:
-        print(row["summary"], flush=True)
-    print(report["score"], flush=True)
+        print(
+            f"{row['file']}\t{row['outcome']}\t{row['reason_code']}\t{row['payment']}",
+            flush=True,
+        )
+    print(f"{len(report['invoices'])} files", flush=True)
     return 0
 
 
