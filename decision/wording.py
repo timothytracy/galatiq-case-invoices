@@ -172,11 +172,11 @@ def explain(
     return outcome, code, reason, action
 
 
-def _review_money(amount: Decimal, tolerance: Decimal) -> str:
-    """Two decimals and a dollar sign. The currency code is its own clause."""
+def _review_money(amount: Decimal, tolerance: Decimal, currency: str) -> str:
+    """Two decimals, then the currency code. The same shape for every policy currency."""
 
     quantized = amount.quantize(tolerance, rounding=ROUND_HALF_UP)
-    return f"${quantized:,.2f}"
+    return f"{quantized:,.2f} {currency}"
 
 
 def approval_conclusion(
@@ -200,16 +200,18 @@ def approval_conclusion(
             items.append(line.item)
     known = bool(items) and "UNKNOWN_ITEM" not in codes
     if known:
-        noun = "item" if len(items) == 1 else "items"
-        parts.append(f"All {len(items)} {noun} found in inventory")
+        if len(items) == 1:
+            parts.append("1 item found in inventory")
+        else:
+            parts.append(f"All {len(items)} items found in inventory")
     if known and "STOCK_SHORTFALL" not in codes:
         parts.append("stock covers every line")
     if invoice.total is not None and invoice.line_items and "TOTAL_MISMATCH" not in codes:
         parts.append("line and grand totals reconcile")
-    allowed = [code for code in policy.allowed_currencies if code == invoice.currency]
-    if invoice.total is not None and allowed:
-        amount = _review_money(invoice.total, policy.money_tolerance)
-        limit = _review_money(policy.scrutiny_threshold, policy.money_tolerance)
+    if invoice.total is not None and invoice.currency in policy.allowed_currencies:
+        code = invoice.currency
+        amount = _review_money(invoice.total, policy.money_tolerance, code)
+        limit = _review_money(policy.scrutiny_threshold, policy.money_tolerance, code)
         if invoice.total > policy.scrutiny_threshold:
             clause = f"{amount} is over the {limit} review threshold"
             if passed_critique:
@@ -219,9 +221,16 @@ def approval_conclusion(
         else:
             clause = f"{amount} is at the {limit} review threshold"
         parts.append(clause)
-        parts.append(f"currency {allowed[0]}")
-    warnings = [finding.message for finding in findings if finding.severity != "blocking"]
-    parts.append(" ".join(warnings) if warnings else "no warnings")
+        parts.append(f"currency {code}")
+    warnings = [
+        finding.message.rstrip(".")
+        for finding in findings
+        if finding.severity == "warning"
+    ]
+    if warnings:
+        parts.append("warnings: " + "; ".join(warnings))
+    else:
+        parts.append("no warnings")
     sentence = "; ".join(parts)
     if not sentence.endswith("."):
         sentence += "."

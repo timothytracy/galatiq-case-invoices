@@ -482,9 +482,9 @@ _BAD_REASON = json.dumps(
 _GOOD_REASON = json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
 # Default extraction() is one WidgetA line, total 500, and no findings.
 _CLEAN_CONCLUSION = (
-    "All 1 item found in inventory; stock covers every line; "
+    "1 item found in inventory; stock covers every line; "
     "line and grand totals reconcile; "
-    "$500.00 is under the $10,000.00 review threshold; "
+    "500.00 USD is under the 10,000.00 USD review threshold; "
     "currency USD; no warnings."
 )
 
@@ -854,7 +854,7 @@ def test_clean_approval_conclusion_names_every_check(tmp_path, db_path):
     assert result["decision"].reasoning.conclusion == (
         "All 3 items found in inventory; stock covers every line; "
         "line and grand totals reconcile; "
-        "$1,750.00 is under the $10,000.00 review threshold; "
+        "1,750.00 USD is under the 10,000.00 USD review threshold; "
         "currency USD; no warnings."
     )
     assert result["decision"].reasoning.risks_considered == ["no extra risk"]
@@ -886,15 +886,14 @@ def test_approval_with_warnings_lists_the_finding_messages(tmp_path, db_path):
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
     assert status(result) == "paid"
-    messages = [finding.message for finding in result["findings"]]
+    messages = [finding.message.rstrip(".") for finding in result["findings"]]
     assert [finding.code for finding in result["findings"]] == ["FRAUD_SIGNAL", "PRICE_VARIANCE"]
     conclusion = result["decision"].reasoning.conclusion
     assert conclusion == (
-        "All 1 item found in inventory; stock covers every line; "
+        "1 item found in inventory; stock covers every line; "
         "line and grand totals reconcile; "
-        "$520.00 is under the $10,000.00 review threshold; "
-        "currency USD; "
-        + " ".join(messages)
+        "520.00 USD is under the 10,000.00 USD review threshold; "
+        "currency USD; warnings: " + "; ".join(messages) + "."
     )
     assert "no warnings" not in conclusion
     for message in messages:
@@ -946,7 +945,7 @@ def test_approval_over_the_threshold_names_critique(tmp_path, db_path):
     shared = (
         "All 3 items found in inventory; stock covers every line; "
         "line and grand totals reconcile; "
-        "$12,500.00 is over the $10,000.00 review threshold"
+        "12,500.00 USD is over the 10,000.00 USD review threshold"
     )
     assert first == shared + "; currency USD; no warnings."
     assert "passed critique" not in first
@@ -979,12 +978,13 @@ def test_approval_conclusion_reads_threshold_and_currency_from_policy():
     )
     under = approval_conclusion(invoice, [], policy)
     assert under == (
-        "All 1 item found in inventory; stock covers every line; "
+        "1 item found in inventory; stock covers every line; "
         "line and grand totals reconcile; "
-        "$1,800.00 is under the $2,500.00 review threshold; "
+        "1,800.00 EUR is under the 2,500.00 EUR review threshold; "
         "currency EUR; no warnings."
     )
     assert "USD" not in under
+    assert "$" not in under
     assert "10,000" not in under
     over = invoice.model_copy(update={"total": Decimal("3000")})
     assert "passed critique" not in approval_conclusion(over, [], policy)
@@ -994,9 +994,16 @@ def test_approval_conclusion_reads_threshold_and_currency_from_policy():
         message="Wire transfer is a fraud signal.",
         severity="warning",
     )
-    warned = approval_conclusion(invoice, [noted], policy)
-    assert warned.endswith("Wire transfer is a fraud signal.")
+    info = Finding(
+        code="OCR_FIX",
+        message="OCR O-to-0 fix applied because the math reconciles.",
+        severity="info",
+    )
+    warned = approval_conclusion(invoice, [noted, info], policy)
+    assert warned.endswith("warnings: Wire transfer is a fraud signal.")
     assert "no warnings" not in warned
+    assert "OCR" not in warned
+    assert approval_conclusion(invoice, [info], policy).endswith("no warnings.")
 
 
 def test_approval_prompt_names_the_invoice_facts():

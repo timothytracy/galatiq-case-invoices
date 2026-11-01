@@ -5,7 +5,7 @@
       "file": "invoice_1001.txt",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; $5,000.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; 5,000.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
@@ -26,7 +26,7 @@
       "file": "invoice_1004.json",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; $1,890.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; 1,890.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
@@ -47,7 +47,7 @@
       "file": "invoice_1006.csv",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; $2,750.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; 2,750.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
@@ -75,21 +75,21 @@
       "file": "invoice_1010.txt",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 3 items found in inventory; stock covers every line; line and grand totals reconcile; $7,185.00 is under the $10,000.00 review threshold; currency USD; Unit price 300.00 for WidgetA differs from the reference price 250.00. Descriptor on WidgetA (rush order): matched as WidgetA, 'rush order' kept as a note.",
+      "reason": "All 3 items found in inventory; stock covers every line; line and grand totals reconcile; 7,185.00 USD is under the 10,000.00 USD review threshold; currency USD; warnings: Unit price 300.00 for WidgetA differs from the reference price 250.00; Descriptor on WidgetA (rush order): matched as WidgetA, 'rush order' kept as a note.",
       "payment": "paid"
     },
     {
       "file": "invoice_1011.pdf",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; $3,000.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; 3,000.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
       "file": "invoice_1011.txt",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; $3,000.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 2 items found in inventory; stock covers every line; line and grand totals reconcile; 3,000.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
@@ -131,7 +131,7 @@
       "file": "invoice_1015.csv",
       "outcome": "approve",
       "reason_code": null,
-      "reason": "All 3 items found in inventory; stock covers every line; line and grand totals reconcile; $6,500.00 is under the $10,000.00 review threshold; currency USD; no warnings.",
+      "reason": "All 3 items found in inventory; stock covers every line; line and grand totals reconcile; 6,500.00 USD is under the 10,000.00 USD review threshold; currency USD; no warnings.",
       "payment": "paid"
     },
     {
