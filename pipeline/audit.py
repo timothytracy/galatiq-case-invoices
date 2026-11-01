@@ -10,9 +10,9 @@ from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
 from pipeline.fact_guard import (
-    VERIFIED_SENTENCE,
+    AUDIT_CLAIMS,
+    VERIFIED_FACTS,
     apply_concern_guard,
-    concern_text,
     partition_concerns,
     verified_payload,
 )
@@ -65,13 +65,10 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         )
 
     fresh = assess(invoice, state.raw_text, stock)
-    kept_concerns, dropped = partition_concerns(draft.concerns, invoice, stock, as_of)
+    # Stock and totals are not checked here: a note may be about the raw text.
+    kept_feedback, dropped = partition_concerns(draft.feedback, invoice, stock, as_of, "audit")
     verdict, feedback = apply_concern_guard(
-        draft.verdict,
-        list(draft.feedback),
-        list(draft.cited_codes),
-        kept_concerns,
-        dropped,
+        draft.verdict, kept_feedback, dropped, list(draft.cited_codes)
     )
     ignored = _ignored_audit_note(verdict, list(draft.cited_codes), feedback, draft.notes)
     if ignored is not None:
@@ -108,7 +105,6 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         "notes": draft.notes,
         "cited_codes": [str(code).strip().upper() for code in draft.cited_codes if str(code).strip()],
         "audit_note": note_text,
-        "concerns": [concern_text(item) for item in kept_concerns],
         "dropped_concerns": dropped,
         "attempts": step_attempts,
         "decision": new_decision.model_dump(mode="json"),
@@ -205,9 +201,9 @@ def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
                 "Compare the extracted fields with the raw text. Check the decision against the "
                 "findings. Re-check the line math and any fraud signals. Check that critique "
                 "concerns were addressed. Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
-                "concerns (list of objects), feedback (list of field notes, required for SEND_BACK), "
+                "feedback (list of strings or objects, required for SEND_BACK), "
                 "notes (string), and cited_codes (list of finding codes this verdict relies on). "
-                f"{VERIFIED_SENTENCE} "
+                f"{VERIFIED_FACTS} {AUDIT_CLAIMS} "
                 "You can only make the outcome stricter. Never turn a hard failure or a non-USD "
                 "invoice into a payment.\n"
                 "Warning-only codes, which never hold or reject on their own: "

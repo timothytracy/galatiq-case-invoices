@@ -15,11 +15,10 @@ from decision.outcome import (
 )
 from decision.policy import APPROVAL_THRESHOLD_USD, MONEY, POLICY, Policy
 
-def price_spike_reason(ratio: Decimal | None = None) -> str:
-    """Answer-key name for a price spike. The percent is the configured ratio."""
-
-    used = POLICY.price_spike_ratio if ratio is None else ratio
-    return f"Unit price {used * 100:.0f}% or more above reference"
+def price_spike_reason() -> str:
+    # The reason text depends on price_spike_ratio. 0.50 stays 50; 0.333 stays 33.3.
+    percent = format(POLICY.price_spike_ratio * 100, "f").rstrip("0").rstrip(".")
+    return f"Unit price {percent}% or more above reference"
 
 
 # The answer key names findings in the policy's words. This is the only map.

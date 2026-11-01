@@ -6,7 +6,8 @@ from db import load_stock
 from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
 from pipeline.fact_guard import (
-    VERIFIED_SENTENCE,
+    CRITIQUE_CLAIMS,
+    VERIFIED_FACTS,
     concern_text,
     partition_concerns,
     verified_payload,
@@ -63,8 +64,8 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
     if state.invoice is None:
         kept = checkable
     else:
-        kept, dropped = partition_concerns(checkable, state.invoice, stock, as_of)
-    concerns = [concern_text(item) for item in kept]
+        kept, dropped = partition_concerns(checkable, state.invoice, stock, as_of, "critique")
+    concerns = [concern_text(item) for item in kept if concern_text(item)]
     stricter = bool(draft.stricter) and decision.decision == "approve" and bool(concerns)
     result = {
         "concerns": concerns,
@@ -104,7 +105,7 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts) -> list[dict]:
                 "Being over the scrutiny threshold is not a risk. Do not set stricter only "
                 "because the total is over it. "
                 "You cannot approve a failure and you cannot clear a non-USD hold. "
-                f"{VERIFIED_SENTENCE} Return JSON only."
+                f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Return JSON only."
             ),
         },
         {

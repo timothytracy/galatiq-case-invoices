@@ -41,27 +41,12 @@ def load_answer_key(path: Path | None = None) -> dict:
 
 
 def invoice_lookup(path: Path) -> str:
-    """Answer-key path for one invoice file.
+    """Repo-relative answer-key path, or data/invoices/<name> when it is outside the repo."""
 
-    Keys are repo-relative, such as data/invoices/invoice_1001.txt and
-    data/extra_invoices/invoice_2106.txt. A relative path is resolved from the
-    working directory and then from the repo root.
-    """
-
-    options = [path]
-    if not path.is_absolute():
-        options.append(ROOT / path)
-    seen = set()
-    for candidate in options:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        try:
-            return resolved.relative_to(ROOT.resolve()).as_posix()
-        except ValueError:
-            continue
-    return f"data/invoices/{path.name}"
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return f"data/invoices/{path.name}"
 
 
 def _accepted_codes(expected: dict) -> set:

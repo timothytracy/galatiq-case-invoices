@@ -176,11 +176,11 @@ class ReasoningDraft(_Loose):
 
 
 class FactConcern(_Loose):
-    """One critique or audit concern the code can check against a verified fact.
+    """One structured claim. A plain string is category other and is not checked.
 
-    category is stock, totals, date, or other. item is the inventory name for a
-    stock concern. field is invoice_date or due_date for a date, or total or the
-    line item for totals. A plain string has no category, so it is other.
+    stock claims the requested quantity exceeds stock. totals_mismatch claims the
+    totals do not reconcile. future_date, with field invoice_date or due_date,
+    claims that date is after today. Anything else is kept.
     """
 
     category: str = "other"
@@ -203,11 +203,11 @@ class CritiqueDraft(_Loose):
 
 class AuditDraft(_Loose):
     verdict: AuditVerdict
-    feedback: list[str] = Field(default_factory=list)
+    # A string is a note. An object is a structured claim. See FactConcern.
+    feedback: list[FactConcern] = Field(default_factory=list)
     notes: str = ""
     # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
-    concerns: list[FactConcern] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):

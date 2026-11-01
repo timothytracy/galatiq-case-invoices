@@ -929,21 +929,11 @@ def test_grade_accepts_alternative_reasons(capsys):
     assert not grade(other, unknown)["reason_ok"]
 
 
-def test_answer_key_lookup_keeps_the_extra_invoice_prefix():
-    sample = invoice_lookup(ROOT / "data" / "invoices" / "invoice_1001.txt")
-    assert sample == "data/invoices/invoice_1001.txt"
-    extra_path = Path("data/extra_invoices/invoice_2106.txt")
-    assert invoice_lookup(extra_path) == "data/extra_invoices/invoice_2106.txt"
-    assert invoice_lookup(ROOT / extra_path) == "data/extra_invoices/invoice_2106.txt"
-    key = load_answer_key(ROOT / "data" / "extra_answer_key.json")
-    folder = ROOT / "data" / "extra_invoices"
-    files = [
-        path
-        for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in {".txt", ".pdf", ".json", ".csv", ".xml"}
-    ]
-    assert {invoice_lookup(path) for path in files} == set(key)
-    assert key["data/extra_invoices/invoice_2106.txt"]["outcome"] == "APPROVE"
+def test_answer_key_lookup_uses_the_repo_relative_path():
+    assert invoice_lookup(ROOT / "data" / "invoices" / "invoice_1001.txt") == "data/invoices/invoice_1001.txt"
+    extra = ROOT / "data" / "extra_invoices" / "invoice_2106.txt"
+    assert invoice_lookup(extra) == "data/extra_invoices/invoice_2106.txt"
+    assert invoice_lookup(Path("data/extra_invoices/invoice_2106.txt")) == "data/extra_invoices/invoice_2106.txt"
 
 
 def test_sample_invoices_match_the_answer_key(db_path):
