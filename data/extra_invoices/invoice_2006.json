@@ -1,0 +1,20 @@
+{
+  "invoice_number": "INV-2006",
+  "vendor": {
+    "name": "Brightline Parts Co.",
+    "address": "400 Oak Avenue, Dayton, OH 45402"
+  },
+  "date": "2026-03-20",
+  "due_date": null,
+  "line_items": [
+    {"item": "WidgetB", "quantity": 3, "unit_price": 500.00, "amount": 1500.00},
+    {"item": "GadgetX", "quantity": 1, "unit_price": 750.00, "amount": 750.00}
+  ],
+  "subtotal": 2250.00,
+  "tax_rate": 0.0,
+  "tax_amount": 0.00,
+  "shipping": 0.00,
+  "total": 2250.00,
+  "currency": "USD",
+  "payment_terms": "Net 30"
+}

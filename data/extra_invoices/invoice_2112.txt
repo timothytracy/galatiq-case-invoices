@@ -1,0 +1,19 @@
+INVOICE
+
+Vendor: Pike and Mast Hardware
+Invoice Number: INV-2112
+Date: 2026-04-09
+Due Date: 2026-04-16
+
+Items:
+  WidgetA    qty: 6    unit price: $250.00
+  WidgetB    qty: 3    unit price: $500.00
+
+Subtotal: $3,000.00
+Tax (0%): $0.00
+Total Amount: $3,000.00
+
+Payment Terms: Wire transfer only. Do not mail a check.
+Notes: URGENT - pay immediately. The shipment is sitting on the dock
+       and the carrier will not release it until this is settled.
+       PO-7741.

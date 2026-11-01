@@ -1,0 +1,18 @@
+INVOICE
+
+Vendor: Harrow Street Metals
+Invoice Number: INV-2108
+Date: 2026-03-30
+Due Date: 2026-04-30
+
+Items:
+  WidgitA    qty: 5    unit price: $250.00
+  WidgetB    qty: 2    unit price: $500.00
+
+Subtotal: $2,250.00
+Tax (0%): $0.00
+Total Amount: $2,250.00
+
+Payment Terms: Net 30
+Notes: PO 88421. The buyer spelled the first item the way it sounds.
+       Please confirm the catalog name before cutting a check.

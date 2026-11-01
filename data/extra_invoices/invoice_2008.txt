@@ -1,0 +1,25 @@
+                    I N V O I C E
+
+  Vndr:  Millwright Supply
+  Inv #:     2OO8
+  Dt:        2O26-O4-O2
+  Due Dt:    2O26-O5-O2
+
+  TO:    ACME Corp
+         Dock lB
+
+  ----------------------------------------
+  ITEM          QTY    PRICE        TOTAL
+  ----------------------------------------
+  Widget A       1O    $250.O0     $2,5OO.OO
+  WidgetB         4    $5OO.OO     $2,OOO.OO
+  Gadget X        2    $75O.OO     $1,5OO.OO
+  ----------------------------------------
+                  SUBTOTAL:        $6,OOO.OO
+                  TAX (0%):            $0.OO
+                  SHIPPING:          $15O.OO
+                  TOTAL:           $6,150.00
+
+  Notes: Deliver to dock lB. The mark
+         before B is the digit one.
+  Terms: Net 30

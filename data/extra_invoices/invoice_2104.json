@@ -1,0 +1,27 @@
+{
+  "invoice_number": "INV-2104",
+  "vendor": {
+    "name": "Marlow Bearing Co.",
+    "address": "900 W. Commerce St, Suite 200, Grand Rapids, MI 49503"
+  },
+  "date": "2026-04-04",
+  "due_date": "2026-05-04",
+  "line_items": [
+    {"item": "WidgetA", "quantity": 6, "unit_price": 250.00, "amount": 1500.00},
+    {
+      "item": "WidgetB",
+      "quantity": 3,
+      "unit_price": 480.00,
+      "amount": 1440.00,
+      "note": "Blanket PO price from 2025, not the list price"
+    }
+  ],
+  "subtotal": 2940.00,
+  "tax_rate": 0,
+  "tax_amount": 0.00,
+  "shipping": 0.00,
+  "total": 2940.00,
+  "currency": "USD",
+  "payment_terms": "Net 30",
+  "notes": "Accounts payable copy. WidgetB is the blanket-PO price. PO-1904."
+}

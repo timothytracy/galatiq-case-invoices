@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<invoice>
+  <header>
+    <invoice_number>INV-2110</invoice_number>
+    <vendor>Lantern Field Services</vendor>
+    <date>2026-04-11</date>
+    <due_date>2026-05-11</due_date>
+    <currency>USD</currency>
+  </header>
+  <line_items>
+    <item>
+      <name>WidgetB</name>
+      <quantity>2</quantity>
+      <unit_price>-500.00</unit_price>
+      <amount>-1000.00</amount>
+      <note>Two units returned, undamaged, against PO-2288</note>
+    </item>
+  </line_items>
+  <totals>
+    <subtotal>-1000.00</subtotal>
+    <tax_rate>0.00</tax_rate>
+    <tax_amount>0.00</tax_amount>
+    <shipping>0.00</shipping>
+    <total>-1000.00</total>
+  </totals>
+  <payment_terms>Credit memo - do not pay</payment_terms>
+  <notes>Credit note for the two WidgetB units returned on 2026-03-28. Apply against open items. Do not send a payment.</notes>
+</invoice>

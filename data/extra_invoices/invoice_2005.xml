@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<invoice>
+  <header>
+    <invoice_number>INV-2005</invoice_number>
+    <vendor>Cedar Ridge Supply</vendor>
+    <date>2026-03-12</date>
+    <due_date>2026-04-12</due_date>
+    <currency>USD</currency>
+  </header>
+  <line_items>
+    <item>
+      <name>WidgetA</name>
+      <quantity>5</quantity>
+      <unit_price>250.00</unit_price>
+      <amount>1250.00</amount>
+    </item>
+    <item>
+      <name>WidgetB</name>
+      <quantity>2</quantity>
+      <unit_price>500.00</unit_price>
+      <amount>1000.00</amount>
+    </item>
+  </line_items>
+  <totals>
+    <subtotal>2250.00</subtotal>
+    <tax_rate>0.10</tax_rate>
+    <tax_amount>225.00</tax_amount>
+    <shipping>75.00</shipping>
+    <total>2475.00</total>
+  </totals>
+  <payment_terms>Net 30</payment_terms>
+  <notes>Shipping is 75.00 and is printed above. The total line was not updated to include it.</notes>
+</invoice>
