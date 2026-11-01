@@ -40,6 +40,7 @@ KEY_REASON_TO_CODE = {
     "New remittance account": "NEW_REMITTANCE",
     price_spike_reason(): "PRICE_SPIKE",
     "Grok or system failure after retries": "SYSTEM_ERROR",
+    "Item name not in source text": "ITEM_NOT_IN_SOURCE",
 }
 
 # What a person does on a hold, or what the vendor must send on a reject.
@@ -61,6 +62,7 @@ ACTION = {
     "PRICE_SPIKE": "Verify the price with the vendor.",
     "SYSTEM_ERROR": "Rerun the invoice or process it by hand.",
     "BAD_REASONING": "Rerun the invoice or process it by hand.",
+    "ITEM_NOT_IN_SOURCE": "Check the item name against the invoice.",
     "CRITIQUE_HOLD": "Review the critique concern. Nothing is paid.",
     "AUDIT_ESCALATED": "Rerun the invoice or process it by hand.",
 }
@@ -88,6 +90,9 @@ RULE_TEXT = {
         "reference price is a hold."
     ),
     "BAD_REASONING": "Approval wording that refuses the input or contradicts approve is not paid.",
+    "ITEM_NOT_IN_SOURCE": (
+        "An extracted item name that is not in the invoice text is a hold. The name is not corrected."
+    ),
     "SYSTEM_ERROR": "A failed agent step is a hold tracked as a system error and is not paid.",
     "AUDIT_ESCALATED": "The audit escalated the invoice to a hold.",
     "UNREADABLE": "The invoice file could not be read.",

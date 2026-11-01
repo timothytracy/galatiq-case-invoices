@@ -10,6 +10,7 @@ from decision.invoice_fields import (
     as_money,
     canonical_item,
     different,
+    item_key,
     non_usd_message,
     resolve_currency,
     show_money,
@@ -123,14 +124,12 @@ def collect_findings(
 
     for item, qty in summed_quantities(invoice, stock).items():
         if item not in stock:
-            findings.append(
-                _finding(
-                    "UNKNOWN_ITEM",
-                    f"{item} is not in the inventory database.",
-                    "blocking",
-                    item,
-                )
-            )
+            # Hint only. The stored item stays the extracted name.
+            message = f"{item} is not in the inventory database."
+            meant = _likely_name(item, stock)
+            if meant is not None:
+                message = f"{message} Likely meant {meant}."
+            findings.append(_finding("UNKNOWN_ITEM", message, "blocking", item))
         elif qty > Decimal(stock[item]):
             findings.append(
                 _finding(
@@ -140,6 +139,21 @@ def collect_findings(
                     item,
                 )
             )
+
+    # line.item is the base name: a trailing "(rush order)" was already split into the note.
+    # item_key is the same case, space, and hyphen fold as inventory matching.
+    # Empty source text fails closed. Every reader supplies text; a missing one holds.
+    # The line is not rewritten.
+    for line in invoice.line_items:
+        if _name_in_source(line.item, raw_text):
+            continue
+        findings.append(
+            _finding(
+                "ITEM_NOT_IN_SOURCE",
+                f"{line.item} is not in the invoice text.",
+                item=line.item,
+            )
+        )
 
     findings.extend(_math_findings(invoice))
     if currency not in POLICY.allowed_currencies:
@@ -311,6 +325,48 @@ def evidence_lines(
     if not findings:
         lines.append("No stock, math, currency, or fraud finding.")
     return lines
+
+
+def _name_in_source(name: str, raw_text: str | None) -> bool:
+    """True when the base item name appears in the source text.
+
+    Both sides go through item_key, so case, spaces, and hyphens do not matter.
+    An empty name is not a match. An empty or missing source is not a match either:
+    txt, json, csv, and xml are the file text, and a pdf is the pypdf text layer.
+    No supported format lacks that text. A missing one fails closed.
+    """
+
+    key = item_key(name)
+    if not key:
+        return False
+    return key in item_key(raw_text or "")
+
+
+def _one_edit(left: str, right: str) -> bool:
+    """True when one insertion, deletion, or substitution turns left into right."""
+
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    if len(left) > len(right):
+        left, right = right, left
+    for index in range(len(right)):
+        if left == right[:index] + right[index + 1:]:
+            return True
+    return False
+
+
+def _likely_name(name: str, stock: dict[str, int]) -> str | None:
+    """The inventory spelling one edit away, only when exactly one name is."""
+
+    key = item_key(name)
+    if not key:
+        return None
+    found = [item for item in stock if _one_edit(key, item_key(item))]
+    if len(found) == 1:
+        return found[0]
+    return None
 
 
 def _field_missing(invoice: ExtractedInvoice, field: str) -> bool:

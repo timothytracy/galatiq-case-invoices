@@ -43,7 +43,7 @@ def normalize_invoice_number(raw: str | None) -> str | None:
     return f"INV-{match.group(1)}"
 
 
-def _item_key(name: str) -> str:
+def item_key(name: str) -> str:
     """Case, spaces, and hyphens do not change which item a name is."""
 
     return re.sub(r"[\s\-]+", "", name).casefold()
@@ -52,9 +52,9 @@ def _item_key(name: str) -> str:
 def canonical_item(name: str, stock: dict[str, int]) -> str:
     """Inventory spelling when the name matches. Otherwise the name with separators removed."""
 
-    key = _item_key(name)
+    key = item_key(name)
     for item in stock:
-        if _item_key(item) == key:
+        if item_key(item) == key:
             return item
     return re.sub(r"[\s\-]+", "", name)
 

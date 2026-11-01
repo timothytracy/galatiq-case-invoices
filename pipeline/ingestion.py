@@ -84,6 +84,7 @@ def _extract_messages(raw: str, feedback: list[str], as_of) -> list[dict]:
                 "TASK extract\n"
                 f"{today_line(as_of)}\n"
                 "Extract one invoice as a JSON object. Use only values printed in the document. "
+                "Copy each item name exactly as printed; don't correct spelling or match it to a catalog. "
                 "Do not invent lines. currency is a 3-letter code. "
                 "If the document shows euro, EUR, euros, or €, currency is EUR. "
                 "If currency is missing and amounts use $, currency is USD. "
