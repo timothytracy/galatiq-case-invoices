@@ -40,8 +40,7 @@ Hold only when a person can do something the system can't. Every hold names that
 | Labeled credit note whose math reconciles | Accounting applies the credit. Nothing is paid. |
 | Renamed vendor | Verify it is the same company. |
 | Non-commercial vendor address | Verify the vendor. |
-| Two or more fraud signals together (urgency pressure, wire-only payment, a new remittance account) | Verify with the vendor using contact details already on file. |
-| Unit price 50% or more above the USD reference | Verify the price with the vendor. |
+| Two or more fraud signals together (urgency pressure, wire-only payment, a new remittance account, a price well above our reference) | Verify with the vendor using contact details already on file. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
@@ -51,7 +50,7 @@ Warnings are recorded in the findings and shown in the logs. On their own they d
 
 - A single fraud signal.
 - A total within 2% under the $10,000 threshold.
-- A unit price that differs from our reference price. The check uses the absolute unit price. A price 50% or more above the reference is also the hold above.
+- A unit price that differs from our reference price.
 - A descriptor on an item name, such as "WidgetA (rush order)". The descriptor is split into a note and the item is matched as WidgetA.
 
 Item names are matched exactly, after normalizing only case, spaces, and hyphens.
