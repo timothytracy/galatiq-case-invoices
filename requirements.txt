@@ -4,3 +4,4 @@ pypdf==6.21.4
 pytest==9.2.0
 langgraph==1.2.19
 langchain-core==1.7.3
+streamlit==1.66.1
