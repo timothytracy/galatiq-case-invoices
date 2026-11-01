@@ -215,7 +215,7 @@ The deterministic readers under `parsers/` are the offline stand-in and the test
 
 `pipeline/validation.py` is Python only. It loads the stock snapshot read-only and calls `assess` in `decision/findings.py`. That pass checks required fields (vendor, due date, line items, total), quantities, unknown items, summed stock, line math within 0.01, currency, revisions, credit notes, fraud wording, USD price spikes, and the phrase check for embedded instructions.
 
-Embedded instructions reject only when the model flag is set and the text matches an imperative phrase aimed at the system. The bare word "approve" does not match. A non-commercial vendor address is recorded as a warning (`NONCOMMERCIAL_ADDRESS`), following the captain's ruling on 1004; the policy's Hold-table row for it is not applied as a hold. The deterministic address cue is an apartment marker. An O-to-0 reading is kept only when the math then reconciles, and it is recorded as `OCR_FIX`.
+Embedded instructions reject only when the model flag is set and the text matches an imperative phrase aimed at the system. The bare word "approve" does not match. A non-commercial vendor address is recorded as a warning (`NONCOMMERCIAL_ADDRESS`) and is never a hold by itself, as the policy states, following the captain's ruling on 1004. The deterministic address cue is an apartment marker. An O-to-0 reading is kept only when the math then reconciles, and it is recorded as `OCR_FIX`.
 
 If the assessment is approve, the graph continues with the outcome cleared. A reject or a hold is stored and `reject_log` is next.
 

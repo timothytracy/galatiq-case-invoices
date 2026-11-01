@@ -1,6 +1,6 @@
 # Decision policy
 
-**Status:** Approved by the captain on 2026-10-31. Code changes to match this policy will follow; until they land, the pipeline's behavior may differ from it (see "Known follow-ups").
+**Status:** Approved by the captain on 2026-10-31. The code now matches this policy.
 
 ## Purpose
 
@@ -39,7 +39,6 @@ Hold only when a person can do something the system can't. Every hold names that
 | Revised invoice | Confirm it replaces the original and that the original was not paid. |
 | Labeled credit note whose math reconciles | Accounting applies the credit. Nothing is paid. |
 | Renamed vendor | Verify it is the same company. |
-| Non-commercial vendor address | Verify the vendor. |
 | Two or more fraud signals together (urgency pressure, wire-only payment, a new remittance account) | Verify with the vendor using contact details already on file. |
 | Unit price 50% or more above reference | Verify the price with the vendor. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
@@ -55,6 +54,7 @@ Warnings are recorded in the findings and shown in the logs. On their own they d
 - A total within 2% under the $10,000 threshold.
 - A unit price that differs from our reference price by less than 50%, compared on `abs(unit_price)`. A price 50% or more above the reference is the hold above, not a warning and not a fraud signal.
 - A descriptor on an item name, such as "WidgetA (rush order)". The descriptor is split into a note and the item is matched as WidgetA.
+- A non-commercial vendor address. It is flagged for the reviewer and is never a hold by itself. The finding says "Vendor address looks non-commercial and is noted," then the address. It is raised when the extraction model marks the address. That note includes the model's short reason, or "the extraction model flagged the address" when none was given. The same warning is raised when the printed address contains "Apt" or "Apartment". An otherwise clean invoice stays an Approve. That is the 1004 rule below.
 
 Item names are matched exactly, after normalizing only case, spaces, and hyphens.
 
@@ -84,5 +84,4 @@ The captain's call: **a non-commercial address flagged on an otherwise clean inv
 
 ## Known follow-ups
 
-- The agents must be given today's date. Dates in April 2026 are not in the future, but the audit has treated them as if they were.
-- The critique currently treats every invoice over $10,000 as risky just for being over the threshold, so clean invoices over $10,000 never get approved. That breaks the Approve rule above.
+None.
