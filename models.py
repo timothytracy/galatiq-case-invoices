@@ -171,7 +171,8 @@ class ExtractionSchema(_Loose):
 
 class ReasoningDraft(_Loose):
     risks_considered: list[str] = Field(min_length=1)
-    conclusion: str = Field(min_length=1)
+    # Optional. The approval sentence is written in code, not from this field.
+    conclusion: str = ""
 
 
 class CritiqueDraft(_Loose):

@@ -8,7 +8,8 @@ from llm_client import AgentStepFailed, LLMError, call_with_retries
 from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
 from pipeline.stage_log import _stopped, agent_finding, stage_log
 from decision.findings import evidence_lines
-from decision.wording import PASSED_RULES, resolve_as_of, today_line
+from decision.policy import POLICY
+from decision.wording import PASSED_RULES, approval_conclusion, resolve_as_of, today_line
 
 # Long enough to read the flagged sentence. Short enough to keep a log line small.
 _LOG_LIMIT = 500
@@ -54,7 +55,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
     try:
         draft = call_with_retries(
             llm.request,
-            _reason_messages(state, invoice, report, evidence, as_of),
+            _reason_messages(state, invoice, evidence, as_of),
             ReasoningDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -77,7 +78,13 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
         line = f"Critique concern: {concern}"
         if line not in risks:
             risks.append(line)
-    conclusion = draft.conclusion
+    # The note above is not a fact. The sentence is the checks and the finding text.
+    conclusion = approval_conclusion(
+        invoice,
+        list(report.findings),
+        POLICY,
+        passed_critique=state.critique_rounds > 0 and not state.critique_stricter,
+    )
     if state.critique_stricter:
         conclusion = conclusion + " Critique made the decision stricter: hold, no payment."
     reasoning = ApprovalReasoning(
@@ -126,7 +133,11 @@ _APPROVE_REFUSAL = re.compile(r"(?i)not\s+(?:be\s+)?approv")
 
 
 def reasoning_rejection(draft: ReasoningDraft, decision: str) -> str | None:
-    """Matched phrase, or 'approve-contradiction'. None when the wording is fine."""
+    """Matched phrase, or 'approve-contradiction'. None when the note is fine.
+
+    The approval sentence is written in code. This still checks the model note,
+    and a conclusion field if the model sent one, for a refusal or a fight with approve.
+    """
 
     phrases = _BAD_INPUT
     if decision == "approve":
@@ -149,22 +160,18 @@ def reasoning_output_failed(draft: ReasoningDraft, decision: str) -> bool:
     return reasoning_rejection(draft, decision) is not None
 
 
-def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]:
+def _reason_messages(state, invoice, evidence, as_of=None) -> list[dict]:
     as_of = resolve_as_of(as_of)
     concerns = ""
     if state.critique_concerns:
         concerns = "Critique concerns to address:\n" + "\n".join(
             f"- {item}" for item in state.critique_concerns
         )
-    prior = ""
-    if state.decision is not None:
-        prior = "Previous conclusion: " + state.decision.reasoning.conclusion
     payload = {
         "vendor": invoice.vendor,
         "total": None if invoice.total is None else str(invoice.total),
         "currency": invoice.currency,
         "evidence": evidence,
-        "findings": [finding.message for finding in report.findings],
     }
     return [
         {
@@ -172,18 +179,11 @@ def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]
             "content": (
                 "TASK reason\n"
                 f"{today_line(as_of)}\n"
-                "Write the approval reasoning as JSON with keys risks_considered (list of strings) "
-                "and conclusion (one sentence). Name the checks that passed, such as "
-                "stock, math, and currency, and only warnings that appear in findings. "
-                "If findings is empty, say there are no warnings. Not a bare approve or hold. "
+                "Write a short note as JSON with key risks_considered (list of strings). "
                 "Do not describe the input format. "
                 "The decision is already fixed by the rules. "
                 "The user message is a valid JSON object of invoice facts. "
-                "Cite only the evidence you are given. "
-                "Warning types that, if present in findings, are notes for the reviewer "
-                "and are not reasons to refuse: a total near the threshold, a descriptor "
-                "on an item name, a price variance, a single fraud signal, and a "
-                "non-commercial address. Return JSON only."
+                "Return JSON only."
             ),
         },
         {
@@ -192,7 +192,6 @@ def _reason_messages(state, invoice, report, evidence, as_of=None) -> list[dict]
                 part
                 for part in (
                     "Invoice facts (a valid JSON object):\n" + json.dumps(payload),
-                    prior,
                     concerns,
                 )
                 if part

@@ -219,7 +219,8 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
     reasoning = result["decision"].reasoning
     assert reasoning.rules_applied
     assert reasoning.risks_considered == ["no extra risk"]
-    assert reasoning.conclusion == "The checks passed."
+    assert reasoning.conclusion == _CLEAN_CONCLUSION
+    assert "The checks passed" not in reasoning.conclusion
     blob = " ".join(reasoning.evidence)
     assert "WidgetA" in blob
     assert "500.00" in blob
@@ -256,7 +257,9 @@ def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
     assert counts["reason"] == CRITIQUE_CAP + 1
     assert "amount is high" in result["decision"].reasoning.risks_considered[-1]
     assert len(result["decision"].revisions) == 1
-    assert result["decision"].revisions[0].conclusion == "The checks passed."
+    assert "over the" in result["decision"].revisions[0].conclusion
+    assert "passed critique" not in result["decision"].revisions[0].conclusion
+    assert "passed critique" in result["decision"].reasoning.conclusion
     assert APPROVAL_THRESHOLD_USD == Decimal("10000")
 
 
@@ -477,6 +480,13 @@ _BAD_REASON = json.dumps(
     }
 )
 _GOOD_REASON = json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+# Default extraction() is one WidgetA line, total 500, and no findings.
+_CLEAN_CONCLUSION = (
+    "1 item found in inventory; stock covers every line; "
+    "line and grand totals reconcile; "
+    "500.00 USD is under the 10,000.00 USD review threshold; "
+    "currency USD; no warnings."
+)
 
 
 def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
@@ -504,7 +514,7 @@ def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
             ],
         }
     ]
-    assert result["decision"].reasoning.conclusion == "The checks passed."
+    assert result["decision"].reasoning.conclusion == _CLEAN_CONCLUSION
     assert "payment" in stages(result)
 
 
@@ -542,7 +552,7 @@ def test_bad_reasoning_attempt_log_contains_the_rejected_text(tmp_path, db_path,
     assert counts["reason"] == 2
     assert result["outcome"] == "approve"
     assert status(result) == "paid"
-    assert result["decision"].reasoning.conclusion == "The checks passed."
+    assert result["decision"].reasoning.conclusion == _CLEAN_CONCLUSION
 
     entry = result["attempts"][0]
     assert entry["attempt"] == 1
@@ -808,6 +818,194 @@ def test_outcome_from_findings_rejects_holds_or_approves():
     assert outcome_from_findings([hold, stock]) == "reject"
 
 
+def _three_lines(unit_prices):
+    """Three in-stock lines. Prices match the references when the caller passes them."""
+
+    quantities = (2, 1, 1)
+    items = ("WidgetA", "WidgetB", "GadgetX")
+    lines = []
+    for item, qty, price in zip(items, quantities, unit_prices):
+        lines.append(
+            {
+                "item": item,
+                "description": item,
+                "quantity": qty,
+                "unit_price": price,
+                "amount": qty * price,
+                "note": None,
+            }
+        )
+    return lines
+
+
+def test_clean_approval_conclusion_names_every_check(tmp_path, db_path):
+    path = write_invoice(tmp_path, "three.txt", "Vendor: Northwind Supply\nTotal: 1750.00\n")
+    body = extraction(
+        vendor="Northwind Supply",
+        line_items=_three_lines((250, 500, 750)),
+        subtotal=1750,
+        total=1750,
+    )
+    handler, _counts = scripted(body)
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+    assert result["findings"] == []
+    assert result["decision"].reasoning.conclusion == (
+        "All 3 items found in inventory; stock covers every line; "
+        "line and grand totals reconcile; "
+        "1,750.00 USD is under the 10,000.00 USD review threshold; "
+        "currency USD; no warnings."
+    )
+    assert result["decision"].reasoning.risks_considered == ["no extra risk"]
+    assert "The checks passed" not in result["decision"].reasoning.conclusion
+
+
+def test_approval_with_warnings_lists_the_finding_messages(tmp_path, db_path):
+    path = write_invoice(
+        tmp_path,
+        "noted.txt",
+        "Vendor: Northwind Supply\nWire transfer only.\nTotal: 520.00\n",
+    )
+    body = extraction(
+        vendor="Northwind Supply",
+        line_items=[
+            {
+                "item": "WidgetA",
+                "description": "WidgetA",
+                "quantity": 2,
+                "unit_price": 260,
+                "amount": 520,
+                "note": None,
+            }
+        ],
+        subtotal=520,
+        total=520,
+    )
+    handler, _counts = scripted(body)
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+    messages = [finding.message.rstrip(".") for finding in result["findings"]]
+    assert [finding.code for finding in result["findings"]] == ["FRAUD_SIGNAL", "PRICE_VARIANCE"]
+    conclusion = result["decision"].reasoning.conclusion
+    assert conclusion == (
+        "1 item found in inventory; stock covers every line; "
+        "line and grand totals reconcile; "
+        "520.00 USD is under the 10,000.00 USD review threshold; "
+        "currency USD; warnings: " + "; ".join(messages) + "."
+    )
+    assert "no warnings" not in conclusion
+    for message in messages:
+        assert message in conclusion
+        assert conclusion.count(message) == 1
+
+
+def test_approval_over_the_threshold_names_critique(tmp_path, db_path):
+    path = write_invoice(tmp_path, "large.txt", "Vendor: Northwind Supply\nTotal: 12500.00\n")
+    body = extraction(
+        vendor="Northwind Supply",
+        line_items=[
+            {
+                "item": "WidgetA",
+                "description": "WidgetA",
+                "quantity": 15,
+                "unit_price": 250,
+                "amount": 3750,
+                "note": None,
+            },
+            {
+                "item": "WidgetB",
+                "description": "WidgetB",
+                "quantity": 10,
+                "unit_price": 500,
+                "amount": 5000,
+                "note": None,
+            },
+            {
+                "item": "GadgetX",
+                "description": "GadgetX",
+                "quantity": 5,
+                "unit_price": 750,
+                "amount": 3750,
+                "note": None,
+            },
+        ],
+        subtotal=12500,
+        total=12500,
+    )
+    handler, counts = scripted(body)
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+    assert counts["critique"] == 1
+    assert result["findings"] == []
+    first = result["decision"].revisions[0].conclusion
+    final = result["decision"].reasoning.conclusion
+    shared = (
+        "All 3 items found in inventory; stock covers every line; "
+        "line and grand totals reconcile; "
+        "12,500.00 USD is over the 10,000.00 USD review threshold"
+    )
+    assert first == shared + "; currency USD; no warnings."
+    assert "passed critique" not in first
+    assert final == shared + " and passed critique; currency USD; no warnings."
+
+
+def test_approval_conclusion_reads_threshold_and_currency_from_policy():
+    from decision.policy import POLICY
+    from decision.wording import approval_conclusion
+
+    policy = POLICY.model_copy(
+        update={"scrutiny_threshold": Decimal("2500"), "allowed_currencies": ["EUR"]}
+    )
+    invoice = ExtractedInvoice(
+        vendor="Northwind Supply",
+        due_date="2026-05-01",
+        currency="EUR",
+        total=Decimal("1800"),
+        subtotal=Decimal("1800"),
+        line_items=[
+            LineItem(
+                item="WidgetA",
+                description="WidgetA",
+                quantity=Decimal("2"),
+                unit_price=Decimal("900"),
+                amount=Decimal("1800"),
+            )
+        ],
+        source=SourceInfo(path="memo.txt", filename="memo.txt", format="txt"),
+    )
+    under = approval_conclusion(invoice, [], policy)
+    assert under == (
+        "1 item found in inventory; stock covers every line; "
+        "line and grand totals reconcile; "
+        "1,800.00 EUR is under the 2,500.00 EUR review threshold; "
+        "currency EUR; no warnings."
+    )
+    assert "USD" not in under
+    assert "$" not in under
+    assert "10,000" not in under
+    over = invoice.model_copy(update={"total": Decimal("3000")})
+    assert "passed critique" not in approval_conclusion(over, [], policy)
+    assert "and passed critique" in approval_conclusion(over, [], policy, passed_critique=True)
+    noted = Finding(
+        code="FRAUD_SIGNAL",
+        message="Wire transfer is a fraud signal.",
+        severity="warning",
+    )
+    info = Finding(
+        code="OCR_FIX",
+        message="OCR O-to-0 fix applied because the math reconciles.",
+        severity="info",
+    )
+    warned = approval_conclusion(invoice, [noted, info], policy)
+    assert warned.endswith("warnings: Wire transfer is a fraud signal.")
+    assert "no warnings" not in warned
+    assert "OCR" not in warned
+    assert approval_conclusion(invoice, [info], policy).endswith("no warnings.")
+
+
 def test_approval_prompt_names_the_invoice_facts():
     invoice = ExtractedInvoice(
         vendor="Widgets Inc.",
@@ -821,7 +1019,7 @@ def test_approval_prompt_names_the_invoice_facts():
     )
     report = ValidationReport(passed=True, findings=[])
     state = PipelineState(invoice_path="x.txt", filename="x.txt", invoice=invoice, validation=report)
-    messages = _reason_messages(state, invoice, report, ["total 500.00 USD"])
+    messages = _reason_messages(state, invoice, ["total 500.00 USD"])
     assert "valid JSON object of invoice facts" in messages[0]["content"]
     user = messages[1]["content"]
     assert user.startswith("Invoice facts (a valid JSON object):\n{")

@@ -460,10 +460,11 @@ def test_warning_notes_are_not_a_reason_to_refuse(tmp_path, db_path):
         ],
     )
     state = PipelineState(invoice_path="x.txt", filename="x.txt", invoice=invoice, validation=report)
-    prompt = _reason_messages(state, invoice, report, ["total 500.00 USD"])[0]["content"]
-    assert "not reasons to refuse" in prompt
-    assert "non-commercial address" in prompt
-    assert "single fraud signal" in prompt
+    prompt = _reason_messages(state, invoice, ["total 500.00 USD"])[0]["content"]
+    assert "risks_considered" in prompt
+    assert "conclusion" not in prompt
+    assert "no warnings" not in prompt
+    assert "not reasons to refuse" not in prompt
 
     refused = ReasoningDraft(
         risks_considered=["address noted"],
@@ -509,7 +510,9 @@ def test_warning_notes_are_not_a_reason_to_refuse(tmp_path, db_path):
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
     assert result["payment"].status == "paid"
-    assert result["decision"].reasoning.conclusion == "The checks passed. The address is noted."
+    assert "address is noted" not in result["decision"].reasoning.conclusion
+    assert "fraudulent" not in result["decision"].reasoning.conclusion.lower()
+    assert result["decision"].reasoning.conclusion.endswith("no warnings.")
     assert result["attempts"][0]["matched"] == "approve-contradiction"
 
 

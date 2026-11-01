@@ -2,6 +2,7 @@
 
 import re
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 
 from models import ExtractedInvoice, Finding, Outcome
 
@@ -12,7 +13,7 @@ from decision.outcome import (
     outcome_from_findings,
     primary_code,
 )
-from decision.policy import APPROVAL_THRESHOLD_USD, MONEY, POLICY
+from decision.policy import APPROVAL_THRESHOLD_USD, MONEY, POLICY, Policy
 
 # The answer key names findings in the policy's words. This is the only map.
 KEY_REASON_TO_CODE = {
@@ -169,6 +170,71 @@ def explain(
     if action:
         reason = f"{reason} {action}"
     return outcome, code, reason, action
+
+
+def _review_money(amount: Decimal, tolerance: Decimal, currency: str) -> str:
+    """Two decimals, then the currency code. The same shape for every policy currency."""
+
+    quantized = amount.quantize(tolerance, rounding=ROUND_HALF_UP)
+    return f"{quantized:,.2f} {currency}"
+
+
+def approval_conclusion(
+    invoice: ExtractedInvoice,
+    findings: list[Finding],
+    policy: Policy,
+    *,
+    passed_critique: bool = False,
+) -> str:
+    """One sentence from the checks validation already ran and the finding text.
+
+    passed_critique is true only after critique has run and left the approval in place.
+    Threshold and currency come from policy. Warning text is the finding messages.
+    """
+
+    codes = {finding.code for finding in findings}
+    parts: list[str] = []
+    items: list[str] = []
+    for line in invoice.line_items:
+        if line.quantity > 0 and line.item not in items:
+            items.append(line.item)
+    known = bool(items) and "UNKNOWN_ITEM" not in codes
+    if known:
+        if len(items) == 1:
+            parts.append("1 item found in inventory")
+        else:
+            parts.append(f"All {len(items)} items found in inventory")
+    if known and "STOCK_SHORTFALL" not in codes:
+        parts.append("stock covers every line")
+    if invoice.total is not None and invoice.line_items and "TOTAL_MISMATCH" not in codes:
+        parts.append("line and grand totals reconcile")
+    if invoice.total is not None and invoice.currency in policy.allowed_currencies:
+        code = invoice.currency
+        amount = _review_money(invoice.total, policy.money_tolerance, code)
+        limit = _review_money(policy.scrutiny_threshold, policy.money_tolerance, code)
+        if invoice.total > policy.scrutiny_threshold:
+            clause = f"{amount} is over the {limit} review threshold"
+            if passed_critique:
+                clause += " and passed critique"
+        elif invoice.total < policy.scrutiny_threshold:
+            clause = f"{amount} is under the {limit} review threshold"
+        else:
+            clause = f"{amount} is at the {limit} review threshold"
+        parts.append(clause)
+        parts.append(f"currency {code}")
+    warnings = [
+        finding.message.rstrip(".")
+        for finding in findings
+        if finding.severity == "warning"
+    ]
+    if warnings:
+        parts.append("warnings: " + "; ".join(warnings))
+    else:
+        parts.append("no warnings")
+    sentence = "; ".join(parts)
+    if not sentence.endswith("."):
+        sentence += "."
+    return sentence
 
 
 def _approve_sentence(invoice: ExtractedInvoice | None, stock: dict[str, int] | None) -> str:
