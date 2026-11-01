@@ -45,6 +45,12 @@ def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=
         "attempts": step_attempts,
         "codes": finding_codes(findings),
     }
+    calls = []
+    for row in step_attempts:
+        if isinstance(row, dict) and row.get("tool_calls"):
+            calls.extend(row["tool_calls"])
+    if calls:
+        result["tool_calls"] = calls
     return {
         "outcome": decided,
         "reason_code": code,

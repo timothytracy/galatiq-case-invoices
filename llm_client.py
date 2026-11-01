@@ -5,7 +5,7 @@ errors, and JSON that is still invalid after the schema repair are retried.
 Other 4xx errors are not.
 
 XAI_TOOLS defaults off. request() never sends tools. tool_request() sends
-them only when that flag is on. No agent calls tool_request() yet.
+them only when that flag is on. Critique calls tool_request when the flag is on.
 """
 
 import json
@@ -163,6 +163,11 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
             parsed = schema.model_validate(parse_json_object(text))
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             error_text = str(exc)[:2000]
+            # The repair is a second call on the same step and shares the tool budget.
+            # A bare second call is closed; this is the one reopen.
+            reopen = getattr(request, "allow_repair", None)
+            if reopen is not None:
+                reopen()
             conversation = conversation + [
                 {"role": "assistant", "content": text},
                 {
@@ -286,42 +291,58 @@ class ToolStep:
     """Caps and the tool log for one agent step.
 
     The repair turn and every retry share the counts. A new tool_request()
-    starts at zero. Reusing this callable does too: call_with_retries calls
-    set_attempt(1) at the start of the next step.
+    starts at zero. call_with_retries calls set_attempt(1) at the next step,
+    which assigns a new log list. Calling this object again after it has
+    finished raises. The schema repair reopens it through allow_repair.
     """
 
-    def __init__(self, llm, registry, tool_log: list | None = None) -> None:
+    def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
         self.llm = llm
         self.registry = registry
+        self.agent = agent
         self.log = [] if tool_log is None else tool_log
         self.rounds = 0
         self.calls = 0
         self.attempt = 1
+        self._closed = False
 
     def set_attempt(self, attempt: int) -> None:
         """call_with_retries reports the attempt. 1 starts a step. A retry does not."""
 
-        if attempt == 1 and (self.rounds or self.calls):
+        if attempt == 1:
             self.rounds = 0
             self.calls = 0
-            self.log.clear()
+            # A new list. clear() would wipe a list the caller still holds.
+            self.log = []
         self.attempt = attempt
+        self._closed = False
+
+    def allow_repair(self) -> None:
+        """structured_call is about to call again. Keep the counts and the log."""
+
+        self._closed = False
 
     def __call__(self, messages, timeout=60) -> str:
+        if self._closed:
+            raise RuntimeError(
+                "ToolStep already finished; build a new tool_request for the next step"
+            )
+        self._closed = True
         if not tools_enabled():
             return self.llm.request(messages, timeout)
         return _tool_loop(self, messages, timeout)
 
 
-def tool_request(llm, registry, tool_log: list | None = None) -> ToolStep:
+def tool_request(llm, registry, tool_log: list | None = None, agent: str | None = None) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
     Flag off: llm.request, the same payload as today.
     Flag on: run tool calls until the model returns plain content, then return
     that text. Parsing and the one repair turn stay in structured_call.
+    Read step.log after call_with_retries. A passed-in list is for a direct call.
     """
 
-    return ToolStep(llm, registry, tool_log)
+    return ToolStep(llm, registry, tool_log, agent)
 
 
 def _tool_loop(step: ToolStep, messages, timeout) -> str:
@@ -402,14 +423,25 @@ def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict
     started = time.perf_counter()
     try:
         payload = step.registry.call(call["name"], call["arguments"])
-    except LLMError:
-        raise
     except Exception as exc:
         # A lookup miss is already {"error": ...}. Anything else is infrastructure.
-        raise LLMError("tool_error", False, str(exc)) from None
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    payload, body = _json_ready(payload)
+        # The call is logged before the hold, including its name, arguments, and error.
+        record = _record(step, call, round_number, None, str(exc), started)
+        step.log.append(record)
+        raise LLMError(
+            "tool_error",
+            False,
+            str(exc),
+            log={"tool_calls": list(step.log)},
+        ) from None
+    body = _json_ready(payload)
+    payload = json.loads(body)
     error = _error_text(payload)
+    record = _record(step, call, round_number, None if error else payload, error, started)
+    return record, {"role": "tool", "tool_call_id": call["id"], "content": body}
+
+
+def _record(step: ToolStep, call: dict, round_number: int, result, error, started: float) -> dict:
     parsed, _parse_error, invalid_raw = parse_tool_arguments(call["arguments"])
     record = {
         "round": round_number,
@@ -417,13 +449,15 @@ def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict
         "call_id": call["id"],
         "name": call["name"],
         "arguments": parsed,
-        "result": None if error else payload,
+        "result": result,
         "error": error,
-        "latency_ms": latency_ms,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
     }
+    if step.agent:
+        record = {"agent": step.agent, **record}
     if invalid_raw is not None:
         record["arguments_raw"] = invalid_raw
-    return record, {"role": "tool", "tool_call_id": call["id"], "content": body}
+    return record
 
 
 def parse_tool_arguments(raw: str) -> tuple[dict | None, str | None, str | None]:
@@ -444,18 +478,17 @@ def parse_tool_arguments(raw: str) -> tuple[dict | None, str | None, str | None]
     return value, None, None
 
 
-def _json_ready(payload: dict) -> tuple[dict, str]:
-    """JSON text for the model, and the same value stored on the log.
+def _json_ready(payload: dict) -> str:
+    """JSON text for the model. The caller parses it once for the log.
 
     Decimal and date become strings. A value that still will not serialize
     becomes an error result, so the node does not crash.
     """
 
     try:
-        text = json.dumps(payload, default=str)
+        return json.dumps(payload, default=str)
     except (TypeError, ValueError):
-        text = json.dumps({"error": "tool result is not JSON"})
-    return json.loads(text), text
+        return json.dumps({"error": "tool result is not JSON"})
 
 
 def _error_text(payload: dict) -> str | None:
