@@ -32,6 +32,7 @@ KEY_REASON_TO_CODE = {
     "Renamed vendor": "VENDOR_RENAMED",
     "Two or more fraud signals": "FRAUD_CLUSTER",
     "New remittance account": "NEW_REMITTANCE",
+    "Unit price 50% or more above reference": "PRICE_SPIKE",
     "Grok or system failure after retries": "SYSTEM_ERROR",
 }
 
@@ -51,6 +52,7 @@ ACTION = {
     "VENDOR_RENAMED": "Verify it is the same company.",
     "FRAUD_CLUSTER": "Verify with the vendor using contact details already on file.",
     "NEW_REMITTANCE": "Verify the change with the vendor.",
+    "PRICE_SPIKE": "Verify the price with the vendor.",
     "SYSTEM_ERROR": "Rerun the invoice or process it by hand.",
     "BAD_REASONING": "Rerun the invoice or process it by hand.",
     "CRITIQUE_HOLD": "Review the critique concern. Nothing is paid.",
@@ -75,6 +77,10 @@ RULE_TEXT = {
     "FRAUD_CLUSTER": "Two or more fraud signals are a hold.",
     "FRAUD_SIGNAL": "A single fraud signal is a warning.",
     "NEW_REMITTANCE": "A new bank account on a clean invoice over the threshold is a hold.",
+    "PRICE_SPIKE": (
+        f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "
+        "reference price is a hold."
+    ),
     "BAD_REASONING": "Approval wording that refuses the input or contradicts approve is not paid.",
     "SYSTEM_ERROR": "A failed agent step is a hold tracked as a system error and is not paid.",
     "AUDIT_ESCALATED": "The audit escalated the invoice to a hold.",
@@ -88,6 +94,10 @@ PASSED_RULES = [
     f"Printed total must match the lines, tax, and shipping within {MONEY}.",
     f"Currency must be {', '.join(POLICY.allowed_currencies)}. Any other currency is a hold.",
     "One fraud signal is a warning. Two or more, with no reject, are a hold.",
+    (
+        f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "
+        "USD reference is a hold. A smaller difference is a price-variance warning."
+    ),
     (
         f"A {POLICY.allowed_currencies[0]} total over {APPROVAL_THRESHOLD_USD} goes to critique. "
         "Being over that threshold is not a risk."

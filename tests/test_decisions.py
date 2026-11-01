@@ -2,12 +2,15 @@
 
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from db import SEED, create_database
 from decision.findings import assess, injection_phrase
+from decision.invoice_fields import show_money
+from decision.policy import POLICY
 from decision.wording import KEY_REASON_TO_CODE, threshold_only_concern
 from graph import run_invoice
 from llm_client import LLMError
@@ -89,6 +92,32 @@ def run(path, db_path, handler, *, as_of=None):
 
 def codes(result) -> list[str]:
     return [finding.code for finding in result["findings"]]
+
+
+def _priced(unit_price: Decimal, quantity: int = 1) -> tuple[str, str]:
+    """One WidgetA line. Prices stay Decimal strings so 374.975 is exact.
+
+    The file prints the two-decimal total. That is the string the audit looks for.
+    """
+
+    amount = unit_price * quantity
+    amount_text = format(amount, "f")
+    text = f"Vendor: Widgets Inc.\nDue Date: 2026-04-30\nTotal: {show_money(amount)}\n"
+    body = extraction(
+        line_items=[
+            {
+                "item": "WidgetA",
+                "description": "WidgetA",
+                "quantity": quantity,
+                "unit_price": format(unit_price, "f"),
+                "amount": amount_text,
+                "note": None,
+            }
+        ],
+        subtotal=amount_text,
+        total=amount_text,
+    )
+    return text, body
 
 
 def test_prompt_injection_needs_the_model_and_the_phrase(tmp_path, db_path):
@@ -199,17 +228,101 @@ def test_clean_invoice_over_10k_is_approved(tmp_path, db_path):
     assert result["critique_rounds"] == 1
 
 
-def test_grok_failure_is_a_hold_system_error(tmp_path, db_path):
+def test_grok_failure_is_a_hold_system_error(tmp_path, db_path, monkeypatch):
+    monkeypatch.delenv("XAI_MAX_ATTEMPTS", raising=False)
     path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nTotal: 500.00\n")
 
     def handler(_messages):
         raise LLMError("http_429", True, "busy")
 
-    result = run(path, db_path, handler)
+    result = run_invoice(
+        path,
+        db_path,
+        FakeLLM(handler),
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+    )
     assert result["outcome"] == "hold"
-    assert result["reason_code"] == "SYSTEM_ERROR"
+    assert result["reason_code"] == KEY_REASON_TO_CODE["Grok or system failure after retries"]
+    assert len(result["attempts"]) == POLICY.model_retry_attempts
     assert result["findings"][-1].code == "SYSTEM_ERROR"
     assert "Rerun the invoice" in (result["action"] or "")
+    assert result["payment"].status == "not_paid"
+    assert result["payment"].amount is None
+
+
+def test_price_spike_holds_at_50_percent_and_warns_below(tmp_path, db_path):
+    ref = POLICY.reference_prices["WidgetA"]
+    below = ref * Decimal("1.4999")
+    at = ref * (Decimal("1") + POLICY.price_spike_ratio)
+    assert at == ref * Decimal("1.50")
+
+    under_text, under_body = _priced(below)
+    under = run(
+        write_invoice(tmp_path, "under.txt", under_text),
+        db_path,
+        scripted(under_body),
+    )
+    assert under["outcome"] == "approve"
+    assert under["reason_code"] is None
+    assert "PRICE_VARIANCE" in codes(under)
+    assert "PRICE_SPIKE" not in codes(under)
+    assert "FRAUD_SIGNAL" not in codes(under)
+    assert under["payment"].status == "paid"
+
+    # A spike is still a difference, so the variance warning stays on the line.
+    spike_text, spike_body = _priced(at)
+    held = run(
+        write_invoice(tmp_path, "spike.txt", spike_text),
+        db_path,
+        scripted(spike_body),
+    )
+    assert held["outcome"] == "hold"
+    assert held["reason_code"] == "PRICE_SPIKE"
+    assert held["reason_code"] == KEY_REASON_TO_CODE["Unit price 50% or more above reference"]
+    assert "PRICE_VARIANCE" in codes(held)
+    assert "FRAUD_SIGNAL" not in codes(held)
+    assert "Verify the price with the vendor." in (held["action"] or "")
+    assert held["payment"].status == "not_paid"
+
+
+def test_price_spike_loses_to_a_reject(tmp_path, db_path):
+    text, body = _priced(POLICY.reference_prices["WidgetA"] * Decimal("1.50"), quantity=16)
+    result = run(write_invoice(tmp_path, "short.txt", text), db_path, scripted(body))
+    assert result["outcome"] == "reject"
+    assert result["reason_code"] == "STOCK_SHORTFALL"
+    assert "PRICE_SPIKE" in codes(result)
+    assert "PRICE_VARIANCE" in codes(result)
+    assert "50% or more above" in result["decision"].reasoning.conclusion
+    assert result["payment"].status == "not_paid"
+
+
+def test_credit_line_compares_absolute_unit_price(tmp_path, db_path):
+    path = write_invoice(
+        tmp_path,
+        "credit.txt",
+        "Credit note\nVendor: Widgets Inc.\nDue Date: 2026-04-30\nTotal: -250.00\n",
+    )
+    body = extraction(
+        line_items=[
+            {
+                "item": "WidgetA",
+                "description": "WidgetA",
+                "quantity": 1,
+                "unit_price": "-250",
+                "amount": "-250",
+                "note": None,
+            }
+        ],
+        subtotal="-250",
+        total="-250",
+    )
+    result = run(path, db_path, scripted(body))
+    assert result["invoice"].line_items[0].unit_price == Decimal("-250")
+    assert "PRICE_VARIANCE" not in codes(result)
+    assert "PRICE_SPIKE" not in codes(result)
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "CREDIT_NOTE"
     assert result["payment"].status == "not_paid"
 
 
@@ -734,6 +847,37 @@ def test_answer_key_names_map_and_grade():
     )
     assert not missed["outcome_ok"]
     assert not missed["reason_ok"]
+
+
+def test_grade_accepts_alternative_reasons():
+    expected = {
+        "outcome": "HOLD",
+        "primary_reason": "Revised invoice",
+        "also_accepted_reasons": ["Unit price 50% or more above reference"],
+        "warnings": [],
+    }
+    spike = {"outcome": "hold", "reason_code": "PRICE_SPIKE", "findings": []}
+    revised = {"outcome": "hold", "reason_code": "REVISED_INVOICE", "findings": []}
+    other = {"outcome": "hold", "reason_code": "NON_USD", "findings": []}
+    assert grade(spike, expected)["outcome_ok"]
+    assert grade(spike, expected)["reason_ok"]
+    assert grade(revised, expected)["reason_ok"]
+    missed = grade(other, expected)
+    assert missed["outcome_ok"] and not missed["reason_ok"]
+
+    plain = {"outcome": "HOLD", "primary_reason": "Revised invoice", "warnings": []}
+    assert grade(revised, plain)["reason_ok"]
+    assert not grade(spike, plain)["reason_ok"]
+    assert not grade(spike, {**plain, "also_accepted_reasons": []})["reason_ok"]
+
+    unknown = {
+        "outcome": "HOLD",
+        "primary_reason": "Revised invoice",
+        "also_accepted_reasons": ["not a real reason"],
+        "warnings": [],
+    }
+    assert grade(revised, unknown)["reason_ok"]
+    assert not grade(other, unknown)["reason_ok"]
 
 
 def test_sample_invoices_match_the_answer_key(db_path):

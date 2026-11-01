@@ -16,6 +16,8 @@ REJECT_CODES = (
 
 # A hold for a person. A reject-class finding wins when both are present.
 # SYSTEM_ERROR is a Grok failure after retries, not a business finding.
+# PRICE_SPIKE follows FRAUD_CLUSTER, so a cluster stays the named reason
+# when a spiked price is present too.
 HOLD_CODES = (
     "SYSTEM_ERROR",
     "BAD_REASONING",
@@ -25,6 +27,7 @@ HOLD_CODES = (
     "VENDOR_RENAMED",
     "NEW_REMITTANCE",
     "FRAUD_CLUSTER",
+    "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",
 )
