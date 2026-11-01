@@ -67,6 +67,7 @@ Item names are matched exactly, after normalizing only case, spaces, and hyphens
 - **Duplicates are out of scope.** This is a known limitation. The production fix is a check against a payments ledger.
 - **No payment without an audit PASS.**
 - **Non-USD is never paid.**
+- **Critique and audit can only tighten.** Critique may set aside three things: a stock claim for an item whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit may set aside that same future-date claim. Every other concern is kept, including the audit's notes that the raw text and the extraction disagree. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged. Neither step can loosen a decision. Approved by the captain on 2026-11-01.
 
 ## Alignment with the original README
 
