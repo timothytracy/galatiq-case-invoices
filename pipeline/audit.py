@@ -50,9 +50,10 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
     stock = dict(load_stock(db_path))
     facts = verified_payload(invoice, stock, as_of)
     step_attempts: list[dict] = []
+    tools_on = tools_enabled()
     request = llm.request
     step = None
-    if tools_enabled():
+    if tools_on:
         step = tool_request(
             llm, audit_registry(invoice, stock, state.raw_text or ""), agent="audit"
         )
@@ -60,7 +61,7 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
     try:
         draft = call_with_retries(
             request,
-            _audit_messages(state, invoice, decision, as_of, facts),
+            _audit_messages(state, invoice, decision, as_of, facts, tools_on),
             AuditDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -200,7 +201,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
 
 
-def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
+def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> list[dict]:
     findings = []
     if state.validation is not None:
         findings = [finding.model_dump(mode="json") for finding in state.validation.findings]
@@ -232,7 +233,7 @@ def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
                 "Put every code you rely on in cited_codes. Leave cited_codes empty when the "
                 "concern is not one of those codes. "
                 "A printed date on or before today is not in the future. "
-                + (f"{TOOLS_LINE} " if tools_enabled() else "")
+                + (f"{TOOLS_LINE} " if tools_on else "")
                 + "Return JSON only."
             ),
         },

@@ -20,8 +20,8 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
     return payload
 
 
-def _last_tool_calls(step_attempts) -> list:
-    """One record per call. A later attempt's log still holds the earlier calls."""
+def _all_tool_calls(step_attempts) -> list:
+    """Every call from the attempts, once. A later attempt's log still holds the earlier calls."""
 
     calls = []
     seen = set()
@@ -64,7 +64,7 @@ def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=
         "attempts": step_attempts,
         "codes": finding_codes(findings),
     }
-    calls = _last_tool_calls(step_attempts)
+    calls = _all_tool_calls(step_attempts)
     if calls:
         result["tool_calls"] = calls
     if note:

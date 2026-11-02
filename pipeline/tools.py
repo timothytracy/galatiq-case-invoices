@@ -133,7 +133,7 @@ def _schema_error(parameters: dict, arguments: dict) -> str | None:
             return f"argument {name} must be a {expected}"
         allowed = (properties.get(name) or {}).get("enum")
         if isinstance(allowed, list) and value not in allowed:
-            return f"argument {name} is not a finding code"
+            return f"argument {name} must be one of the allowed values"
     return None
 
 
@@ -254,16 +254,15 @@ def get_policy_rule(arguments: dict) -> dict:
     """Class, rule text, and action for one finding code. Unknown codes error."""
 
     code = arguments["code"]
-    name = code.strip().upper() if isinstance(code, str) else ""
-    if name not in _POLICY_CODES:
+    if code not in _POLICY_CODES:
         raise ToolInputError(f"unknown code: {code}")
-    if name in REJECT_CODES:
+    if code in REJECT_CODES:
         kind = "reject"
-    elif name in HOLD_CODES:
+    elif code in HOLD_CODES:
         kind = "hold"
     else:
         kind = "warning"
-    return {"code": name, "class": kind, "rule": RULE_TEXT[name], "action": ACTION.get(name)}
+    return {"code": code, "class": kind, "rule": RULE_TEXT[code], "action": ACTION.get(code)}
 
 
 def _matched_name(name: str, table: dict) -> str | None:

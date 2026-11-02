@@ -162,13 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     correct = 0
     tool_calls = 0
-    tool_latency = 0
+    repeats = 0
     for path in files:
         result = run_invoice(path, db_path, GrokClient())
         print_bad_reasoning(path.name, result.get("attempts") or [])
         calls = tool_calls_of(result)
         tool_calls += len(calls)
-        tool_latency += sum(int(row.get("latency_ms") or 0) for row in calls)
+        repeats += sum(1 for row in calls if row.get("repeat"))
         lookup = invoice_lookup(path)
         expected = key.get(lookup)
         if expected is None:
@@ -190,16 +190,15 @@ def main(argv: list[str] | None = None) -> int:
             f"{'ok' if ok else 'MISS'}",
             flush=True,
         )
-    print(format_tool_summary(tool_calls, tool_latency), flush=True)
+    print(format_tool_summary(tool_calls, repeats), flush=True)
     print(f"score {correct}/{len(files)}", flush=True)
     return 0 if correct == len(files) and correct == len(key) else 1
 
 
-def format_tool_summary(calls: int, latency_ms: int) -> str:
-    """One line for a run: how many tool calls, and their total and average latency."""
+def format_tool_summary(calls: int, repeats: int) -> str:
+    """One line for a run. Repeats are included in calls."""
 
-    average = (latency_ms / calls) if calls else 0.0
-    return f"tools calls={calls} total_latency_ms={latency_ms} avg_latency_ms={average:.1f}"
+    return f"tools calls={calls} repeats={repeats}"
 
 
 if __name__ == "__main__":

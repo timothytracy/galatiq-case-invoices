@@ -237,7 +237,7 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
     assert "NEAR_THRESHOLD" not in enum
     for code in ("SYSTEM_ERROR", "AUDIT_NOTE", "MADE_UP"):
         body = registry.call("get_policy_rule", json.dumps({"code": code}))
-        assert body == {"error": "argument code is not a finding code"}
+        assert body == {"error": "argument code must be one of the allowed values"}
     warning = registry.call("get_policy_rule", json.dumps({"code": "FRAUD_SIGNAL"}))
     assert warning["class"] == "warning"
     assert warning["rule"] == RULE_TEXT["FRAUD_SIGNAL"]
@@ -252,7 +252,7 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
         monkeypatch,
     )
     logged = _audit_log(out)["result"]["tool_calls"][0]
-    assert logged["error"] == "argument code is not a finding code"
+    assert logged["error"] == "argument code must be one of the allowed values"
     assert logged["result"] is None
     assert out["outcome"] == "approve"
 
@@ -278,10 +278,10 @@ def test_tools_sentence_is_the_only_audit_prompt_change(monkeypatch):
     as_of = date(2026, 10, 31)
     facts = verified_payload(state.invoice, {"WidgetA": 15}, as_of)
     monkeypatch.delenv("XAI_TOOLS", raising=False)
-    off = _audit_messages(state, state.invoice, state.decision, as_of, facts)
+    off = _audit_messages(state, state.invoice, state.decision, as_of, facts, False)
     critique_off = _critique_messages(state.decision, as_of, facts)
     monkeypatch.setenv("XAI_TOOLS", "1")
-    on = _audit_messages(state, state.invoice, state.decision, as_of, facts)
+    on = _audit_messages(state, state.invoice, state.decision, as_of, facts, True)
     critique_on = _critique_messages(state.decision, as_of, facts)
     assert off[1] == on[1]
     assert TOOLS_LINE not in off[0]["content"]
