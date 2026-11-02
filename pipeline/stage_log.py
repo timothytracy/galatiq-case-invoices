@@ -20,7 +20,7 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
     return payload
 
 
-def _unique_tool_calls(step_attempts) -> list:
+def _last_tool_calls(step_attempts) -> list:
     """The last attempt's list. That snapshot already holds every call so far."""
 
     calls = []
@@ -55,7 +55,7 @@ def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=
         "attempts": step_attempts,
         "codes": finding_codes(findings),
     }
-    calls = _unique_tool_calls(step_attempts)
+    calls = _last_tool_calls(step_attempts)
     if calls:
         result["tool_calls"] = calls
     return {

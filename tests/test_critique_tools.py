@@ -178,10 +178,7 @@ def _state() -> PipelineState:
 def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeypatch):
     before = _sha(db_path)
     path = _invoice_file(tmp_path)
-    calls = tool_step(
-        ("stock", "check_stock", json.dumps({"item": "Widget B"})),
-        ("price", "get_reference_price", json.dumps({"item": "WidgetB"})),
-    )
+    calls = tool_step(("stock", "lookup_item", json.dumps({"item": "Widget B"})))
     result, model, clock = _run(
         path,
         db_path,
@@ -204,9 +201,9 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
     assert "sqlite3" not in source
 
     logged = _stage(result, "critique")["tool_calls"]
-    by_name = {row["name"]: row for row in logged}
-    stock = by_name["check_stock"]
+    stock = logged[0]
     assert stock["agent"] == "critique"
+    assert stock["name"] == "lookup_item"
     assert stock["round"] == 1
     assert stock["attempt"] == 1
     assert stock["call_id"] == "stock"
@@ -218,20 +215,16 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
         "available": 10,
         "requested_on_invoice": "8",
         "covered": True,
-    }
-    assert by_name["get_reference_price"]["result"] == {
-        "item": "WidgetB",
-        "matched_item": "WidgetB",
         "reference_price": "500.00",
         "currency": "USD",
     }
-    assert [row["agent"] for row in logged] == ["critique", "critique"]
 
     line = _result_line(path, result)
     assert line["tool_calls"] == logged
     assert tool_calls_of(result) == logged
     names = [item["function"]["name"] for item in model.tool_requests[0]["tools"]]
-    assert names == ["check_stock", "get_reference_price"]
+    assert names == ["lookup_item"]
+    assert "at most once per item" in TOOLS_LINE
     bodies = [
         json.loads(message["content"])
         for message in model.tool_requests[1]["messages"]
@@ -245,7 +238,7 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
 
 def test_unknown_item_goes_back_to_the_model(tmp_path, db_path, monkeypatch):
     path = _invoice_file(tmp_path)
-    bad = tool_step(("c1", "check_stock", json.dumps({"item": "WidgitA"})))
+    bad = tool_step(("c1", "lookup_item", json.dumps({"item": "WidgitA"})))
     result, model, _clock = _run(
         path,
         db_path,
@@ -263,7 +256,7 @@ def test_unknown_item_goes_back_to_the_model(tmp_path, db_path, monkeypatch):
     logged = _stage(result, "critique")["tool_calls"]
     assert logged[0]["error"] == "unknown item: WidgitA"
     assert logged[0]["result"] is None
-    assert logged[0]["name"] == "check_stock"
+    assert logged[0]["name"] == "lookup_item"
     assert logged[0]["arguments"] == {"item": "WidgitA"}
     body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
     assert body == {"error": "unknown item: WidgitA"}
@@ -272,7 +265,7 @@ def test_unknown_item_goes_back_to_the_model(tmp_path, db_path, monkeypatch):
 def test_critique_cap_is_a_system_error_hold_and_nothing_is_paid(tmp_path, db_path, monkeypatch):
     assert TOOL_ROUND_CAP == 3
     path = _invoice_file(tmp_path)
-    one = ("c1", "check_stock", json.dumps({"item": "WidgetB"}))
+    one = ("c1", "lookup_item", json.dumps({"item": "WidgetB"}))
     steps = [text_step(_extraction()), text_step(REASON)]
     steps.extend(tool_step(one) for _ in range(TOOL_ROUND_CAP + 1))
     result, model, clock = _run(path, db_path, steps, monkeypatch)
@@ -311,7 +304,7 @@ def test_fact_guard_still_drops_a_covered_stock_concern(tmp_path, db_path, monke
         [
             text_step(_extraction()),
             text_step(REASON),
-            tool_step(("c1", "check_stock", json.dumps({"item": "WidgetB"}))),
+            tool_step(("c1", "lookup_item", json.dumps({"item": "WidgetB"}))),
             text_step(json.dumps(concern)),
             text_step(REASON),
             text_step(AUDIT),

@@ -111,36 +111,29 @@ _ITEM = {
 }
 
 def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
-    """check_stock and get_reference_price for this invoice.
+    """lookup_item for this invoice.
 
-    stock is the snapshot critique already loaded read-only. The functions
-    do not open inventory.db. An unknown item raises ToolInputError.
+    stock is the snapshot critique already loaded read-only. The function
+    does not open inventory.db. An unknown item raises ToolInputError.
     """
 
     return ToolRegistry(
         [
             Tool(
-                name="check_stock",
+                name="lookup_item",
                 description=(
-                    "Read-only. Available stock for one item, and the summed quantity "
-                    "this invoice requests for it. Names match after ignoring case, "
-                    "spaces, and hyphens only."
+                    "Read-only. Stock and USD reference price for one item on this invoice. "
+                    "Names match after ignoring case, spaces, and hyphens only."
                 ),
                 parameters=_ITEM,
-                function=partial(check_stock, invoice=invoice, stock=stock),
-            ),
-            Tool(
-                name="get_reference_price",
-                description="Read-only. USD reference unit price for one item.",
-                parameters=_ITEM,
-                function=get_reference_price,
+                function=partial(lookup_item, invoice=invoice, stock=stock),
             ),
         ]
     )
 
 
-def check_stock(arguments: dict, invoice, stock: dict[str, int]) -> dict:
-    """Stock for one item against this invoice's summed quantity."""
+def lookup_item(arguments: dict, invoice, stock: dict[str, int]) -> dict:
+    """Stock from the snapshot and the reference price from policy.toml."""
 
     item = arguments["item"]
     matched = _matched_name(item, stock)
@@ -148,28 +141,15 @@ def check_stock(arguments: dict, invoice, stock: dict[str, int]) -> dict:
         raise ToolInputError(f"unknown item: {item}")
     requested = summed_quantities(invoice, stock).get(matched, Decimal(0))
     available = int(stock[matched])
+    price = POLICY.reference_prices.get(matched)
     return {
         "item": item,
         "matched_item": matched,
         "available": available,
         "requested_on_invoice": show_qty(requested),
         "covered": requested <= Decimal(available),
-    }
-
-
-def get_reference_price(arguments: dict) -> dict:
-    """USD reference price from policy.toml. Unknown items are an input error."""
-
-    item = arguments["item"]
-    table = POLICY.reference_prices
-    matched = _matched_name(item, table)
-    if matched is None:
-        raise ToolInputError(f"unknown item: {item}")
-    return {
-        "item": item,
-        "matched_item": matched,
-        "reference_price": show_money(table[matched]),
-        "currency": "USD",
+        "reference_price": None if price is None else show_money(price),
+        "currency": None if price is None else "USD",
     }
 
 

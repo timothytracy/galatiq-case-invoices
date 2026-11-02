@@ -18,8 +18,8 @@ from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 # One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
 TOOLS_LINE = (
-    "You may call the read-only tools to look up stock and the reference price "
-    "rather than guess them."
+    "You may call lookup_item to look up stock and the reference price rather than guess them. "
+    "Results do not change during this step, so call lookup_item at most once per item."
 )
 
 
