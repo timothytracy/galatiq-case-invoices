@@ -1,6 +1,6 @@
 """Read-only tools. A tool is a function plus the JSON schema the model sees.
 
-A ToolInputError (unknown tool, bad arguments, unknown item or code) becomes
+A ToolInputError (unknown tool, bad arguments, unknown item) becomes
 {"error": "..."} for the model. Any other exception leaves call() and the
 loop turns it into a non-retryable LLMError. echo_note is for tests and
 the probe. Critique gets critique_registry when XAI_TOOLS is on.
@@ -10,9 +10,7 @@ from decimal import Decimal
 from functools import partial
 
 from decision.invoice_fields import canonical_item, show_money, show_qty, summed_quantities
-from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
-from decision.wording import ACTION, RULE_TEXT
 from llm_client import parse_tool_arguments
 
 
@@ -112,27 +110,11 @@ _ITEM = {
     "required": ["item"],
 }
 
-# Built from the decision tables so a new code shows up here without a second list.
-_FINDING_CODES = list(REJECT_CODES) + list(HOLD_CODES) + list(WARNING_CODES)
-
-_CODE = {
-    "type": "object",
-    "properties": {
-        "code": {
-            "type": "string",
-            "description": "One finding code.",
-            "enum": _FINDING_CODES,
-        },
-    },
-    "required": ["code"],
-}
-
-
 def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
-    """check_stock, get_reference_price, and get_policy_rule for this invoice.
+    """check_stock and get_reference_price for this invoice.
 
     stock is the snapshot critique already loaded read-only. The functions
-    do not open inventory.db. An unknown item or code raises ToolInputError.
+    do not open inventory.db. An unknown item raises ToolInputError.
     """
 
     return ToolRegistry(
@@ -152,15 +134,6 @@ def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
                 description="Read-only. USD reference unit price for one item.",
                 parameters=_ITEM,
                 function=get_reference_price,
-            ),
-            Tool(
-                name="get_policy_rule",
-                description=(
-                    "Read-only. Class (reject, hold, or warning), rule text, and next "
-                    "action for one finding code."
-                ),
-                parameters=_CODE,
-                function=get_policy_rule,
             ),
         ]
     )
@@ -197,27 +170,6 @@ def get_reference_price(arguments: dict) -> dict:
         "matched_item": matched,
         "reference_price": show_money(table[matched]),
         "currency": "USD",
-    }
-
-
-def get_policy_rule(arguments: dict) -> dict:
-    """Class, rule text, and action for one finding code. Unknown codes error."""
-
-    code = arguments["code"]
-    name = code.strip().upper() if isinstance(code, str) else ""
-    if name in REJECT_CODES:
-        kind = "reject"
-    elif name in HOLD_CODES:
-        kind = "hold"
-    elif name in WARNING_CODES:
-        kind = "warning"
-    else:
-        raise ToolInputError(f"unknown code: {code}")
-    return {
-        "code": name,
-        "class": kind,
-        "rule": RULE_TEXT.get(name),
-        "action": ACTION.get(name),
     }
 
 
@@ -258,7 +210,4 @@ def _schema_error(parameters: dict, arguments: dict) -> str | None:
             return f"argument {name} must be a {expected}"
         if not isinstance(value, kind):
             return f"argument {name} must be a {expected}"
-        allowed = (properties.get(name) or {}).get("enum")
-        if isinstance(allowed, list) and value not in allowed:
-            return f"argument {name} is not a finding code"
     return None

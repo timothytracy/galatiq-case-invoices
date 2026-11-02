@@ -17,7 +17,10 @@ from pipeline.tools import critique_registry
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 # One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
-TOOLS_LINE = "You may call the read-only tools to look up a fact rather than guess it."
+TOOLS_LINE = (
+    "You may call the read-only tools to look up stock and the reference price "
+    "rather than guess them."
+)
 
 
 def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:

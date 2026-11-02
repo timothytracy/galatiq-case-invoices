@@ -23,8 +23,6 @@ from models import (
 )
 from pipeline.critique import TOOLS_LINE, critique
 from pipeline.fact_guard import CRITIQUE_CLAIMS, VERIFIED_FACTS
-from pipeline.tools import get_policy_rule
-from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from scripts.eval import format_tool_summary
 from decision.wording import today_line
 from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom
@@ -183,7 +181,6 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
     calls = tool_step(
         ("stock", "check_stock", json.dumps({"item": "Widget B"})),
         ("price", "get_reference_price", json.dumps({"item": "WidgetB"})),
-        ("rule", "get_policy_rule", json.dumps({"code": "REVISED_INVOICE"})),
     )
     result, model, clock = _run(
         path,
@@ -228,20 +225,13 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
         "reference_price": "500.00",
         "currency": "USD",
     }
-    rule = by_name["get_policy_rule"]["result"]
-    assert rule["code"] == "REVISED_INVOICE"
-    assert rule["class"] == "hold"
-    assert rule["rule"] == (
-        "A revised invoice is a hold until someone confirms it replaces an unpaid original."
-    )
-    assert rule["action"] == "Confirm it replaces the original and that the original was not paid."
-    assert [row["agent"] for row in logged] == ["critique", "critique", "critique"]
+    assert [row["agent"] for row in logged] == ["critique", "critique"]
 
     line = _result_line(path, result)
     assert line["tool_calls"] == logged
     assert tool_calls_of(result) == logged
     names = [item["function"]["name"] for item in model.tool_requests[0]["tools"]]
-    assert names == ["check_stock", "get_reference_price", "get_policy_rule"]
+    assert names == ["check_stock", "get_reference_price"]
     bodies = [
         json.loads(message["content"])
         for message in model.tool_requests[1]["messages"]
@@ -253,12 +243,9 @@ def test_critique_tools_return_2106_facts_and_the_log(tmp_path, db_path, monkeyp
     assert "verified_by_code" in model.tool_requests[0]["messages"][1]["content"]
 
 
-def test_unknown_item_and_code_go_back_to_the_model(tmp_path, db_path, monkeypatch):
+def test_unknown_item_goes_back_to_the_model(tmp_path, db_path, monkeypatch):
     path = _invoice_file(tmp_path)
-    bad = tool_step(
-        ("c1", "check_stock", json.dumps({"item": "WidgitA"})),
-        ("c2", "get_policy_rule", json.dumps({"code": "NOT_A_CODE"})),
-    )
+    bad = tool_step(("c1", "check_stock", json.dumps({"item": "WidgitA"})))
     result, model, _clock = _run(
         path,
         db_path,
@@ -278,36 +265,8 @@ def test_unknown_item_and_code_go_back_to_the_model(tmp_path, db_path, monkeypat
     assert logged[0]["result"] is None
     assert logged[0]["name"] == "check_stock"
     assert logged[0]["arguments"] == {"item": "WidgitA"}
-    assert logged[1]["error"] == "argument code is not a finding code"
-    assert logged[1]["result"] is None
-    code_schema = next(
-        tool["function"]["parameters"]
-        for tool in model.tool_requests[0]["tools"]
-        if tool["function"]["name"] == "get_policy_rule"
-    )
-    assert code_schema["properties"]["code"]["enum"] == (
-        list(REJECT_CODES) + list(HOLD_CODES) + list(WARNING_CODES)
-    )
-    assert "ITEM_NOT_IN_SOURCE" in code_schema["properties"]["code"]["enum"]
-    bodies = [
-        json.loads(message["content"])
-        for message in model.tool_requests[1]["messages"]
-        if message["role"] == "tool"
-    ]
-    assert bodies == [
-        {"error": "unknown item: WidgitA"},
-        {"error": "argument code is not a finding code"},
-    ]
-
-
-def test_known_warning_without_rule_text_is_not_an_input_error():
-    rule = get_policy_rule({"code": "noncommercial_address"})
-    assert rule == {
-        "code": "NONCOMMERCIAL_ADDRESS",
-        "class": "warning",
-        "rule": None,
-        "action": None,
-    }
+    body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
+    assert body == {"error": "unknown item: WidgitA"}
 
 
 def test_critique_cap_is_a_system_error_hold_and_nothing_is_paid(tmp_path, db_path, monkeypatch):

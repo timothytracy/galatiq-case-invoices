@@ -21,21 +21,12 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
 
 
 def _unique_tool_calls(step_attempts) -> list:
-    """One record per call. A later attempt's log still holds the earlier calls."""
+    """The last attempt's list. That snapshot already holds every call so far."""
 
     calls = []
-    seen = set()
     for row in step_attempts:
-        if not isinstance(row, dict):
-            continue
-        for call in row.get("tool_calls") or []:
-            if not isinstance(call, dict):
-                continue
-            key = (call.get("round"), call.get("attempt"), call.get("call_id"))
-            if key in seen:
-                continue
-            seen.add(key)
-            calls.append(call)
+        if isinstance(row, dict) and row.get("tool_calls"):
+            calls = row["tool_calls"]
     return calls
 
 
