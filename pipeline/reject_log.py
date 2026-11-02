@@ -1,7 +1,8 @@
 """Reject log. The other exit. Nothing here is paid."""
 
-from models import PaymentRecord, PipelineState
+from models import PipelineState
 from pipeline.decisions import decision_from_validation, failure_decision, tighten
+from pipeline.payment import not_paid_record
 from pipeline.stage_log import stage_log
 from decision.outcome import finding_codes
 from decision.wording import ACTION, explain
@@ -46,14 +47,7 @@ def reject_log(state: PipelineState, ledger_path=None) -> dict:
         reason = f"release record could not be written {action}"
         decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
 
-    invoice = state.invoice
-    record = PaymentRecord(
-        status="not_paid",
-        vendor=None if invoice is None else invoice.vendor,
-        amount=None if invoice is None else invoice.total,
-        currency=None if invoice is None else invoice.currency,
-        detail=reason,
-    )
+    record = not_paid_record(state.invoice, reason)
     result = {
         "outcome": outcome,
         "reason": reason,
