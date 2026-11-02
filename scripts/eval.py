@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    db_path = inventory_db_path(ROOT / "inventory.db")
+    db_path = inventory_db_path()
     if args.reset or args.reset_db:
         reset_inventory_db(db_path)
     else:

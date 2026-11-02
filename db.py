@@ -21,17 +21,39 @@ SEED = (
 )
 
 
-def inventory_db_path(default: str | Path = "inventory.db") -> Path:
+ROOT = Path(__file__).resolve().parent
+
+
+def data_dir() -> Path:
+    """Folder for inventory.db, payments.db, and logs/. Not the working directory.
+
+    INVOICE_DATA_DIR, when set, replaces the repository root. Read on each call.
+    """
+
+    override = os.environ.get("INVOICE_DATA_DIR", "").strip()
+    return Path(override) if override else ROOT
+
+
+def payments_db_path() -> Path:
+    return data_dir() / "payments.db"
+
+
+def log_dir() -> Path:
+    return data_dir() / "logs"
+
+
+def inventory_db_path(default: str | Path | None = None) -> Path:
     """Inventory path for this run.
 
     INVENTORY_DB, when set, replaces default. Tests set it to a temporary
-    file so they do not open the repository inventory.db.
+    file so they do not open the repository inventory.db. With no default,
+    the file is inventory.db in the data folder.
     """
 
     override = os.environ.get("INVENTORY_DB", "").strip()
     if override:
         return Path(override)
-    return Path(default)
+    return Path(default) if default is not None else data_dir() / "inventory.db"
 
 
 def create_database(path: str | Path = "inventory.db") -> Path:

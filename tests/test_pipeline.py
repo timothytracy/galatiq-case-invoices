@@ -717,6 +717,45 @@ def test_schema_repair_then_success_does_not_sleep(tmp_path, db_path):
     assert status(result) == "paid"
 
 
+def test_data_folder_is_the_repo_root_unless_overridden(monkeypatch, tmp_path):
+    from db import data_dir, inventory_db_path, log_dir, payments_db_path
+
+    monkeypatch.delenv("INVOICE_DATA_DIR", raising=False)
+    monkeypatch.delenv("INVENTORY_DB", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert data_dir() == ROOT
+    assert payments_db_path() == ROOT / "payments.db"
+    assert inventory_db_path() == ROOT / "inventory.db"
+    assert log_dir() == ROOT / "logs"
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path / "data"))
+    assert payments_db_path() == tmp_path / "data" / "payments.db"
+
+
+def test_main_from_another_folder_writes_only_to_the_data_folder(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    data = tmp_path / "store"
+    elsewhere.mkdir()
+    data.mkdir()
+    env = os.environ.copy()
+    env.pop("XAI_API_KEY", None)
+    env.pop("INVENTORY_DB", None)
+    env["INVOICE_DATA_DIR"] = str(data)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run(
+        [
+            sys.executable, str(ROOT / "main.py"),
+            f"--invoice_path={INVOICES / 'invoice_1001.txt'}",
+            f"--replay={ROOT / 'recordings' / 'samples.jsonl'}",
+        ],
+        cwd=elsewhere, env=env, capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert list(elsewhere.iterdir()) == []
+    assert (data / "inventory.db").is_file()
+    assert (data / "payments.db").is_file()
+    assert (data / "logs" / "invoice_1001.txt.json").is_file()
+
+
 def test_missing_key_fails_fast(tmp_path, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)

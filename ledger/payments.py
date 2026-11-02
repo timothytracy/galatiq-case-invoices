@@ -42,9 +42,18 @@ CREATE TABLE IF NOT EXISTS payments (
     invoice_date TEXT,
     source_file TEXT NOT NULL,
     raw_sha256 TEXT NOT NULL,
-    paid_at TEXT NOT NULL
+    paid_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'paid',
+    authorization_key TEXT
 )
 """
+
+# Columns added after the first ledgers were written. Old rows read as paid.
+_ADDED_COLUMNS = (
+    ("status", "TEXT NOT NULL DEFAULT 'paid'"),
+    ("authorization_key", "TEXT"),
+)
+STATUSES = ("pending", "paid", "failed")
 
 # One paid row per vendor and invoice number. A second insert fails.
 _UNIQUE = (
@@ -74,10 +83,16 @@ _COLUMNS = (
     "source_file",
     "raw_sha256",
     "paid_at",
+    "status",
 )
 
 
 class PaymentRow(NamedTuple):
+    """One ledger row. Pending and failed rows still block a second payment.
+
+    paid_at is when the row was reserved, just before the gateway call.
+    """
+
     vendor: str
     vendor_key: str
     invoice_number: str | None
@@ -88,6 +103,7 @@ class PaymentRow(NamedTuple):
     source_file: str
     raw_sha256: str
     paid_at: str
+    status: str = "paid"
 
 
 def vendor_key(name: str | None) -> str:
@@ -111,13 +127,28 @@ def paid_rows(path: str | Path) -> list[PaymentRow]:
         return []
     connection = _connect_readonly(db_path)
     try:
+        have = _column_names(connection)
+        picked = [name if name in have else f"'paid' AS {name}" for name in _COLUMNS]
         cursor = connection.execute(
-            "SELECT " + ", ".join(_COLUMNS) + " FROM payments ORDER BY rowid"
+            "SELECT " + ", ".join(picked) + " FROM payments ORDER BY rowid"
         )
         found = cursor.fetchall()
     finally:
         connection.close()
     return [PaymentRow._make(row) for row in found]
+
+
+def _column_names(connection: sqlite3.Connection) -> set[str]:
+    return {row[1] for row in connection.execute("PRAGMA table_info(payments)")}
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Add any column an older ledger file is missing. Runs inside the caller's write."""
+
+    have = _column_names(connection)
+    for name, kind in _ADDED_COLUMNS:
+        if name not in have:
+            connection.execute(f"ALTER TABLE payments ADD COLUMN {name} {kind}")
 
 
 def authorization_used(path: str | Path, key: str) -> bool:
@@ -164,8 +195,9 @@ def record_payment(
     source_file: str,
     raw_text: str,
     authorization_key: str | None = None,
+    status: str = "paid",
 ) -> bool | str:
-    """Insert one paid row.
+    """Insert one row, paid or pending.
 
     True means the row was inserted. False means this invoice was already
     paid. "SPLIT_INVOICE" means the split rule fired.
@@ -173,10 +205,13 @@ def record_payment(
     Any other string means the file could not be written. Nothing was inserted
     in those cases.
     The duplicate and split checks run inside the write lock, so two callers
-    cannot both pass the split rule. The caller writes this before the mock
-    payment. Anything but True means the mock must not run.
+    cannot both pass the split rule. The payment step writes a pending row
+    before the mock payment and settles it after with settle_payment.
+    Anything but True means the mock must not run.
     """
 
+    if status not in ("pending", "paid"):
+        raise ValueError(f"record_payment status must be pending or paid, not {status!r}")
     number = normalize_invoice_number(invoice_number)
     marker = (revision or "").strip() or None
     row = (
@@ -190,12 +225,15 @@ def record_payment(
         source_file,
         raw_sha256(raw_text),
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        status,
+        authorization_key,
     )
     connection = None
     try:
         connection = sqlite3.connect(Path(path), timeout=_LOCK_TIMEOUT, isolation_level=None)
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(_CREATE)
+        _migrate(connection)
         connection.execute(_UNIQUE)
         connection.execute(_USED_AUTH)
         rows = [
@@ -219,9 +257,10 @@ def record_payment(
         if over:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
+        inserted = _COLUMNS + ("authorization_key",)
         connection.execute(
-            "INSERT INTO payments (" + ", ".join(_COLUMNS) + ") VALUES ("
-            + ", ".join("?" for _ in _COLUMNS)
+            "INSERT INTO payments (" + ", ".join(inserted) + ") VALUES ("
+            + ", ".join("?" for _ in inserted)
             + ")",
             row,
         )
@@ -247,6 +286,40 @@ def record_payment(
             except sqlite3.Error:
                 pass
         return f"payments ledger unreadable: {exc}"
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def settle_payment(path: str | Path, authorization_key: str, status: str) -> bool:
+    """Move this authorization's pending row to paid or failed.
+
+    True when exactly one pending row changed. A failed row stays in the
+    ledger and keeps blocking this invoice: the gateway may have paid it.
+    """
+
+    if status not in ("paid", "failed"):
+        raise ValueError(f"settle_payment status must be paid or failed, not {status!r}")
+    connection = None
+    try:
+        connection = sqlite3.connect(Path(path), timeout=_LOCK_TIMEOUT, isolation_level=None)
+        connection.execute("BEGIN IMMEDIATE")
+        changed = connection.execute(
+            "UPDATE payments SET status = ? WHERE authorization_key = ? AND status = 'pending'",
+            (status, authorization_key),
+        ).rowcount
+        if changed != 1:
+            connection.execute("ROLLBACK")
+            return False
+        connection.execute("COMMIT")
+        return True
+    except sqlite3.Error:
+        if connection is not None:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+        return False
     finally:
         if connection is not None:
             connection.close()

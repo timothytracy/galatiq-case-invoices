@@ -222,6 +222,30 @@ def test_metrics_from_timestamps_and_currency():
     assert table_rows([stamped], outcome="reject") == []
 
 
+def test_paid_hold_moves_from_held_to_released():
+    hold = _review_hold("northwind.txt", "500.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.")
+    euro = _review_hold("harbor.txt", "890.25", "EUR", "VENDOR_RENAMED", "The vendor name says formerly.")
+    assert can_pay(invoice_view(hold)) is True
+    before = summarize([hold, euro])
+    assert before["counts"]["hold"] == 2
+    assert before["dollars"]["hold"] == Decimal("500.00")
+    assert before["released"]["count"] == 0
+
+    hold["state"]["payment"] = {"status": "paid", "amount": "500.00", "currency": "USD"}
+    euro["state"]["payment"] = {"status": "paid", "amount": "890.25", "currency": "EUR"}
+    paid = invoice_view(hold)
+    assert paid["outcome"] == "hold"
+    assert can_pay(paid) is False
+    assert pay_block(paid) == "Already paid after review."
+    after = summarize([hold, euro])
+    assert after["counts"]["hold"] == 0
+    assert after["dollars"]["hold"] == Decimal("0")
+    assert after["other"] == {}
+    assert after["released"] == {
+        "count": 2, "dollars": Decimal("500.00"), "other": {"EUR": Decimal("890.25")},
+    }
+
+
 def test_live_mode_uses_the_cli_client_and_offline_does_not(monkeypatch, db_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert grok_key_set() is False
@@ -280,8 +304,9 @@ def test_review_app_starts(monkeypatch):
     assert "Process data/invoices" in labels
     assert "Load run file" in labels
     mode = next(radio for radio in app.sidebar.radio if radio.label == "Mode")
-    assert mode.value == "Offline (fake LLM)"
+    assert mode.value == "Replay (recorded Grok)"
     assert "Live (Grok)" in mode.options
+    mode.set_value("Offline (fake LLM)").run()
 
     app.text_input[0].set_value("data/invoices/invoice_1010.txt").run()
     next(button for button in app.button if button.label == "Process this invoice").click().run()
@@ -914,7 +939,8 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     app.run()
     assert not app.exception, app.exception
     mode = next(radio for radio in app.sidebar.radio if radio.label == "Mode")
-    assert mode.value == "Offline (fake LLM)"
+    assert mode.value == "Replay (recorded Grok)"
+    mode.set_value("Offline (fake LLM)").run()
     run_file = next(item for item in app.text_input if item.label == "Run file")
     run_file.set_value(str(run_path)).run()
     next(button for button in app.button if button.label == "Load run file").click().run()
@@ -999,6 +1025,16 @@ def test_paid_status_after_approve_and_pay(monkeypatch):
     assert "9,975.00" in queued
     assert "Not paid" not in queued
     assert "Payment did not happen" not in queued
+    assert "Already paid after review." in queued
+    assert not _pay_buttons(app)
+    _show(app, "Results")
+    assert "Paid after review" in _visible(app)
+    _show(app, "Metrics")
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["Hold"] == "0"
+    assert metrics["Dollars held"] == "0.00 USD"
+    assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
     _show(app, "Invoice detail")
     detail = _visible(app)
     assert "Paid" in detail

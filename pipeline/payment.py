@@ -8,11 +8,12 @@ from decision.invoice_fields import non_usd_message
 from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_codes
 from decision.policy import POLICY
 from decision.wording import explain
-from ledger import arrival_findings, record_payment
+from ledger import arrival_findings, record_payment, settle_payment
 from ledger.payments import authorization_used
 
 # Keys from payment() calls that passed no ledger. A ledger file keeps its own.
 _NO_LEDGER_KEYS: set[str] = set()
+PAYMENT_UNCONFIRMED = "payment did not confirm; ledger row marked failed"
 
 
 def clear_keys_without_ledger() -> None:
@@ -81,7 +82,17 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
         # No ledger file: remember the key here. A file stored it in the same write.
         if ledger_path is None:
             _NO_LEDGER_KEYS.add(auth.key)
-        response = mock_payment(invoice.vendor, invoice.total)
+        try:
+            response = mock_payment(invoice.vendor, invoice.total)
+        except Exception:
+            response = None
+        confirmed = isinstance(response, dict) and response.get("status") == "success"
+        if ledger_path is not None:
+            confirmed = confirmed and settle_payment(ledger_path, auth.key, "paid")
+            if not confirmed:
+                settle_payment(ledger_path, auth.key, "failed")
+        if not confirmed:
+            return _hold_unreadable_ledger(state, findings, PAYMENT_UNCONFIRMED, release)
         record = PaymentRecord(
             status="paid",
             vendor=invoice.vendor,
@@ -103,7 +114,7 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
 
 
 def _write_ledger(state: PipelineState, ledger_path, authorization_key: str) -> bool | str:
-    """True when there is no ledger, or the row was inserted.
+    """True when there is no ledger, or the pending row was inserted.
 
     False is a duplicate. "SPLIT_INVOICE" is the split rule. Any other string
     is an unreadable ledger. None as the path keeps the direct unit tests on
@@ -124,11 +135,12 @@ def _write_ledger(state: PipelineState, ledger_path, authorization_key: str) -> 
         source_file=state.filename,
         raw_text=state.raw_text,
         authorization_key=authorization_key,
+        status="pending",
     )
 
 
 def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str, release: bool = False) -> dict:
-    """The ledger file could not be written. Nothing is paid."""
+    """The ledger could not be written, or the gateway did not confirm. A SYSTEM_ERROR hold, not paid."""
 
     findings = list(findings) + [
         Finding(code="SYSTEM_ERROR", message=message, severity="warning")

@@ -1,6 +1,8 @@
 """Process one invoice: python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 
-Payments are remembered in payments.db, next to inventory.db.
+Payments are remembered in payments.db, next to inventory.db, in the data
+folder: the repository root, or INVOICE_DATA_DIR when set. Run logs go to
+logs/ in that folder. The working directory does not matter.
 inventory.db is created from the seed when it is missing.
 --reset-ledger deletes payments.db. --reset-db rebuilds inventory.db.
 --reset does both. recordings/, data/, and logs/ are left as they are.
@@ -11,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from db import ensure_inventory_db, inventory_db_path, reset_inventory_db
+from db import ensure_inventory_db, inventory_db_path, log_dir, payments_db_path, reset_inventory_db
 from graph import run_invoice
 from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode
 from decision.outcome import result_codes
@@ -24,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         "--reset-ledger",
         action="store_true",
         help=(
-            "Delete payments.db in the working directory before this run, including the "
+            "Delete payments.db in the data folder before this run, including the "
             "release records stored in it. A held invoice must be rerun before it can be "
             "approved. Does not change inventory.db, recordings/, data/, or logs/."
         ),
@@ -33,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         "--reset-db",
         action="store_true",
         help=(
-            "Delete inventory.db in the working directory and rebuild it from the seed "
+            "Delete inventory.db in the data folder and rebuild it from the seed "
             "before this run. Does not change payments.db, recordings/, data/, or logs/."
         ),
     )
@@ -41,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         "--reset",
         action="store_true",
         help=(
-            "Delete payments.db and inventory.db in the working directory, then rebuild "
+            "Delete payments.db and inventory.db in the data folder, then rebuild "
             "inventory.db from the seed. Deleting payments.db drops its release records, "
             "so a held invoice must be rerun before it can be approved. "
             "Does not change recordings/, data/, or logs/."
@@ -74,13 +76,13 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    db_path = inventory_db_path(Path("inventory.db"))
+    db_path = inventory_db_path()
     if args.reset or args.reset_db:
         reset_inventory_db(db_path)
     else:
         ensure_inventory_db(db_path)
     # Next to inventory.db. Gitignored. A second run of the same file is a duplicate hold.
-    ledger = Path("payments.db")
+    ledger = payments_db_path()
     if args.reset or args.reset_ledger:
         ledger.unlink(missing_ok=True)
 
@@ -94,11 +96,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _write_log(path: Path, result: dict) -> None:
-    log_dir = Path("logs")
-    log_dir.mkdir(parents=True, exist_ok=True)
+    folder = log_dir()
+    folder.mkdir(parents=True, exist_ok=True)
     payload = list(result["logs"])
     payload.append(_result_line(path, result))
-    destination = log_dir / f"{path.name}.json"
+    destination = folder / f"{path.name}.json"
     destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 

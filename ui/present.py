@@ -78,6 +78,8 @@ def pay_block(view: dict) -> str | None:
     """
     if view.get("outcome") != "hold":
         return "Only a held invoice can be paid."
+    if released(view):
+        return "Already paid after review."
     blocked = review_release_block(
         view.get("outcome"), view.get("findings") or [], view.get("reason_code"),
     )
@@ -91,8 +93,11 @@ def pay_block(view: dict) -> str | None:
         return None
     return "This hold is not a review hold and is never paid."
 def can_pay(view: dict) -> bool:
-    """True only for a hold whose codes are all review holds. Rejects are not payable."""
+    """True only for an unpaid hold whose codes are all review holds. Rejects are not payable."""
     return view.get("outcome") == "hold" and pay_block(view) is None
+def released(view: dict) -> bool:
+    """A hold a reviewer released and paid. Its pipeline outcome stays hold."""
+    return view.get("outcome") == "hold" and view.get("payment_status") == "paid"
 def holds(entries: list[dict]) -> list[dict]:
     return [view for view in map(invoice_view, entries) if view.get("outcome") == "hold"]
 def confirm_label(view: dict) -> str:
@@ -139,22 +144,30 @@ def summarize(entries: list[dict]) -> dict:
     counts = {name: 0 for name in OUTCOMES}
     dollars = {name: Decimal("0") for name in OUTCOMES}
     other: dict[str, dict[str, Decimal]] = {}
+    paid_holds = {"count": 0, "dollars": Decimal("0"), "other": {}}
     timed, sources = [], set()
     for entry in entries:
         view = invoice_view(entry)
         outcome = view["outcome"]
-        if outcome in counts:
-            counts[outcome] += 1
         amount, currency = _decimal(view["amount"]), view["currency"]
-        if amount is not None and outcome in dollars and currency:
-            bucket = dollars if currency == "USD" else other.setdefault(currency, {name: Decimal("0") for name in OUTCOMES})
-            bucket[outcome] += amount
+        if released(view):
+            paid_holds["count"] += 1
+            if amount is not None and currency == "USD":
+                paid_holds["dollars"] += amount
+            elif amount is not None and currency:
+                paid_holds["other"][currency] = paid_holds["other"].get(currency, Decimal("0")) + amount
+        else:
+            if outcome in counts:
+                counts[outcome] += 1
+            if amount is not None and outcome in dollars and currency:
+                bucket = dollars if currency == "USD" else other.setdefault(currency, {name: Decimal("0") for name in OUTCOMES})
+                bucket[outcome] += amount
         if view["elapsed_seconds"] is not None:
             timed.append(view["elapsed_seconds"])
             sources.add("elapsed_seconds" if entry.get("elapsed_seconds") is not None else "timestamps")
     timing = "none" if not sources else (next(iter(sources)) if len(sources) == 1 else "mixed")
     return {
-        "counts": counts, "dollars": dollars, "other": other,
+        "counts": counts, "dollars": dollars, "other": other, "released": paid_holds,
         "average_seconds": sum(timed) / len(timed) if timed else None,
         "timed_invoices": len(timed), "invoices": len(entries), "timing": timing,
     }

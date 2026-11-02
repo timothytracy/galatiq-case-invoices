@@ -34,6 +34,16 @@ def no_dotenv(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_data_dir(tmp_path, monkeypatch):
+    """payments.db and logs/ default to this test's folder, not the repository root."""
+
+    folder = tmp_path / "data"
+    folder.mkdir()
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(folder))
+    return folder
+
+
+@pytest.fixture(autouse=True)
 def release_records(tmp_path, monkeypatch):
     """Pipeline release records stay out of the repo logs/ directory."""
 
@@ -64,10 +74,13 @@ def isolate_inventory_db(inventory_db, monkeypatch):
 
 @pytest.fixture(scope="session", autouse=True)
 def repo_root_inventory_is_not_created():
-    """Fail the session if a test creates inventory.db at the repository root."""
+    """Fail the session if a test creates or deletes the repository's data files."""
 
-    path = ROOT / "inventory.db"
-    existed = path.exists()
+    paths = [ROOT / "inventory.db", ROOT / "payments.db"]
+    before = {path: path.read_bytes() if path.is_file() else None for path in paths}
     yield
-    if not existed:
-        assert not path.exists(), "a test created inventory.db at the repository root"
+    for path in paths:
+        if before[path] is None:
+            assert not path.exists(), f"a test created {path.name} at the repository root"
+        else:
+            assert path.is_file(), f"a test deleted {path.name} at the repository root"

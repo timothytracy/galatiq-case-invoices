@@ -1,7 +1,7 @@
 """Pay a held invoice after a reviewer approves it.
 
 The caller's dict only names the invoice. Payment uses the pipeline record
-in `INVOICE_RELEASE_DIR` (default `logs/`), keyed by the repo-relative path.
+in `INVOICE_RELEASE_DIR` (default `logs/` in the data folder), keyed by the repo-relative path.
 """
 
 import hashlib
@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
-from db import ensure_inventory_db, inventory_db_path
+from db import ensure_inventory_db, inventory_db_path, log_dir, payments_db_path
 from models import ExtractedInvoice, Finding, PipelineState
 from pipeline.audit import amount_in_text, issue_authorization
 from pipeline.payment import payment
@@ -61,7 +61,7 @@ def approve_and_pay(
     else:
         log = Path(log_path) if log_path is not None else ROOT / "output" / "reviews" / "approve_pay.jsonl"
     ledger = None if demo and ledger_path is None else (
-        Path(ledger_path) if ledger_path is not None else Path("payments.db")
+        Path(ledger_path) if ledger_path is not None else payments_db_path()
     )
     try:
         return _approve(result, reviewer, note, amount, ledger, log, now)
@@ -308,7 +308,7 @@ def _recheck(saved, invoice, ledger):
     except (OSError, ValueError):
         return "The source file could not be read."
     state = _pay_state(saved, invoice).model_copy(update={"raw_text": live})
-    database = inventory_db_path(ROOT / "inventory.db")
+    database = inventory_db_path()
     from pipeline.validation import validate
     try:
         ensure_inventory_db(database)
@@ -344,7 +344,7 @@ def _pay_state(saved, invoice: ExtractedInvoice) -> PipelineState:
 
 def _record_dir() -> Path:
     raw = os.environ.get("INVOICE_RELEASE_DIR", "").strip()
-    return Path(raw) if raw else ROOT / "logs"
+    return Path(raw) if raw else log_dir()
 
 
 def _record_path(rel: Path) -> Path:

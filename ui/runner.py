@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from db import create_database, inventory_db_path
+from db import create_database, data_dir, inventory_db_path, payments_db_path
 from graph import run_invoice
 from llm_client import GrokClient, load_dotenv
 from tests.fake_llm_eval import AS_OF, handler_for
@@ -22,9 +22,9 @@ from tests.fakes import FakeClock, FakeLLM, ZeroRandom
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
 SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
-DEFAULT_DB = ROOT / "inventory.db"
+DEFAULT_DB = data_dir() / "inventory.db"
 DEFAULT_RUN = ROOT / "output" / "runs" / "review_run.json"
-PAYMENTS_DB = ROOT / "payments.db"
+PAYMENTS_DB = payments_db_path()
 def grok_key_set() -> bool:
     """True when the CLI's Grok client would start. It reads XAI_API_KEY."""
     load_dotenv()
