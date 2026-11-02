@@ -72,6 +72,7 @@ def audit(
             llm,
             audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
             agent="audit",
+            final_turn_on_cap=True,
         )
         request = step
     try:

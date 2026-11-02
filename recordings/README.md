@@ -2,15 +2,15 @@
 
 These JSONL files are saved model replies. Replay reads them and does not call the network, so a score can be checked with no API key.
 
-All five sets are committed. They were recorded with `--as-of 2026-11-01`. The first three are tools off. The last two were recorded with `XAI_TOOLS=1`.
+Five sets are committed. They were recorded with `--as-of 2026-11-01`. Replay `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` with `XAI_TOOLS=0`. Replay `samples_tools.jsonl` and `unseen_tools.jsonl` with `XAI_TOOLS` unset or set to `1`.
 
-- `recordings/samples.jsonl` scores `data/invoices/`
-- `recordings/unseen.jsonl` scores `data/extra_invoices/`
-- `recordings/ordered.jsonl` scores `data/ordered_scenario.json` on one shared ledger
-- `recordings/samples_tools.jsonl` scores `data/invoices/` with tools on
-- `recordings/unseen_tools.jsonl` scores `data/extra_invoices/` with tools on
+- `recordings/samples.jsonl` scores `data/invoices/` with `XAI_TOOLS=0`
+- `recordings/unseen.jsonl` scores `data/extra_invoices/` with `XAI_TOOLS=0`
+- `recordings/ordered.jsonl` scores `data/ordered_scenario.json` on one shared ledger with `XAI_TOOLS=0`
+- `recordings/samples_tools.jsonl` scores `data/invoices/` with `XAI_TOOLS` unset or `1`
+- `recordings/unseen_tools.jsonl` scores `data/extra_invoices/` with `XAI_TOOLS` unset or `1`
 
-A missing recording fails the run. A file that is present still exits 1 when the score is short of perfect.
+`recordings/ordered_tools.jsonl` is the ordered recording for `XAI_TOOLS` unset or `1`. It is not committed yet. CI skips that replay and prints a skip note until the file is there. Any other missing recording fails the run. A file that is present still exits 1 when the score is short of perfect.
 
 Each file starts with a header line, then one line per model request.
 
@@ -26,11 +26,12 @@ The fingerprint hashes the model, the full message list (including tool results)
 Run these from the repo root, with `XAI_API_KEY` set in the environment. Do not put the key in the command.
 
 ```bash
-python3 scripts/eval.py --as-of 2026-11-01 --record recordings/samples.jsonl
-python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --as-of 2026-11-01 --record recordings/unseen.jsonl
-XAI_TOOLS=1 python3 scripts/eval.py --as-of 2026-11-01 --record recordings/samples_tools.jsonl
-XAI_TOOLS=1 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --as-of 2026-11-01 --record recordings/unseen_tools.jsonl
-python3 scripts/eval.py --ordered --as-of 2026-11-01 --record recordings/ordered.jsonl
+python3 scripts/eval.py --as-of 2026-11-01 --record recordings/samples_tools.jsonl
+python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --as-of 2026-11-01 --record recordings/unseen_tools.jsonl
+python3 scripts/eval.py --ordered --as-of 2026-11-01 --record recordings/ordered_tools.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --as-of 2026-11-01 --record recordings/samples.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --as-of 2026-11-01 --record recordings/unseen.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --ordered --as-of 2026-11-01 --record recordings/ordered.jsonl
 ```
 
-Replay any of the five with `--replay` in place of `--record`. Set `XAI_TOOLS=1` for the two `_tools` files. The tools flag changes the audit prompt, so a tools recording does not match a run with the flag off.
+Replay a file with `--replay` in place of `--record`. Leave `XAI_TOOLS` unset for the `_tools` files. Set `XAI_TOOLS=0` for the other three. The setting changes the audit prompt, so a `_tools` file does not match a run with `XAI_TOOLS=0`.

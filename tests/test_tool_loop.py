@@ -21,6 +21,7 @@ from llm_client import (
     LLMError,
     call_with_retries,
     tool_request,
+    tools_enabled,
 )
 from models import (
     ApprovalDecision,
@@ -32,9 +33,10 @@ from models import (
     ValidationReport,
 )
 from pipeline import audit
+from pipeline.audit import LEDGER_LINE, TOOLS_LINE
 from pipeline.payment import _USED_KEYS, payment
 from pipeline.tools import Tool, ToolInputError, ToolRegistry, example_registry
-from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom
+from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom, task_of
 from tests.test_pipeline import extraction, scripted, write_invoice
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -824,32 +826,37 @@ def _canon(payload) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def test_flag_off_payload_is_byte_identical_to_request(monkeypatch):
+def test_zero_rollback_payload_is_byte_identical_to_request(monkeypatch):
     captured = []
     _install_openai(monkeypatch, captured)
     client = GrokClient(api_key="test-key")
     messages = [{"role": "user", "content": "Return a JSON object."}]
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
     client.request(messages)
     plain = _canon(captured[0])
-    for value in (None, "0"):
-        fresh = [{"role": "user", "content": "Return a JSON object."}]
-        if value is None:
-            monkeypatch.delenv("XAI_TOOLS", raising=False)
-        else:
-            monkeypatch.setenv("XAI_TOOLS", value)
-        tool_request(client, example_registry())(fresh)
-    assert len(captured) == 3
+    for value in ("0", " 0 ", "0\n"):
+        monkeypatch.setenv("XAI_TOOLS", value)
+        tool_request(client, example_registry())(
+            [{"role": "user", "content": "Return a JSON object."}]
+        )
+    assert len(captured) == 4
     assert _canon(captured[1]) == plain
     assert _canon(captured[2]) == plain
+    assert _canon(captured[3]) == plain
     assert "tools" not in captured[0]
     assert "tool_choice" not in captured[0]
     assert captured[0]["temperature"] == 0
     assert captured[0]["messages"] == messages
     assert captured[0]["model"] == DEFAULT_MODEL
+    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    tool_request(client, example_registry())(
+        [{"role": "user", "content": "Return a JSON object."}]
+    )
+    assert captured[4]["tools"] == example_registry().schemas()
+    assert captured[4]["tool_choice"] == "auto"
+    assert _canon(captured[4]) != plain
 
 
-@pytest.mark.parametrize("value", ["0", "false", "no", "off", ""])
+@pytest.mark.parametrize("value", ["0", " 0 ", "0\n"])
 def test_flag_off_sends_no_tools(value, monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", value)
     model = ScriptedToolModel([text_step(ANSWER), _echo()])
@@ -863,6 +870,33 @@ def test_flag_off_sends_no_tools(value, monkeypatch):
     assert model.requests[0]["messages"][0]["content"] == "Answer with JSON."
     assert len(model.steps) == 1
     assert model.steps[0]["tool_calls"]
+
+
+@pytest.mark.parametrize("value", ["0", " 0 ", "0\n"])
+def test_only_zero_turns_tools_off(value, monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", value)
+    assert tools_enabled() is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["1", "true", "yes", "on", "TRUE", "false", "no", "off", "", "2", "00", "0.0", "maybe"],
+)
+def test_other_values_leave_tools_on(value, monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", value)
+    assert tools_enabled() is True
+    model = ScriptedToolModel([text_step(ANSWER)])
+    text = tool_request(model, example_registry())(
+        [{"role": "user", "content": "Answer with JSON."}]
+    )
+    assert text == ANSWER
+    assert model.requests == []
+    assert model.tool_requests[0]["tools"] == example_registry().schemas()
+
+
+def test_unset_xai_tools_leaves_tools_on(monkeypatch):
+    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    assert tools_enabled() is True
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE"])
@@ -884,6 +918,10 @@ def test_flag_on_sends_tools_on_the_wire(value, monkeypatch):
 def test_only_audit_is_wired_to_the_tool_loop():
     audit_text = (ROOT / "pipeline/audit.py").read_text(encoding="utf-8")
     assert "tool_request" in audit_text
+    assert "final_turn_on_cap=True" in audit_text
+    client_text = (ROOT / "llm_client.py").read_text(encoding="utf-8")
+    assert '== "audit"' not in client_text
+    assert "== 'audit'" not in client_text
     critique = (ROOT / "pipeline/critique.py").read_text(encoding="utf-8")
     assert "tool_request" not in critique
     assert "request_tools" not in critique
@@ -900,30 +938,79 @@ def test_only_audit_is_wired_to_the_tool_loop():
         assert "XAI_TOOLS" not in text
 
 
-def test_flag_off_agent_prompts_are_byte_identical(tmp_path, db_path, monkeypatch):
+def _run_clean(path, db_path, monkeypatch, value):
+    _USED_KEYS.clear()
+    if value is None:
+        monkeypatch.delenv("XAI_TOOLS", raising=False)
+    else:
+        monkeypatch.setenv("XAI_TOOLS", value)
+    handler, _counts = scripted(extraction())
+    fake = FakeLLM(handler)
+    result = run_invoice(
+        path,
+        db_path,
+        fake,
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+        max_attempts=3,
+    )
+    assert result["outcome"] == "approve"
+    return fake.calls
+
+
+def test_zero_rollback_prompts_are_byte_identical(tmp_path, db_path, monkeypatch):
     path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
-    seen = []
-    for value in (None, "0"):
-        _USED_KEYS.clear()
-        if value is None:
-            monkeypatch.delenv("XAI_TOOLS", raising=False)
-        else:
-            monkeypatch.setenv("XAI_TOOLS", value)
-        handler, _counts = scripted(extraction())
-        fake = FakeLLM(handler)
-        result = run_invoice(
-            path,
-            db_path,
-            fake,
-            clock=FakeClock(),
-            rng=ZeroRandom(),
-            max_attempts=3,
-        )
-        assert result["outcome"] == "approve"
-        seen.append(fake.calls)
-    assert seen[0] == seen[1]
+    first = _run_clean(path, db_path, monkeypatch, "0")
+    second = _run_clean(path, db_path, monkeypatch, "0")
     encoded = [
         json.dumps(calls, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        for calls in seen
+        for calls in (first, second)
     ]
     assert encoded[0] == encoded[1]
+    audit_call = next(call for call in first if task_of(call) == "audit")
+    assert TOOLS_LINE not in audit_call[0]["content"]
+    assert "check_payment_ledger" not in audit_call[0]["content"]
+
+
+def test_default_on_adds_only_the_tools_sentences(tmp_path, db_path, monkeypatch):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
+    off = _run_clean(path, db_path, monkeypatch, "0")
+    on = _run_clean(path, db_path, monkeypatch, None)
+    assert [task_of(call) for call in off] == [task_of(call) for call in on]
+    for off_call, on_call in zip(off, on):
+        if task_of(off_call) == "audit":
+            assert on_call[1] == off_call[1]
+            assert on_call[0]["content"] == off_call[0]["content"].replace(
+                "Return JSON only.", f"{TOOLS_LINE} {LEDGER_LINE} Return JSON only."
+            )
+        else:
+            assert on_call == off_call
+
+
+def test_final_turn_follows_the_flag_not_the_agent_name(monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    messages = [{"role": "user", "content": "Answer with JSON."}]
+
+    def drive(agent, flag):
+        steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+        steps.append(text_step(ANSWER))
+        model = ScriptedToolModel(steps)
+        step = tool_request(
+            model, example_registry(), agent=agent, final_turn_on_cap=flag
+        )
+        return step, model
+
+    named, named_model = drive("audit", False)
+    with pytest.raises(LLMError) as caught:
+        named(list(messages))
+    assert caught.value.error_type == "tool_cap"
+    assert named.forced_final_turn is False
+    assert named_model.requests == []
+
+    flagged, flagged_model = drive("other", True)
+    assert flagged(list(messages)) == ANSWER
+    assert flagged.forced_final_turn is True
+    final = flagged_model.requests[-1]
+    assert "tools" not in final
+    assert "tool_choice" not in final
+    assert final["messages"][-1]["content"].startswith("The tool cap is reached.")

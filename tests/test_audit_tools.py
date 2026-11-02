@@ -259,7 +259,7 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
 
 def test_flag_off_audit_request_has_no_tools(db_path, monkeypatch):
     _block_network(monkeypatch)
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    monkeypatch.setenv("XAI_TOOLS", "0")
     model = ScriptedToolModel([text_step(_verdict("PASS"))])
     out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
     assert out["outcome"] == "approve"
@@ -273,6 +273,27 @@ def test_flag_off_audit_request_has_no_tools(db_path, monkeypatch):
     assert "verified_by_code" in model.requests[0]["messages"][1]["content"]
     assert "tool_calls" not in _audit_log(out)["result"]
     assert "tool_calls" not in _result_line(Path("x.txt"), out)
+
+
+def test_default_audit_request_sends_tools(db_path, monkeypatch):
+    _block_network(monkeypatch)
+    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    model = ScriptedToolModel([text_step(_verdict("PASS"))])
+    out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
+    assert out["outcome"] == "approve"
+    assert model.requests == []
+    assert len(model.tool_requests) == 1
+    system = model.tool_requests[0]["messages"][0]["content"]
+    assert TOOLS_LINE in system
+    assert LEDGER_LINE in system
+    names = [tool["function"]["name"] for tool in model.tool_requests[0]["tools"]]
+    assert names == [
+        "lookup_item",
+        "recompute_totals",
+        "get_policy_rule",
+        "check_payment_ledger",
+    ]
+    assert "tool_calls" not in _audit_log(out)["result"]
 
 
 def test_tools_sentence_is_the_only_audit_prompt_change(monkeypatch):

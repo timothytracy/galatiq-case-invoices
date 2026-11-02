@@ -4,9 +4,8 @@ A missing XAI_API_KEY raises MissingAPIKey. Timeouts, 429, 5xx, network
 errors, and JSON that is still invalid after the schema repair are retried.
 Other 4xx errors are not.
 
-XAI_TOOLS defaults off. request() never sends tools. tool_request() sends
-them only when that flag is on. Audit calls tool_request when the flag is on.
-Critique does not.
+XAI_TOOLS defaults on for audit. request() never sends tools. tool_request()
+sends them unless XAI_TOOLS=0. Critique does not call tool_request.
 
 XAI_MODE is live (default), record, or replay. Live sends the same payload
 as before and does not open a recording. Record appends each reply after
@@ -45,7 +44,6 @@ SCHEMA_REPAIR_LIMIT = 2
 TOOL_ROUND_CAP = 3
 TOOL_CALL_CAP = 8
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
-_TOOLS_ON = {"1", "true", "yes", "on"}
 
 _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
@@ -122,9 +120,16 @@ def read_max_attempts() -> int:
 
 
 def tools_enabled() -> bool:
-    """XAI_TOOLS is the switch and the rollback. Unset and anything else are off."""
+    """Audit tools default on. Only the token 0 turns them off.
 
-    return os.environ.get("XAI_TOOLS", "").strip().lower() in _TOOLS_ON
+    The value is stripped and case-folded. Unset, 1, and every other value
+    are on. XAI_TOOLS=0 is the rollback: audit then sends the tools-off request.
+    """
+
+    raw = os.environ.get("XAI_TOOLS")
+    if raw is None:
+        return True
+    return raw.strip().lower() != "0"
 
 
 def resolve_run_mode(record: str | None, replay: str | None) -> tuple[str, str | None]:
@@ -543,13 +548,22 @@ class ToolStep:
 
     Retries share the counts. set_attempt(1) starts a new step.
     The schema repair goes through repair(), which sends no tools.
-    An audit cap takes one plain final turn instead of failing immediately.
+    final_turn_on_cap asks for one plain reply at the cap instead of failing.
     """
 
-    def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
+    def __init__(
+        self,
+        llm,
+        registry,
+        tool_log: list | None = None,
+        agent: str | None = None,
+        *,
+        final_turn_on_cap: bool = False,
+    ) -> None:
         self.llm = llm
         self.registry = registry
         self.agent = agent
+        self.final_turn_on_cap = final_turn_on_cap
         self.log = [] if tool_log is None else tool_log
         self.rounds = 0
         self.calls = 0
@@ -586,15 +600,29 @@ class ToolStep:
         return _tool_loop(self, messages, timeout)
 
 
-def tool_request(llm, registry, tool_log: list | None = None, agent: str | None = None) -> ToolStep:
+def tool_request(
+    llm,
+    registry,
+    tool_log: list | None = None,
+    agent: str | None = None,
+    *,
+    final_turn_on_cap: bool = False,
+) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
-    Flag off: llm.request, the same payload as today.
-    Flag on: run tool calls until the model returns plain content, then return
-    that text. The repair turn, if any, is repair() and sends no tools.
+    XAI_TOOLS=0: llm.request, the same payload as the tools-off path.
+    Otherwise: run tool calls until the model returns plain content, then
+    return that text. The repair turn, if any, is repair() and sends no tools.
+    final_turn_on_cap takes one plain reply when the cap blocks the next call.
     """
 
-    return ToolStep(llm, registry, tool_log, agent)
+    return ToolStep(
+        llm,
+        registry,
+        tool_log,
+        agent,
+        final_turn_on_cap=final_turn_on_cap,
+    )
 
 
 def _tool_loop(step: ToolStep, messages, timeout) -> str:
@@ -625,7 +653,7 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
                     _record(step, call, next_round, None, "blocked: tool_cap", time.perf_counter())
                 )
             step.cap_hit = which
-            if step.agent == "audit":
+            if step.final_turn_on_cap:
                 return _forced_final_turn(step, conversation, timeout)
             raise LLMError(
                 "tool_cap",
@@ -663,7 +691,7 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
 
 
 def _forced_final_turn(step: ToolStep, conversation: list, timeout) -> str:
-    """One plain completion after the audit cap. The payload has no tools."""
+    """One plain completion after the cap. The payload has no tools."""
 
     step.forced_final_turn = True
     messages = list(conversation) + [

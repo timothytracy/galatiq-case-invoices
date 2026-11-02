@@ -96,3 +96,5 @@ Decided on 2026-10-31: **a non-commercial address flagged on an otherwise clean 
 ## Known follow-ups
 
 Split detection is unit-tested on synthetic invoices only.
+
+Pending approval. Audit tools are on by default. Unset or `1` leaves them on. Only `XAI_TOOLS=0` turns them off and restores the previous audit request.

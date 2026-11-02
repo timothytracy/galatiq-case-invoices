@@ -324,7 +324,9 @@ def test_tool_loop_forced_final_and_repair_replay_without_a_network_client(tmp_p
     )
     messages = [{"role": "user", "content": "Answer with JSON."}]
     recorder = GrokClient(api_key="test-key", mode="record", recording=path, as_of=date(2026, 11, 1))
-    step = tool_request(recorder, example_registry(), agent="audit")
+    step = tool_request(
+        recorder, example_registry(), agent="audit", final_turn_on_cap=True
+    )
     parsed = call_with_retries(
         step,
         messages,
@@ -343,7 +345,9 @@ def test_tool_loop_forced_final_and_repair_replay_without_a_network_client(tmp_p
 
     install_openai_raise(monkeypatch)
     player = GrokClient(mode="replay", recording=path)
-    replay_step = tool_request(player, example_registry(), agent="audit")
+    replay_step = tool_request(
+        player, example_registry(), agent="audit", final_turn_on_cap=True
+    )
     again = call_with_retries(
         replay_step,
         list(messages),
