@@ -8,7 +8,7 @@ from decision.outcome import finding_codes
 from decision.wording import explain
 
 
-def stage_log(filename: str, stage: str, result: dict) -> dict:
+def stage_log(filename: str, stage: str, result: dict, *, echo: bool = True) -> dict:
     record = StageRecord(
         stage=stage,
         invoice_file=filename,
@@ -16,7 +16,8 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
         result=result,
     )
     payload = record.model_dump(mode="json")
-    print(json.dumps(payload), flush=True)
+    if echo:
+        print(json.dumps(payload), flush=True)
     return payload
 
 

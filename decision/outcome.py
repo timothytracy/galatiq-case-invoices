@@ -139,22 +139,22 @@ def result_codes(result: dict) -> list[str]:
     return finding_codes(result.get("findings") or [])
 
 
-def _message_of(finding) -> str:
+def _capped(finding) -> bool:
+    if finding is None:
+        return False
     if isinstance(finding, dict):
-        return finding.get("message") or ""
-    return finding.message or ""
+        return bool(finding.get("send_back_cap"))
+    return bool(getattr(finding, "send_back_cap", False))
 
 
-def _blocks_release(code: str, message: str = "") -> bool:
+def _blocks_release(code: str, finding=None) -> bool:
     """True when this code keeps a reviewer from paying."""
 
-    if code == "AUDIT_ESCALATED" and message == SEND_BACK_CAP_MESSAGE:
+    if _capped(finding):
         return True
-    if code in REJECT_CODES:
+    if code in REJECT_CODES or (code in HOLD_CODES and code not in PAYABLE_HOLD_CODES):
         return True
-    if code in HOLD_CODES:
-        return code not in PAYABLE_HOLD_CODES
-    if code in WARNING_CODES or code == PAYMENT_REFUSED:
+    if code in WARNING_CODES or code == PAYMENT_REFUSED or code in PAYABLE_HOLD_CODES:
         return False
     return True
 
@@ -176,14 +176,9 @@ def review_release_block(
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
     for finding, code in zip(findings, codes):
-        if not _blocks_release(code, _message_of(finding)):
-            continue
-        if code in REJECT_CODES:
-            return f"{code} is a reject-class finding and is never paid."
-        return f"{code} is not a review hold and is never paid."
+        if _blocks_release(code, finding):
+            return f"{code} is not a review hold and is never paid."
     if reason_code and _blocks_release(reason_code):
-        if reason_code in REJECT_CODES:
-            return f"{reason_code} is a reject-class finding and is never paid."
         return f"{reason_code} is not a review hold and is never paid."
     if any(code in PAYABLE_HOLD_CODES for code in codes) or codes.count("FRAUD_SIGNAL") >= 2:
         return None

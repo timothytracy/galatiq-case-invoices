@@ -232,7 +232,12 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     message = guarded["conclusion"]
     if message not in authored:
         message = "Audit escalated the invoice to a hold."
-    return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
+    return Finding(
+        code="AUDIT_ESCALATED",
+        message=message,
+        severity="warning",
+        send_back_cap=message == SEND_BACK_CAP_MESSAGE,
+    )
 
 
 def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> list[dict]:
