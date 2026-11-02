@@ -146,4 +146,4 @@ Decisions are in `docs/DECISIONS.md`. The pipeline implements the policy approve
 
 ## Known limitations / cut scope
 
-Duplicates are not detected across files. Each invoice is evaluated independently. Payment will not run twice for the same audit key inside one process. A second copy of the same bill can still be approved on its own. In production, check a persistent payments ledger before paying.
+`payments.db`, next to `inventory.db`, records each accepted payment. Only the payment step writes it. The same vendor and invoice number already paid is a `DUPLICATE_INVOICE` hold. The same vendor's invoices inside `split_window_days` are a `SPLIT_INVOICE` hold when their combined total crosses the approval threshold. Both holds are Approved on 2026-11-01. Scored eval gives each invoice a fresh ledger, so the answer keys stay as they are. `scripts/eval.py --ordered` runs the files in order on one shared ledger. `python3 main.py --reset-ledger` deletes `payments.db` before that run. The in-memory authorization key still refuses a second use of the same key inside one process.

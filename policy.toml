@@ -7,6 +7,11 @@
 # Being over this amount is not a risk finding.
 scrutiny_threshold = "10000"
 
+# Printed-date window for the split hold. Same vendor, each invoice at or under
+# scrutiny_threshold, combined total over it. Approved on 2026-11-01.
+# 30 days. 0 counts only the same printed date.
+split_window_days = 30
+
 # Currencies that can be paid. Anything else is a hold. Nothing is converted.
 allowed_currencies = ["USD"]
 

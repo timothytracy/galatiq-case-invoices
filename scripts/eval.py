@@ -1,8 +1,14 @@
-"""Score sample invoices against data/answer_key.json. Exit 0 only on a full match."""
+"""Score sample invoices against data/answer_key.json. Exit 0 only on a full match.
+
+--ordered runs data/ordered_scenario.json on one shared ledger. The scored
+path does not pass a ledger, so each invoice still gets a fresh one.
+"""
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
+from ledger.scenario import run_scenario  # noqa: E402
 from llm_client import GrokClient, MissingAPIKey  # noqa: E402
 from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
@@ -17,6 +24,7 @@ from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
 
 INVOICES = ROOT / "data" / "invoices"
 ANSWER_KEY = ROOT / "data" / "answer_key.json"
+ORDERED_SCENARIO = ROOT / "data" / "ordered_scenario.json"
 SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 
 
@@ -144,6 +152,16 @@ def main(argv: list[str] | None = None) -> int:
         default=str(ANSWER_KEY),
         help="Path to the answer-key JSON (default: data/answer_key.json)",
     )
+    parser.add_argument(
+        "--ordered",
+        nargs="?",
+        const=str(ORDERED_SCENARIO),
+        default=None,
+        help=(
+            "Run this scenario in order on one shared ledger "
+            "(default file: data/ordered_scenario.json). Not the scored eval."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         GrokClient()
@@ -155,6 +173,9 @@ def main(argv: list[str] | None = None) -> int:
     db_path = ROOT / "inventory.db"
     if not db_path.exists():
         create_database(db_path)
+
+    if args.ordered:
+        return _ordered_main(Path(args.ordered), db_path)
 
     key = load_answer_key(Path(args.answer_key))
     files = sorted(
@@ -199,6 +220,40 @@ def format_tool_summary(calls: int, repeats: int) -> str:
     """One line for a run. Repeats are included in calls."""
 
     return f"tools calls={calls} repeats={repeats}"
+
+
+def _ordered_main(scenario_path: Path, db_path: Path) -> int:
+    """One temporary ledger for every file in the scenario. Not payments.db."""
+
+    handle, name = tempfile.mkstemp(prefix="payments-ordered-", suffix=".db")
+    os.close(handle)
+    try:
+        report = run_scenario(scenario_path, db_path, name, lambda _path: GrokClient())
+    finally:
+        Path(name).unlink(missing_ok=True)
+    tool_calls = 0
+    repeats = 0
+    for step in report["steps"]:
+        calls = step.get("tool_calls") or []
+        tool_calls += len(calls)
+        repeats += sum(1 for row in calls if row.get("repeat"))
+        print(
+            f"{step['file']}\toutcome={step['outcome']}\texpected={step['expected_outcome']}\t"
+            f"reason={step['reason_code']}\texpected_reason={step['expected_reason']}\t"
+            f"payment={'paid' if step['paid'] else 'not_paid'}\t"
+            f"tools={len(calls)}\t"
+            f"{'ok' if step['ok'] else 'MISS'}",
+            flush=True,
+        )
+    files = ", ".join(report["ledger_files"])
+    print(
+        f"ledger {len(report['ledger_files'])} rows: {files}\t"
+        f"expected {', '.join(report['expected_ledger_files'])}\t"
+        f"{'ok' if report['ledger_ok'] else 'MISS'}",
+        flush=True,
+    )
+    print(format_tool_summary(tool_calls, repeats), flush=True)
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":

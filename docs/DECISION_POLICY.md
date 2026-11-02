@@ -36,6 +36,8 @@ Hold only when a person can do something the system can't. Every hold names that
 | Finding | Action for a person |
 |---|---|
 | Non-USD currency | Finance confirms the currency and amount. Nothing is converted and nothing is paid. |
+| Duplicate invoice | Do not pay it again. The same vendor and invoice number are already in the payments ledger. Approved on 2026-11-01. |
+| Split invoice | Do not pay it. This invoice is at or under the approval threshold, and with this vendor's other paid invoices inside the split window it is over that threshold. Approved on 2026-11-01. |
 | Revised invoice | Confirm it replaces the original and that the original was not paid. |
 | Labeled credit note whose math reconciles | Accounting applies the credit. Nothing is paid. |
 | Renamed vendor | Verify it is the same company. |
@@ -44,6 +46,12 @@ Hold only when a person can do something the system can't. Every hold names that
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
 | Item name not in source text | Check the item name against the invoice. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
+
+Duplicate invoice (`DUPLICATE_INVOICE`) and split invoice (`SPLIT_INVOICE`) read the payments ledger. Approved on 2026-11-01. The ledger is `payments.db`, a separate file next to `inventory.db`, and only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the invoice number after normalization (`INV 1004` and `INV-1004` are the same). The same document text is the same match. A second format with the same vendor, number, and total is the same match. A revised bill, or a different total, for a number that was already paid is the same match, and the revised-invoice finding stays on the list. A revision is not a duplicate when that number has not been paid: on a fresh ledger, invoice 1004's revision is still only "Revised invoice".
+
+Split invoice: this total is at or under the approval threshold, and this total plus the same vendor's paid totals whose printed invoice dates fall within `split_window_days` is over the threshold. The window is 30 days. A date that does not parse is outside the window. Another vendor does not count. No sample file is a split. The check is unit-tested on synthetic invoices only.
+
+A unique index on that match key refuses a second payment. The refusal pays nothing and is a hold, not a crash. Eval gives each invoice a fresh ledger. `python3 main.py --reset-ledger` deletes the persistent ledger before the run. The split and same-text checks run at validation and assume a single process at a time; concurrent runs could each pay half of a split.
 
 An extracted item name that is not in the invoice text is a hold (`ITEM_NOT_IN_SOURCE`). The text is the file contents for `.txt`, JSON, CSV, and XML, and the PDF text layer for a PDF. Every supported format has that text. If it is missing or empty, the check fails closed and the invoice is held. A parenthetical descriptor is already split off, so the base name must still appear: "WidgetA (rush order)" is checked as WidgetA. The comparison removes case, spaces, and hyphens, the same way item matching does. The name is not corrected, and nothing is paid. The outcome comes from the code (HOLD_CODES), not the severity field. Severity blocking is kept for rejects, so every hold finding carries warning. Approved on 2026-11-01.
 
@@ -65,9 +73,9 @@ Item names are matched exactly, after normalizing only case, spaces, and hyphens
 
 - **Precedence: Reject over Hold over Approve.** If any Reject condition applies, the outcome is Reject, even when fraud signals or other Hold conditions are also present. Those signals are still recorded as findings and mentioned in the reason, so a reviewer sees them.
 - **The LLM reads and flags; code decides.** The same findings always give the same outcome.
-- **Each invoice is judged on its own.** Processing order never changes a result.
+- **Each invoice is judged on its own facts plus the payments ledger.** The ledger can only add a hold, never an approve. Eval gives each invoice a fresh ledger, so a scored result does not depend on order. Approved on 2026-11-01.
 - **OCR number fixes are allowed only if the math reconciles.** For example, an O read as a 0 in an amount or date is fixed only when the lines and totals add up afterwards.
-- **Duplicates are out of scope.** This is a known limitation. The production fix is a check against a payments ledger.
+- **A paid bill is checked on the next file.** The match key is the vendor (casefolded, whitespace collapsed) and the invoice number. The same document text is the same match. A second file with that key, or the same text, is a duplicate hold and is not paid. Same vendor, different invoice numbers, each at or under the approval threshold, are a split hold when their totals inside the split window go over the threshold. Approved on 2026-11-01.
 - **No payment without an audit PASS.**
 - **Non-USD is never paid.**
 - **Critique and audit can only tighten.** Critique may set aside three things: a stock claim for an item whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit may set aside that same future-date claim. Every other concern is kept, including the audit's notes that the raw text and the extraction disagree. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged. Neither step can loosen a decision. Approved on 2026-11-01.
@@ -87,4 +95,4 @@ Decided on 2026-10-31: **a non-commercial address flagged on an otherwise clean 
 
 ## Known follow-ups
 
-None.
+Split detection is unit-tested on synthetic invoices only.

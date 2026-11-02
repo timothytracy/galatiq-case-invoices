@@ -20,6 +20,8 @@ class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scrutiny_threshold: Decimal
+    # Days around this invoice's printed date. Approved on 2026-11-01.
+    split_window_days: int = Field(ge=0)
     allowed_currencies: list[str] = Field(min_length=1)
     required_fields: list[str] = Field(min_length=1)
     money_tolerance: Decimal

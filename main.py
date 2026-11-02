@@ -1,4 +1,8 @@
-"""Process one invoice: python3 main.py --invoice_path=data/invoices/invoice_1001.txt"""
+"""Process one invoice: python3 main.py --invoice_path=data/invoices/invoice_1001.txt
+
+Payments are remembered in payments.db, next to inventory.db.
+--reset-ledger deletes that file first so a repeated demo is not a duplicate hold.
+"""
 
 import argparse
 import json
@@ -14,6 +18,11 @@ from decision.outcome import result_codes
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Process one invoice file.")
     parser.add_argument("--invoice_path", required=True, help="Path to one invoice file")
+    parser.add_argument(
+        "--reset-ledger",
+        action="store_true",
+        help="Delete payments.db before this run so a repeated demo file is not a duplicate hold.",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.invoice_path)
@@ -33,8 +42,12 @@ def main(argv: list[str] | None = None) -> int:
     db_path = Path("inventory.db")
     if not db_path.exists():
         create_database(db_path)
+    # Next to inventory.db. Gitignored. A second run of the same file is a duplicate hold.
+    ledger = Path("payments.db")
+    if args.reset_ledger:
+        ledger.unlink(missing_ok=True)
 
-    result = run_invoice(path, db_path, client)
+    result = run_invoice(path, db_path, client, ledger_path=ledger)
     _write_log(path, result)
     print(json.dumps(_result_line(path, result)), flush=True)
     return 0

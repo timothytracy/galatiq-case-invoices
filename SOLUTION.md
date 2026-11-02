@@ -271,9 +271,9 @@ The policy, decided on 2026-10-31, is [docs/DECISION_POLICY.md](docs/DECISION_PO
 
 - **Precedence is reject, then hold, then approve.** A reject wins when a hold or a fraud signal is also present. Those other findings stay in the reason.
 - **The model reads and flags. Code decides.** The same findings always give the same outcome.
-- **Each invoice is judged on its own.** Processing order never changes a result.
+- **Each invoice is judged on its own facts plus the payments ledger.** The ledger can only add a hold. Scored eval gives each invoice a fresh ledger, so a scored result does not depend on order.
 - **An OCR number fix is kept only when the math reconciles.**
-- **Duplicates are out of scope.** The production check is a payments ledger. See [Known limitations](#known-limitations).
+- **Paid bills are remembered in `payments.db`.** Only the payment step writes it. `DUPLICATE_INVOICE` and `SPLIT_INVOICE` are holds, Approved on 2026-11-01. `scripts/eval.py --ordered` shares one ledger. `python3 main.py --reset-ledger` deletes `payments.db` before a demo run. See [Known limitations](#known-limitations).
 - **No payment without an audit PASS.**
 - **Non-USD is never paid.** Nothing is converted, and reference prices are not compared.
 - **Critique and audit can only tighten.** The [fact guard](#the-fact-guard) may set a claim aside before that tightening is allowed to stand. On a critique, the claims that can be set aside are a stock claim whose summed quantity is covered by available stock, a totals-mismatch claim when the totals already reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. On an audit, the same future-date claim can be set aside. Every other concern is kept, including a note that the raw text and the extraction disagree. A send-back stays a send-back while any feedback remains. An escalation stays on the same terms, and either one stays when the audit cites a finding code. In code, that verdict becomes `PASS` only after the guard has set at least one concern aside, nothing is left, and no finding code was cited. Every set-aside is logged. That sentence, decided on 2026-11-01, is the ground-rule bullet in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md#ground-rules).
@@ -345,7 +345,7 @@ streamlit run ui/app.py
 
 ## Known limitations
 
-**Duplicates, and the payments ledger.** Each file is a new graph. Payment remembers authorization keys only inside the current process. The key is the file path plus a hash of the text, so a second copy at a different path can still be approved and paid. A repeated key in the same process is refused (`payment refused: authorization key was already used`) and the invoice outcome stays what the audit decided. A revised invoice is a hold on that file alone. Nothing looks up another file to see whether the original was paid. The production check is a persistent payments ledger before paying. That is the same limit called out in the [README](README.md), in [docs/DECISIONS.md](docs/DECISIONS.md), and in the policy's ground rules.
+**Payments ledger.** `payments.db`, next to `inventory.db`, records each accepted payment. Only the payment step writes it. The same vendor and invoice number is a `DUPLICATE_INVOICE` hold. The same vendor inside `split_window_days`, when the combined total crosses the approval threshold, is a `SPLIT_INVOICE` hold. Both holds are Approved on 2026-11-01. A revision of a number that has not been paid is still only `REVISED_INVOICE`. After that original is paid, the revision is `DUPLICATE_INVOICE` and the revised-invoice finding stays. Scored eval uses a fresh ledger per invoice. `scripts/eval.py --ordered` uses one shared ledger. `python3 main.py --reset-ledger` deletes `payments.db` before the run. The in-memory authorization key still refuses a repeated key inside one process. The ledger row is written just before the mock payment, so with a real gateway a failure after the insert would need the row removed or the order changed (write after a confirmed payment, or a pending status). The split and same-text checks run at validation and assume a single process at a time; concurrent runs could each pay half of a split.
 
 **The model labels its own concern categories.** The fact guard trusts the `category` field on the claim. A stock claim and a totals-mismatch claim are examined only on critique, and only when the model used those categories. A future-date claim is examined only when `field` is `invoice_date` or `due_date`. A plain string becomes category `other` and is kept. So is every other category, including an audit note that the raw text and the extraction disagree. A fabricated stock sentence labeled `other` would survive the guard.
 
@@ -355,7 +355,6 @@ streamlit run ui/app.py
 
 ## Next steps
 
-- Check a persistent payments ledger before paying, and treat a second file of the same bill as a duplicate. Use that same memory when a revision asks whether the original was paid.
 - Assign concern categories in code, so a mislabeled sentence can still be set aside. The guard today believes the label the model sends.
 - Keep non-USD invoices unpaid until finance confirms the currency and the amount. The prototype has no conversion.
 - Read stock from the system of record at decision time. Keep the decision in code. This prototype's snapshot stays the four seed rows, opened read-only, and it does not move when a bill is approved.

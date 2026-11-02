@@ -1,6 +1,8 @@
 """LangGraph wiring. Critique returns to approval. Audit can return to ingestion."""
 
+import os
 import random
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -15,7 +17,16 @@ from decision.wording import resolve_as_of
 RECURSION_LIMIT = 80
 
 
-def build_graph(llm, db_path, *, clock=None, rng=None, max_attempts=None, as_of: date | None = None):
+def build_graph(
+    llm,
+    db_path,
+    *,
+    clock=None,
+    rng=None,
+    max_attempts=None,
+    as_of: date | None = None,
+    ledger_path=None,
+):
     clock = clock or SleepClock()
     rng = rng or random.Random()
     attempts = read_max_attempts() if max_attempts is None else max_attempts
@@ -24,7 +35,10 @@ def build_graph(llm, db_path, *, clock=None, rng=None, max_attempts=None, as_of:
 
     graph = StateGraph(PipelineState)
     graph.add_node("ingestion", lambda state: ingest(state, llm, clock, rng, attempts, as_of))
-    graph.add_node("validation", lambda state: validate(state, db_path, as_of))
+    graph.add_node(
+        "validation",
+        lambda state: validate(state, db_path, as_of, ledger_path),
+    )
     graph.add_node(
         "approval",
         lambda state: approve(state, llm, db_path, clock, rng, attempts, as_of),
@@ -34,7 +48,7 @@ def build_graph(llm, db_path, *, clock=None, rng=None, max_attempts=None, as_of:
         lambda state: critique(state, llm, db_path, clock, rng, attempts, as_of),
     )
     graph.add_node("audit", lambda state: audit(state, llm, db_path, clock, rng, attempts, as_of))
-    graph.add_node("payment", payment)
+    graph.add_node("payment", lambda state: payment(state, ledger_path))
     graph.add_node("reject_log", reject_log)
 
     graph.add_edge(START, "ingestion")
@@ -111,15 +125,43 @@ def route_after_audit(state: PipelineState) -> str:
     return "reject_log"
 
 
-def run_invoice(path, db_path, llm, *, clock=None, rng=None, max_attempts=None, as_of: date | None = None) -> dict:
-    """One invoice, one new graph. Nothing is kept for the next file.
+def run_invoice(
+    path,
+    db_path,
+    llm,
+    *,
+    clock=None,
+    rng=None,
+    max_attempts=None,
+    as_of: date | None = None,
+    ledger_path=None,
+) -> dict:
+    """One invoice, one new graph. The state is not kept for the next file.
 
+    ledger_path=None opens a fresh temporary payments ledger and deletes it
+    when this call returns. Pass a path to remember payments for the next file.
     as_of is the date the agents are told is today. Tests inject it.
     """
 
-    app = build_graph(llm, db_path, clock=clock, rng=rng, max_attempts=max_attempts, as_of=as_of)
-    state = PipelineState(invoice_path=str(path), filename=Path(path).name)
-    return app.invoke(state, config={"recursion_limit": RECURSION_LIMIT})
+    temporary = ledger_path is None
+    if temporary:
+        handle, ledger_path = tempfile.mkstemp(prefix="payments-", suffix=".db")
+        os.close(handle)
+    try:
+        app = build_graph(
+            llm,
+            db_path,
+            clock=clock,
+            rng=rng,
+            max_attempts=max_attempts,
+            as_of=as_of,
+            ledger_path=ledger_path,
+        )
+        state = PipelineState(invoice_path=str(path), filename=Path(path).name)
+        return app.invoke(state, config={"recursion_limit": RECURSION_LIMIT})
+    finally:
+        if temporary:
+            Path(ledger_path).unlink(missing_ok=True)
 
 
 def mermaid_text() -> str:

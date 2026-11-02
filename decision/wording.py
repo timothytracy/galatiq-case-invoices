@@ -33,6 +33,8 @@ KEY_REASON_TO_CODE = {
     "Embedded instructions aimed at the system": "EMBEDDED_INSTRUCTIONS",
     "Negative amount that is not a labeled credit note": "NEGATIVE_AMOUNT",
     "Non-USD currency": "NON_USD",
+    "Duplicate invoice": "DUPLICATE_INVOICE",
+    "Split invoice": "SPLIT_INVOICE",
     "Revised invoice": "REVISED_INVOICE",
     "Labeled credit note whose math reconciles": "CREDIT_NOTE",
     "Renamed vendor": "VENDOR_RENAMED",
@@ -54,6 +56,8 @@ ACTION = {
     "EMBEDDED_INSTRUCTIONS": "Resend a clean invoice.",
     "NEGATIVE_AMOUNT": "Resend with corrected amounts, or send a labeled credit note.",
     "NON_USD": "Finance confirms the currency and amount. Nothing is converted and nothing is paid.",
+    "DUPLICATE_INVOICE": "Do not pay it again. This vendor and invoice number are already paid.",
+    "SPLIT_INVOICE": "Do not pay it. This vendor's invoices in the split window cross the approval threshold.",
     "REVISED_INVOICE": "Confirm it replaces the original and that the original was not paid.",
     "CREDIT_NOTE": "Accounting applies the credit. Nothing is paid.",
     "VENDOR_RENAMED": "Verify it is the same company.",
@@ -80,6 +84,14 @@ RULE_TEXT = {
     "EMBEDDED_INSTRUCTIONS": "Embedded instructions aimed at the system are rejected.",
     "NON_USD": "Any currency other than USD is a hold. There is no conversion.",
     "VENDOR_RENAMED": "A vendor rename (formerly) is a hold and is not auto-paid.",
+    "DUPLICATE_INVOICE": (
+        "The same vendor and invoice number already in the payments ledger is a hold. "
+        "The same document text is the same hold."
+    ),
+    "SPLIT_INVOICE": (
+        "An invoice at or under the approval threshold is a hold when it, plus the same "
+        "vendor's paid invoices inside the split window, is over that threshold."
+    ),
     "REVISED_INVOICE": "A revised invoice is a hold until someone confirms it replaces an unpaid original.",
     "CREDIT_NOTE": "A labeled credit note whose math reconciles is a hold. Nothing is paid.",
     "FRAUD_CLUSTER": "Two or more fraud signals are a hold.",

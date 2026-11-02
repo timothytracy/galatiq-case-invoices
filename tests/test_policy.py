@@ -9,6 +9,7 @@ from decision.policy import PolicyError, load_policy
 
 GOOD = """\
 scrutiny_threshold = "10000"
+split_window_days = 30
 allowed_currencies = ["USD"]
 required_fields = ["vendor", "due_date", "line_items", "total"]
 money_tolerance = "0.01"
@@ -28,6 +29,7 @@ GadgetX = "750"
 def test_shipped_policy_matches_todays_behavior(tmp_path):
     policy = load_policy()
     assert policy.scrutiny_threshold == Decimal("10000")
+    assert policy.split_window_days == 30
     assert policy.allowed_currencies == ["USD"]
     assert policy.required_fields == ["vendor", "due_date", "line_items", "total"]
     assert policy.money_tolerance == Decimal("0.01")
@@ -50,6 +52,8 @@ def _write(directory: Path, text: str) -> Path:
     "text, key",
     [
         (GOOD.replace('scrutiny_threshold = "10000"\n', ""), "scrutiny_threshold"),
+        (GOOD.replace("split_window_days = 30\n", ""), "split_window_days"),
+        (GOOD.replace("split_window_days = 30", "split_window_days = -1"), "split_window_days"),
         (GOOD.replace("critique_cap = 1", 'critique_cap = "many"'), "critique_cap"),
         (GOOD.replace("audit_send_back_cap = 3", "audit_send_back_cap = -1"), "audit_send_back_cap"),
         (GOOD.replace('allowed_currencies = ["USD"]', "allowed_currencies = []"), "allowed_currencies"),
