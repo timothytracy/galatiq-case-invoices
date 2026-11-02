@@ -21,7 +21,7 @@ python3 scripts/eval.py
 python3 scripts/export_graph.py
 ```
 
-`python3 main.py --invoice_path=<file>` processes one file. It prints one JSON object per stage and writes the same records to `logs/<filename>.json`. A missing `XAI_API_KEY` stops the process with a non-zero exit before any invoice is read. `main.py` calls `setup_db.py`'s creator only when `inventory.db` is missing. The run opens the file with `sqlite3.connect("file:inventory.db?mode=ro", uri=True)`.
+`python3 main.py --invoice_path=<file>` processes one file. It prints one JSON object per stage and writes the same records to `logs/<filename>.json`. A missing `XAI_API_KEY` stops the process with a non-zero exit before any invoice is read. `main.py` calls `setup_db.py`'s creator only when `inventory.db` is missing. The run opens the file with `sqlite3.connect("file:inventory.db?mode=ro", uri=True)`. Replay, with no key, is [Record and replay](#record-and-replay).
 
 `scripts/eval.py` starts a new graph for each of the 20 sample files and scores the outcome and primary reason code against `data/answer_key.json`. Warning matches are printed and do not change the exit code.
 
@@ -45,7 +45,27 @@ There is no durable work list and no extra database table. When the attempts are
 
 When `XAI_TOOLS` is on, a hit on the audit's 3-round or 8-call cap does not hold immediately. The step gets one plain model call with no tools, using the tool results already gathered and the verified facts, and asks for the verdict. The cap has already spent the budget, so that reply is the last chance. An API error, or a schema failure after the normal repair, is a `SYSTEM_ERROR` hold and nothing is paid. That bound keeps cost and latency from growing. Approved on 2026-11-01.
 
-Pending approval. When `XAI_TOOLS` is on, audit may also call `check_payment_ledger`. The tool takes no arguments. It is bound to this invoice's vendor, invoice number, and the run's ledger path, so the model cannot query another vendor. It is read-only. Its duplicate check matches vendor and invoice number only. It also reports the same vendor's paid total inside `split_window_days` against `scrutiny_threshold`, using the same split helper as validation. In a single process, validation already holds duplicates and splits before audit, so the tool gives the model ledger evidence to cite and shows a scoped read-only lookup that can only tighten a decision. If the model calls it, the tool can surface a payment another process wrote between validation and audit; the payment step's unique index already stops a second payment of the same vendor and invoice number, so the new case is a split under a concurrent writer. A tool hit adds a `DUPLICATE_INVOICE` or `SPLIT_INVOICE` finding, and the audit cannot pay over that hit. A missing ledger means no prior payments. A locked or corrupt ledger is not reported as empty: `sqlite3.Error` leaves the tool, the existing tool loop treats it as a non-retryable failure, and the invoice is a `SYSTEM_ERROR` hold, the same outcome validation uses, and nothing is paid. Caps, repeat reuse, and the forced final turn are unchanged. Scored eval still uses a fresh ledger per invoice.
+Pending approval. When the audit tools (XAI_TOOLS) are in use, audit may also call `check_payment_ledger`. Critique does not get tools.
+
+The tool takes no arguments. It is bound to this invoice's vendor, invoice number, and the run's ledger path, so the model cannot name another vendor. It is read-only. Its duplicate check matches that vendor and invoice number only. It does not match the raw-text hash. Validation does, so the tool is a narrower lookup than the validation duplicate check. It also reports the same vendor's paid total inside `split_window_days` against `scrutiny_threshold`, using the same split helper as validation.
+
+In a single process the tool is redundant with validation. A duplicate or a split is already a hold at validation, and the graph goes to `reject_log` before audit, so audit never calls the tool on those invoices. The tool can only tighten a decision that reached audit. A hit adds a `DUPLICATE_INVOICE` or `SPLIT_INVOICE` finding, and the audit cannot pay over that hit. A miss adds nothing, so it cannot loosen the decision. If the model calls it, the tool can surface a payment another process wrote between validation and audit. The payment step's unique index already stops a second payment of the same vendor and invoice number, so the new case is a split under a concurrent writer.
+
+A missing ledger means no prior payments. A locked or corrupt ledger is not reported as empty. `sqlite3.Error` leaves the tool. The tool loop treats that as a non-retryable failure. The invoice is a `SYSTEM_ERROR` hold and nothing is paid. That is the same outcome validation uses when it cannot read the ledger. Caps, repeat reuse, and the forced final turn are unchanged. Scored eval still uses a fresh ledger per invoice.
+
+## Record and replay
+
+Pending approval. Replay is a regression check. It feeds saved model replies back through this code, with no API key and no network. Record once with `--record`, then `--replay` the file. A live run with neither flag does not open a recording. `--record` and `--replay` are mutually exclusive, and both work with `--ordered`.
+
+The fingerprint is a SHA-256 of canonical JSON. The hashed fields are the model, the full message list (including tool results), the tools offered or null, tool_choice or null, response_format or null, and temperature. The request sends temperature 0. The hash does not include the API key, a timestamp, or a request id. A temporary payments ledger path (`payments-*.db` or `payments-ordered-*.db` under the system temp directory) is replaced with `payments-ledger.db` before the hash, so a new temp file still matches. Record and replay also put a repo-relative invoice path in the audit prompt. Live prompts keep the path they were given.
+
+A replay miss (no saved reply for that fingerprint) is a non-retryable error. It is not a live call. The invoice is a `SYSTEM_ERROR` hold and nothing is paid.
+
+The recording starts with a header line that stores `as_of`, the date the prompts were told was today, and the model name. Replay uses that date, not the machine clock. `--as-of` on a recording run stores that date. Omit it and the header stores the calendar date at the start of the run. The five committed files each have `"as_of": "2026-11-01"` in the header.
+
+`scripts/eval.py` on record or replay prints `tokens total=N cost_usd=X` from the usage objects stored on each request line. The price is in `recording.py`: the published short-context rate for `grok-4.20-0309-non-reasoning` when `prompt_tokens` is under 200,000, and the long-context rate at or above that. Prompt tokens are not split into a cached-input rate. Pending approval on that price.
+
+CI (`.github/workflows/ci.yml`) runs `setup_db.py`, the tests, and the five replays. It does not set an API key. The two `_tools` recordings match a run with `XAI_TOOLS=1`. The other three match a run that does not offer the audit tools. The tools change the audit prompt, so the fingerprints do not cross. The commands are in [recordings/README.md](../recordings/README.md).
 
 ## What is Python and what is the model
 
@@ -66,13 +86,25 @@ Python decides. The model writes.
 
 The reasoning object on the decision has `rules_applied`, `evidence`, `risks_considered`, and `conclusion`. It is stored on the stage log.
 
+## Payments ledger
+
+Approved on 2026-11-01. `payments.db`, next to `inventory.db`, records each accepted payment. Only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the invoice number after normalization (`INV 1004` and `INV-1004` are the same). The same raw text (sha256) is the same match. A second file with the same vendor, number, and total is the same match. A revised bill, or a different total, for a number that was already paid is the same match, and the revised-invoice finding stays on the list.
+
+`DUPLICATE_INVOICE` is a hold: do not pay it again. `SPLIT_INVOICE` is a hold: this total is at or under the approval threshold, and this total plus the same vendor's paid totals whose printed invoice dates fall within `split_window_days` (30) is over the threshold. A date that does not parse is outside the window. Another vendor does not count. No sample file is a split. The split cases are unit-tested on synthetic invoices.
+
+A missing or empty file means no prior payments. A locked or corrupt ledger is not treated as empty. A `sqlite3.Error` on the read, at validation, or on the write, at payment, is a `SYSTEM_ERROR` hold and nothing is paid. The reader opens the file read-only. The writer waits 5 seconds on a lock (`_LOCK_TIMEOUT` in `ledger/payments.py`).
+
+The unique index on `(vendor_key, invoice_number)` refuses a second row, including across processes. That refusal pays nothing and is a hold (`DUPLICATE_INVOICE`, and `PAYMENT_REFUSED` is also recorded). It does not crash. The row is written just before the mock payment. With a real gateway, a failure after the insert would need the row removed or the order changed (write after a confirmed payment, or a pending status).
+
+The in-memory authorization key still refuses a second use of the same audit key inside one process. Scored eval gives each invoice a fresh temporary ledger and deletes it when the call returns, so the answer keys stay as they are. `scripts/eval.py --ordered` runs `data/ordered_scenario.json` on one shared temporary ledger, not on `payments.db`. `python3 main.py --reset-ledger` deletes `payments.db` before that one file. A missing API key does not delete it, because the client is created first.
+
+The split and same-text checks run at validation and assume one process at a time. Two processes can each pay half of a split before either has written. The unique index does not stop that, because the invoice numbers differ.
+
+A revision of a number that has not been paid is still only `REVISED_INVOICE`. On a fresh ledger, `invoice_1004_revised.json` is that case. Once `invoice_1004.json` has been paid, the revision is `DUPLICATE_INVOICE` and the revised-invoice finding stays. The ordered scenario is that second case: the step is a duplicate hold, and the scenario still requires `REVISED_INVOICE` on the finding list.
+
 ## Known limitations / cut scope
 
-A payments ledger (`payments.db`, next to `inventory.db`) records each accepted payment. On the next file, the same vendor and invoice number is a duplicate hold, and a same-vendor split that crosses the approval threshold inside `split_window_days` is a split hold. Eval still scores each invoice on a fresh ledger, so the answer keys do not change. Order is checked with `scripts/eval.py --ordered`. `python3 main.py --reset-ledger` deletes the ledger before a demo run. Approved on 2026-11-01. The ledger row is written just before the mock payment, so with a real gateway a failure after the insert would need the row removed or the order changed (write after a confirmed payment, or a pending status). The split and same-text checks run at validation and assume a single process at a time; concurrent runs could each pay half of a split.
-
-The in-memory authorization key still refuses a second payment of the same audit key inside one process. The ledger's unique index refuses a second row for the same vendor and invoice number, including across processes. That refusal pays nothing and is a hold.
-
-A revision of an invoice number that has not been paid is still only a revised-invoice hold. Invoice 1004's revision is that case on a fresh ledger. Once 1004 has been paid, the revision is a duplicate hold and the revised-invoice finding stays on the record. Approved on 2026-11-01.
+The payments ledger is the section above. The two gaps that remain are the write-before-the-mock and the single-process split check.
 
 USD reference prices are in `policy.toml`. The rush line on INV-1010 is a descriptor note and a price warning, not a reject. The EUR invoice is not price-checked. The inventory table is the four README rows and has no extra columns.
 
