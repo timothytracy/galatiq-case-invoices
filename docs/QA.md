@@ -28,7 +28,7 @@ Short answers a presenter can defend from this tree. Scores are the replays in [
 
 **What does replay prove?** It proves this code still handles the saved replies the same way, with no key and no network. It does not prove the model would say the same thing tomorrow. The five replays on 2026-11-02 scored 20/20, 21/21, 11 ordered steps all ok, 20/20 with the audit tools, and 21/21 with the audit tools. Costs and token totals are in [METRICS.md](METRICS.md).
 
-**Where is the live variance?** Not in those replays. Each recording is one saved pass, header `as_of` 2026-11-01. A live run can differ because extraction, the approval note, the critique, and the audit verdict are model calls. This write-up does not quote a live-versus-replay gap, because no live run was made for it.
+**Where is the live variance?** Not in a second replay of the same file. The live passes are in [METRICS.md](METRICS.md) under Live runs. The scores match the recordings. The audit-tool call counts do not. Cost was not logged for the nine runs at `6ee5d927`. Where a live cost is logged, the method is the one in that log, not the replay rate.
 
 **What is a replay miss?** The fingerprint is missing from the file. That error is not retried and it does not fall through to the network. The invoice is a `SYSTEM_ERROR` hold and nothing is paid. A tools recording played back without the audit tools misses, and the reverse misses, because the tools are part of the hash.
 
