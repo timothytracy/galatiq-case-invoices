@@ -221,7 +221,7 @@ def audit_registry(invoice, stock: dict[str, int], raw_text: str, ledger_path=No
                 parameters=_CODE,
                 function=get_policy_rule,
             ),
-            # Pending approval. No vendor argument: the model cannot widen the lookup.
+            # No vendor argument: the model cannot widen the lookup.
             Tool(
                 name="check_payment_ledger",
                 description=(

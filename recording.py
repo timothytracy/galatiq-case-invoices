@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 # https://docs.x.ai/developers/pricing lists $1.25 input and $2.50 output
 # per 1M tokens below 200k prompt tokens, and $2.50 / $5.00 at or above
 # that. prompt_tokens is not split into cached input, so the whole prompt
-# is billed at the input rate. Pending approval.
+# is billed at the input rate.
 INPUT_RATE = Decimal("1.25")
 OUTPUT_RATE = Decimal("2.50")
 LONG_CONTEXT_TOKENS = 200_000
