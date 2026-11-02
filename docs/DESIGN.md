@@ -119,4 +119,3 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
-- A note on the hold queue does not pay, and it does not change the pipeline outcome.
