@@ -6,7 +6,7 @@ import re
 from decimal import Decimal
 
 from db import load_stock
-from llm_client import AgentStepFailed, call_with_retries
+from llm_client import AgentStepFailed, call_with_retries, tool_request, tools_enabled
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
 from pipeline.fact_guard import (
@@ -17,11 +17,18 @@ from pipeline.fact_guard import (
     verified_payload,
 )
 from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, finding_codes
 from decision.policy import MAX_SEND_BACKS
 from decision.findings import assess
 from decision.wording import explain, resolve_as_of, today_line
+
+# One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
+TOOLS_LINE = (
+    "The tools are read-only. Their results do not change during this step. "
+    "Call each lookup at most once."
+)
 
 
 def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
@@ -43,9 +50,16 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
     stock = dict(load_stock(db_path))
     facts = verified_payload(invoice, stock, as_of)
     step_attempts: list[dict] = []
+    request = llm.request
+    step = None
+    if tools_enabled():
+        step = tool_request(
+            llm, audit_registry(invoice, stock, state.raw_text or ""), agent="audit"
+        )
+        request = step
     try:
         draft = call_with_retries(
-            llm.request,
+            request,
             _audit_messages(state, invoice, decision, as_of, facts),
             AuditDraft,
             max_attempts=max_attempts,
@@ -110,6 +124,8 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         "decision": new_decision.model_dump(mode="json"),
         "codes": finding_codes(findings),
     }
+    if step is not None and step.log:
+        result["tool_calls"] = list(step.log)
     update = {
         "audit_verdict": guarded["verdict"],
         "decision": new_decision,
@@ -212,7 +228,8 @@ def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
                 "Put every code you rely on in cited_codes. Leave cited_codes empty when the "
                 "concern is not one of those codes. "
                 "A printed date on or before today is not in the future. "
-                "Return JSON only."
+                + (f"{TOOLS_LINE} " if tools_enabled() else "")
+                + "Return JSON only."
             ),
         },
         {"role": "user", "content": json.dumps(payload)},

@@ -233,7 +233,17 @@ On a successful critique, the decision becomes a hold when the model sets `stric
 
 ### Audit
 
-`pipeline/audit.py` asks Grok for `PASS`, `SEND_BACK`, or `ESCALATE`, plus feedback, notes, and `cited_codes`. Python will not loosen the result. The order inside `_guard_audit` is the one that matters in a review:
+`pipeline/audit.py` asks Grok for `PASS`, `SEND_BACK`, or `ESCALATE`, plus feedback, notes, and `cited_codes`. Python will not loosen the result. The prompt still includes `verified_by_code`. Critique is not given tools.
+
+When `XAI_TOOLS=1`, audit may call three read-only tools before that verdict. They are bound to the current invoice and the stock snapshot audit already loaded. They do not open the database, and they do not decide or pay. Code still decides, and payment still needs an audit PASS.
+
+- `lookup_item(item)` returns the item, the inventory spelling, available stock, the summed quantity this invoice requests, whether that quantity is covered, and the USD reference price from `policy.toml`. The name fold is the one the fact guard uses: case, spaces, and hyphens. An unknown item is an error, `unknown item: X`, and the item is not corrected.
+- `recompute_totals()` takes no arguments. It returns whether `math_reconciles` is true, the printed total, and the `TOTAL_MISMATCH` messages from `collect_findings`.
+- `get_policy_rule(code)` takes one code. The schema enum is built from the reject, hold, and warning lists. It leaves out the process codes `CRITIQUE_HOLD`, `AUDIT_ESCALATED`, `SYSTEM_ERROR`, `BAD_REASONING`, and `AUDIT_NOTE`, and any code with no rule text. The answer is the class, the rule text, and the next action. A warning with no action text, such as `FRAUD_SIGNAL`, returns a null action.
+
+The tools sentence, present only while the flag is on, says the tools are read-only, their results do not change during the step, and each lookup should be called at most once. An identical repeat in that step returns the earlier result, does not run the tool again, and does not count against the 8-call cap. It is logged with `repeat` set. The round still counts. A schema repair is a plain JSON fix with no tools, so it cannot spend the budget. A call the cap blocks is logged with result null and error `blocked: tool_cap`. A cap hit, or any other tool failure, is a `SYSTEM_ERROR` hold and nothing is paid. The flag defaults off. With it off, the audit request is the same payload as before. Each call is logged once on the audit stage as `tool_calls`. The per-invoice result line copies that list.
+
+The order inside `_guard_audit` is the one that matters in a review:
 
 1. A blocking reject, or a decision that is already reject, stays a reject. The verdict is `PASS` so the graph does not send the bill back.
 2. Hold findings on an approve become an `ESCALATE` hold.

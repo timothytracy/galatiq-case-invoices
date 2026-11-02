@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from llm_client import GrokClient, MissingAPIKey  # noqa: E402
-from main import payment_status  # noqa: E402
+from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
 from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
 
@@ -161,13 +161,22 @@ def main(argv: list[str] | None = None) -> int:
         path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
     )
     correct = 0
+    tool_calls = 0
+    tool_latency = 0
     for path in files:
         result = run_invoice(path, db_path, GrokClient())
         print_bad_reasoning(path.name, result.get("attempts") or [])
+        calls = tool_calls_of(result)
+        tool_calls += len(calls)
+        tool_latency += sum(int(row.get("latency_ms") or 0) for row in calls)
         lookup = invoice_lookup(path)
         expected = key.get(lookup)
         if expected is None:
-            print(f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\tMISS", flush=True)
+            print(
+                f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\t"
+                f"tools={len(calls)}\tMISS",
+                flush=True,
+            )
             continue
         row = grade(result, expected)
         ok = row["outcome_ok"] and row["reason_ok"]
@@ -177,11 +186,20 @@ def main(argv: list[str] | None = None) -> int:
             f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
             f"payment={payment_status(result)}\t"
             f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
+            f"tools={len(calls)}\t"
             f"{'ok' if ok else 'MISS'}",
             flush=True,
         )
+    print(format_tool_summary(tool_calls, tool_latency), flush=True)
     print(f"score {correct}/{len(files)}", flush=True)
     return 0 if correct == len(files) and correct == len(key) else 1
+
+
+def format_tool_summary(calls: int, latency_ms: int) -> str:
+    """One line for a run: how many tool calls, and their total and average latency."""
+
+    average = (latency_ms / calls) if calls else 0.0
+    return f"tools calls={calls} total_latency_ms={latency_ms} avg_latency_ms={average:.1f}"
 
 
 if __name__ == "__main__":
