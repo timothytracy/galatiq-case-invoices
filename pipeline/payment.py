@@ -31,7 +31,14 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
             detail=refusal or "payment blocked",
         )
     else:
-        # The row is written before the mock call. A miss pays nothing.
+        # The release record is written before the ledger row. A failed write
+        # pays nothing and does not raise.
+        if not release:
+            from pipeline.approve_hold import remember
+            if not remember(state):
+                return _hold_unreadable_ledger(
+                    state, findings, "release record could not be written", release
+                )
         wrote = _write_ledger(state, ledger_path)
         if wrote is False:
             return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)

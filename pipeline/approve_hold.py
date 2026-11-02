@@ -1,8 +1,8 @@
 """Pay a held invoice after a reviewer approves it.
 
 The caller's dict only names the invoice. Payment uses the pipeline record
-written at the end of the run (`logs/<file>.release.json`). The review screen
-does not call this yet.
+in `INVOICE_RELEASE_DIR` (default `logs/`), keyed by the repo-relative path.
+The review screen does not call this yet.
 
     python3 -m pipeline.approve_hold --demo
 """
@@ -29,7 +29,6 @@ from decision.outcome import review_release_block
 from decision.policy import POLICY
 
 ROOT = Path(__file__).resolve().parents[1]
-_LOGS = ROOT / "logs"
 _MISSING = object()
 _FILLERS = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u180e\u3164\uffa0\u115f\u1160\u00ad\u200e\u200f"))
 MISSING_REVIEWER = "MISSING_REVIEWER"
@@ -56,49 +55,65 @@ def approve_and_pay(
     temporary ledger and log. The caller's result is not modified.
     """
 
-    ledger, temp_ledger = _temp_ledger(ledger_path, demo)
-    log, temp_log = _temp_log(log_path, demo)
+    temps = []
+    if demo:
+        ledger = _scratch("payments-", ".db")
+        temps.append(ledger)
+    else:
+        ledger = Path(ledger_path) if ledger_path is not None else Path("payments.db")
+    if demo and log_path is None:
+        log = _scratch("approve-", ".jsonl")
+        temps.append(log)
+    else:
+        log = Path(log_path) if log_path is not None else Path("output") / "reviews" / "approve_pay.jsonl"
     try:
         return _approve(result, reviewer, note, amount, ledger, log, now)
     finally:
-        if temp_ledger is not None:
-            temp_ledger.unlink(missing_ok=True)
-        if temp_log is not None:
-            temp_log.unlink(missing_ok=True)
+        for path in temps:
+            path.unlink(missing_ok=True)
 
 
-def remember(result) -> None:
-    """Write the release record for one finished run. The pipeline calls this."""
+def remember(result) -> bool:
+    """Write the release record. False on a disk error. Never raises.
 
-    filename = _filename(result)
-    if not filename:
-        return
-    invoice = _invoice(_pick(result, "invoice"))
-    raw = _pick(result, "raw_text") or ""
-    if not raw and invoice is not None and invoice.source.raw_text:
-        raw = invoice.source.raw_text
-    findings = _finding_list(_pick(result, "findings") or [])
-    record = {
-        "record": "release",
-        "file": filename,
-        "outcome": _pick(result, "outcome"),
-        "codes": [item.code for item in findings],
-        "reason_code": _pick(result, "reason_code"),
-        "critique_concerns": list(_pick(result, "critique_concerns") or []),
-        "raw_text": raw,
-        "raw_sha256": hashlib.sha256(raw.encode()).hexdigest(),
-        "source": None if invoice is None else invoice.source.path,
-        "invoice": None if invoice is None else invoice.model_dump(mode="json"),
-        "findings": [_finding_row(item) for item in findings],
-    }
-    _LOGS.mkdir(parents=True, exist_ok=True)
-    (_LOGS / f"{filename}.release.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    A source outside the repository is not a release record. Payment of that
+    file still proceeds. A failed write of an in-repo record pays nothing.
+    """
+
+    try:
+        rel = _repo_path(_source_of(result))
+        if rel is None:
+            return True
+        invoice = _invoice(_pick(result, "invoice"))
+        if invoice is None:
+            return False
+        raw = _pick(result, "raw_text") or invoice.source.raw_text or ""
+        findings = _finding_list(_pick(result, "findings") or [])
+        record = {
+            "record": "release",
+            "file": rel.as_posix(),
+            "outcome": _pick(result, "outcome"),
+            "codes": [item.code for item in findings],
+            "reason_code": _pick(result, "reason_code"),
+            "critique_concerns": list(_pick(result, "critique_concerns") or []),
+            "raw_text": raw,
+            "raw_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+            "source": rel.as_posix(),
+            "invoice": invoice.model_dump(mode="json"),
+            "findings": [_finding_row(item) for item in findings],
+        }
+        path = _record_path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     name, text = _plain(reviewer), _plain(note)
     when = _timestamp(now)
-    filename = _filename(result) or "unknown"
+    filename = _repo_key(result) or "unknown"
 
     def finish(decision, code, message, saved=None):
         invoice = None if saved is None else saved.get("invoice")
@@ -148,10 +163,19 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     source = _source_problem(saved)
     if source:
         return finish("held", NOT_PAYABLE, source, saved)
-    blocked = review_release_block(saved.get("outcome"), saved.get("findings") or [], saved.get("reason_code"))
+    fresh = _recheck(saved, invoice, ledger)
+    if isinstance(fresh, str):
+        return finish("held", "SYSTEM_ERROR", fresh, saved)
+    blocked = review_release_block(
+        saved.get("outcome"),
+        list(saved.get("findings") or []) + fresh,
+        saved.get("reason_code"),
+    )
     if blocked:
         return finish("held", NOT_PAYABLE, blocked, saved)
-    if invoice is None or invoice.total is None or invoice.total <= 0:
+    if invoice is None or not _grounded(invoice, _file_text(ROOT / _repo_path(saved.get("source")))):
+        return finish("held", NOT_PAYABLE, "The vendor, invoice number, or total is not in the source file.", saved)
+    if invoice.total is None or invoice.total <= 0:
         return finish("held", NOT_PAYABLE, "The total must be greater than zero.", saved)
     if invoice.currency not in POLICY.allowed_currencies:
         return finish("held", "NON_USD", non_usd_message(invoice.currency), saved)
@@ -196,9 +220,11 @@ def _differs(result, saved) -> str | None:
 
 
 def _source_problem(saved) -> str | None:
-    invoice = saved.get("invoice")
-    path = _saved_path(None if invoice is None else invoice.source.path)
-    if path is None or not path.is_file():
+    rel = _repo_path(saved.get("source"))
+    if rel is None:
+        return "The source file is outside the repository."
+    path = ROOT / rel
+    if not path.is_file():
         return "The source file is missing."
     try:
         on_disk = _file_text(path)
@@ -207,33 +233,54 @@ def _source_problem(saved) -> str | None:
     recorded = saved.get("raw_text") or ""
     if on_disk != recorded or hashlib.sha256(on_disk.encode()).hexdigest() != saved.get("raw_sha256"):
         return "The source file does not match the pipeline record."
-    if invoice is None or not _grounded(invoice, on_disk):
-        return "The vendor, invoice number, or total is not in the source file."
     return None
 
 
 def _grounded(invoice: ExtractedInvoice, raw: str) -> bool:
-    folded = re.sub(r"[\s,\-]", "", raw.casefold())
-    vendor = re.sub(r"[\s,\-]", "", (invoice.vendor or "").casefold())
-    number = re.sub(r"[\s,\-]", "", (invoice.invoice_number or "").casefold())
-    digits = re.search(r"(\d+)", invoice.invoice_number or "")
-    number_ok = bool(number and number in folded) or bool(
-        digits and re.search(rf"(?<!\d){digits.group(1)}(?!\d)", raw)
+    """Vendor, number, total, and each line name and quantity, as the file prints them."""
+
+    body = "\n".join(
+        line for line in raw.splitlines()
+        if not re.match(r"\s*(to|bill to|attn)\b", line, re.I)
     )
-    if not vendor or vendor not in folded or not number_ok:
+    vendor = re.sub(r"\s+", " ", (invoice.vendor or "").casefold()).strip()
+    if not vendor or vendor not in re.sub(r"\s+", " ", body.casefold()):
+        return False
+    parts = re.findall(r"[a-z]+|\d+", (invoice.invoice_number or "").casefold())
+    token = r"(?<![a-z0-9-])" + r"[\s-]*".join(map(re.escape, parts)) + r"(?![ \t-]*[a-z0-9])"
+    if not parts or not re.search(token, raw.casefold()):
         return False
     if invoice.total is None or not amount_in_text(invoice.total, raw):
         return False
-    return all(_name_in_source(line.item, raw) for line in invoice.line_items)
+    for line in invoice.line_items:
+        shown = format(line.quantity, "f")
+        qty = shown.rstrip("0").rstrip(".") if "." in shown else shown
+        if not _name_in_source(line.item, raw) or not re.search(rf"(?<!\d){re.escape(qty)}(?!\d)", raw):
+            return False
+    return True
 
 
-def _saved_path(path) -> Path | None:
-    if not path:
-        return None
-    candidate = Path(path)
-    if not candidate.is_absolute():
-        candidate = ROOT / candidate
-    return candidate
+def _recheck(saved, invoice, ledger):
+    """validate() on the saved invoice, the live file, and the live inventory."""
+
+    if invoice is None:
+        return "The invoice result could not be read."
+    rel = _repo_path(saved.get("source"))
+    if rel is None:
+        return "The source file is outside the repository."
+    try:
+        live = _file_text(ROOT / rel)
+    except (OSError, ValueError):
+        return "The source file could not be read."
+    state = _pay_state(saved, invoice).model_copy(update={"raw_text": live})
+    from pipeline.validation import validate
+    with redirect_stdout(io.StringIO()):
+        checked = validate(state, ROOT / "inventory.db", ledger_path=ledger)
+    fresh = list(checked.get("findings") or [])
+    for finding in fresh:
+        if finding.code == "SYSTEM_ERROR":
+            return finding.message
+    return fresh
 
 
 def _file_text(path: Path) -> str:
@@ -245,8 +292,8 @@ def _file_text(path: Path) -> str:
 
 def _pay_state(saved, invoice: ExtractedInvoice) -> PipelineState:
     return PipelineState(
-        invoice_path=invoice.source.path,
-        filename=saved["file"],
+        invoice_path=saved.get("source") or invoice.source.path,
+        filename=Path(saved["file"]).name,
         raw_text=saved.get("raw_text") or "",
         invoice=invoice,
         findings=_finding_list(saved.get("findings") or []),
@@ -255,28 +302,53 @@ def _pay_state(saved, invoice: ExtractedInvoice) -> PipelineState:
     )
 
 
+def _record_dir() -> Path:
+    raw = os.environ.get("INVOICE_RELEASE_DIR", "").strip()
+    return Path(raw) if raw else ROOT / "logs"
+
+
+def _record_path(rel: Path) -> Path:
+    return _record_dir() / (rel.as_posix().replace("/", "__") + ".release.json")
+
+
+def _repo_path(path) -> Path | None:
+    """Repo-relative path, or None when it is outside the repository."""
+
+    if not path or path is _MISSING:
+        return None
+    candidate = Path(str(path))
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    try:
+        return candidate.resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        return None
+
+
+def _repo_key(result) -> str | None:
+    rel = _repo_path(_source_of(result))
+    return None if rel is None else rel.as_posix()
+
+
+def _source_of(result):
+    invoice = _pick(result, "invoice")
+    if isinstance(invoice, ExtractedInvoice):
+        return invoice.source.path
+    if isinstance(invoice, dict):
+        return (invoice.get("source") or {}).get("path")
+    return _pick(result, "invoice_path")
+
+
 def _load(filename: str):
-    path = _LOGS / f"{filename}.release.json"
-    if not path.is_file():
+    rel = _repo_path(filename)
+    path = _record_path(rel) if rel is not None else None
+    if path is None or not path.is_file():
         return None
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
     return record if isinstance(record, dict) and record.get("record") == "release" else None
-
-
-def _filename(result) -> str | None:
-    if isinstance(result, PipelineState):
-        name = result.filename
-    elif isinstance(result, dict):
-        name = result.get("filename") or result.get("file")
-        if not name and isinstance(result.get("invoice"), dict):
-            name = (result["invoice"].get("source") or {}).get("filename")
-    else:
-        name = None
-    name = Path(str(name)).name if name else ""
-    return name or None
 
 
 def _pick(result, key, missing=False):
@@ -308,11 +380,10 @@ def _finding_list(value) -> list[Finding]:
 
 
 def _finding_row(item: Finding) -> dict:
-    from decision.outcome import SEND_BACK_CAP_MESSAGE
     row = {"code": item.code, "message": item.message, "severity": item.severity}
     if item.item:
         row["item"] = item.item
-    if item.send_back_cap or item.message == SEND_BACK_CAP_MESSAGE:
+    if item.send_back_cap:
         row["send_back_cap"] = True
     return row
 
@@ -342,23 +413,10 @@ def _timestamp(now) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _temp_ledger(path, demo):
-    if demo:
-        return _scratch("payments-", ".db")
-    return (Path(path) if path is not None else Path("payments.db"), None)
-
-
-def _temp_log(path, demo):
-    if demo and path is None:
-        return _scratch("approve-", ".jsonl")
-    return (Path(path) if path is not None else Path("output") / "reviews" / "approve_pay.jsonl", None)
-
-
-def _scratch(prefix, suffix):
+def _scratch(prefix, suffix) -> Path:
     handle, name = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     os.close(handle)
-    path = Path(name)
-    return path, path
+    return Path(name)
 
 
 def _append(path: Path, record: dict) -> None:
@@ -368,33 +426,42 @@ def _append(path: Path, record: dict) -> None:
         handle.flush()
 
 
-def _offline(path: Path):
+def _offline(path: Path, records: Path):
+    """Replay one saved invoice. No test double and no API key."""
+
     from db import create_database
     from graph import run_invoice
-    from tests.fake_llm_eval import AS_OF, handler_for
-    from tests.fakes import FakeClock, FakeLLM, ZeroRandom
+    from llm_client import begin_client
 
+    os.environ["INVOICE_RELEASE_DIR"] = str(records)
     database = ROOT / "inventory.db"
     if not database.is_file():
         create_database(database)
+    client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples_tools.jsonl"), None)
     with redirect_stdout(io.StringIO()):
-        return run_invoice(
-            path, database, FakeLLM(handler_for(path)),
-            clock=FakeClock(), rng=ZeroRandom(), max_attempts=5, as_of=AS_OF,
-        )
+        return run_invoice(path, database, client, as_of=as_of)
 
 
 def _run_demo() -> int:
-    hold = _offline(ROOT / "data" / "invoices" / "invoice_1012.txt")
-    rejected = _offline(ROOT / "data" / "invoices" / "invoice_1002.txt")
-    first = approve_and_pay(
-        hold, reviewer="Avery Chen", note="Confirmed this is the same company.",
-        amount=hold["invoice"].total, demo=True,
-    )
-    second = approve_and_pay(
-        rejected, reviewer="Avery Chen", note="Stock is short, so this cannot be paid.",
-        amount=rejected["invoice"].total, demo=True,
-    )
+    records = Path(tempfile.mkdtemp(prefix="releases-"))
+    previous = os.environ.get("INVOICE_RELEASE_DIR")
+    os.environ["INVOICE_RELEASE_DIR"] = str(records)
+    try:
+        hold = _offline(ROOT / "data" / "invoices" / "invoice_1012.txt", records)
+        rejected = _offline(ROOT / "data" / "invoices" / "invoice_1002.txt", records)
+        first = approve_and_pay(
+            hold, reviewer="Avery Chen", note="Confirmed this is the same company.",
+            amount=hold["invoice"].total, demo=True,
+        )
+        second = approve_and_pay(
+            rejected, reviewer="Avery Chen", note="Stock is short, so this cannot be paid.",
+            amount=rejected["invoice"].total, demo=True,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("INVOICE_RELEASE_DIR", None)
+        else:
+            os.environ["INVOICE_RELEASE_DIR"] = previous
     print(json.dumps(first["record"]), flush=True)
     print(json.dumps(second["record"]), flush=True)
     return 0 if first["result"] == "paid" and second["result"] == "held" else 1

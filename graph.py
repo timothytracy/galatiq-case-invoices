@@ -168,10 +168,7 @@ def run_invoice(
             ledger_path=ledger_path,
         )
         state = PipelineState(invoice_path=str(path), filename=Path(path).name)
-        result = app.invoke(state, config={"recursion_limit": RECURSION_LIMIT})
-        from pipeline.approve_hold import remember
-        remember(result)
-        return result
+        return app.invoke(state, config={"recursion_limit": RECURSION_LIMIT})
     finally:
         if temporary:
             Path(ledger_path).unlink(missing_ok=True)

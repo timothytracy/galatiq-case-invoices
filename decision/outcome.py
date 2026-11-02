@@ -140,11 +140,17 @@ def result_codes(result: dict) -> list[str]:
 
 
 def _capped(finding) -> bool:
+    """The flag or the recorded cap sentence. Dropping the flag is not enough."""
+
     if finding is None:
         return False
     if isinstance(finding, dict):
-        return bool(finding.get("send_back_cap"))
-    return bool(getattr(finding, "send_back_cap", False))
+        message = finding.get("message") or ""
+        marked = bool(finding.get("send_back_cap"))
+    else:
+        message = getattr(finding, "message", "") or ""
+        marked = bool(getattr(finding, "send_back_cap", False))
+    return marked or message == SEND_BACK_CAP_MESSAGE
 
 
 def _blocks_release(code: str, finding=None) -> bool:

@@ -39,6 +39,8 @@ def reject_log(state: PipelineState) -> dict:
             update={"reasoning": decision.reasoning.model_copy(update={"conclusion": reason})}
         )
     decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
+    from pipeline.approve_hold import remember
+    remember(state.model_copy(update={"outcome": outcome, "reason_code": code, "decision": decision}))
 
     invoice = state.invoice
     record = PaymentRecord(
