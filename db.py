@@ -96,8 +96,6 @@ def connect_readonly(path: str | Path = "inventory.db") -> sqlite3.Connection:
     """Read-only URI. Writes raise OperationalError."""
 
     name = Path(path).as_posix()
-    if name == "inventory.db":
-        return sqlite3.connect("file:inventory.db?mode=ro", uri=True)
     return sqlite3.connect(f"file:{name}?mode=ro", uri=True)
 
 

@@ -76,7 +76,7 @@ KEYS = (
 
 
 def tally(results: list[dict], repairs: int) -> dict:
-    counts = Counter({key: 0 for key in KEYS})
+    counts = Counter(dict.fromkeys(KEYS, 0))
     tools = Counter()
     for result in results:
         critiques = stages(result, "critique")

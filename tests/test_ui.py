@@ -16,7 +16,6 @@ from ui.pay import (
     approve_and_pay,
     extracted_total,
     saved_result,
-    shape_pay_result,
 )
 from ui.present import (
     INVOICE_FIELDS,

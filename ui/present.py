@@ -141,7 +141,7 @@ def pay_message(view: dict, result: dict) -> tuple[str, str]:
     return "error", text
 
 def summarize(entries: list[dict]) -> dict:
-    counts = {name: 0 for name in OUTCOMES}
+    counts = dict.fromkeys(OUTCOMES, 0)
     dollars = {name: Decimal("0") for name in OUTCOMES}
     other: dict[str, dict[str, Decimal]] = {}
     paid_holds = {"count": 0, "dollars": Decimal("0"), "other": {}}

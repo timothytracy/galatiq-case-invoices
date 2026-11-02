@@ -53,7 +53,6 @@ _ADDED_COLUMNS = (
     ("status", "TEXT NOT NULL DEFAULT 'paid'"),
     ("authorization_key", "TEXT"),
 )
-STATUSES = ("pending", "paid", "failed")
 
 # One paid row per vendor and invoice number. A second insert fails.
 _UNIQUE = (

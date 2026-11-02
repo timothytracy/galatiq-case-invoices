@@ -19,6 +19,7 @@ import random
 import re
 import time
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from recording import (
@@ -393,10 +394,7 @@ class GrokClient:
             self.as_of = store.as_of
             return
         load_dotenv()
-        if api_key is None:
-            key = os.environ.get("XAI_API_KEY", "")
-        else:
-            key = api_key
+        key = os.environ.get("XAI_API_KEY", "") if api_key is None else api_key
         key = key.strip()
         if not key:
             raise MissingAPIKey(_MISSING_KEY)
@@ -560,7 +558,5 @@ def _read_tool_call(item) -> dict:
     }
 
 
-def _decimal(value: str):
-    from decimal import Decimal
-
+def _decimal(value: str) -> Decimal:
     return Decimal(value)
