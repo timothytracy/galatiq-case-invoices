@@ -17,9 +17,9 @@ Replay of the six committed recordings, with no API key, on 2026-11-01 PT:
 
 Live runs on 2026-11-01 PT matched the keys every time (samples 20/20 x3, unseen 21/21 x3, ordered ok).
 
-![Replay of the recorded Grok run, ten sample invoices](docs/review_screen.png)
+![Review screen, ten sample invoices from the recorded Grok run](docs/review_screen.png)
 
-The screenshot is a replay of the recorded Grok run of the sample invoices, 2026-11-01 PT, cropped to ten rows whose reasons fit: 1001, 1002, 1003, 1006, 1008, 1011 (pdf and text), 1012 (pdf and text), and 1014.
+The screenshot is the review screen with ten of the twenty sample invoices from the replay of the recorded Grok run (2026-11-01 PT) loaded, chosen because their full reasons fit on screen: 1001, 1002, 1003, 1006, 1008, 1011 (pdf and text), 1012 (pdf and text), and 1014.
 
 ### Business impact
 
