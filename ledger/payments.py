@@ -52,6 +52,9 @@ _UNIQUE = (
     "ON payments (vendor_key, invoice_number)"
 )
 
+# Seconds a writer waits on a lock before the payment becomes a system-error hold.
+_LOCK_TIMEOUT = 5
+
 _COLUMNS = (
     "vendor",
     "vendor_key",
@@ -90,25 +93,20 @@ def raw_sha256(text: str) -> str:
 
 
 def paid_rows(path: str | Path) -> list[PaymentRow]:
-    """Read-only. A missing file or a file with no table is an empty ledger."""
+    """Read-only. A missing or empty file is an empty ledger.
+
+    A sqlite error is not an empty ledger. The caller turns it into a hold.
+    """
 
     db_path = Path(path)
     if not db_path.is_file() or db_path.stat().st_size == 0:
         return []
+    connection = _connect_readonly(db_path)
     try:
-        connection = _connect_readonly(db_path)
-    except sqlite3.OperationalError:
-        return []
-    try:
-        try:
-            cursor = connection.execute(
-                "SELECT "
-                + ", ".join(_COLUMNS)
-                + " FROM payments ORDER BY rowid"
-            )
-            found = cursor.fetchall()
-        except sqlite3.OperationalError:
-            return []
+        cursor = connection.execute(
+            "SELECT " + ", ".join(_COLUMNS) + " FROM payments ORDER BY rowid"
+        )
+        found = cursor.fetchall()
     finally:
         connection.close()
     return [PaymentRow._make(row) for row in found]
@@ -125,11 +123,13 @@ def record_payment(
     invoice_date: str | None,
     source_file: str,
     raw_text: str,
-) -> bool:
-    """Insert one paid row. False when the unique index refuses a repeat.
+) -> bool | str:
+    """Insert one paid row.
 
-    The caller writes this before the mock payment. False means nothing
-    was inserted and the mock must not run.
+    True means the row was inserted. False means the unique index refused a
+    repeat. A string means the file could not be written; nothing was inserted.
+    The caller writes this before the mock payment. Anything but True means
+    the mock must not run.
     """
 
     number = normalize_invoice_number(invoice_number)
@@ -146,8 +146,9 @@ def record_payment(
         raw_sha256(raw_text),
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
-    connection = sqlite3.connect(Path(path), timeout=5, isolation_level=None)
+    connection = None
     try:
+        connection = sqlite3.connect(Path(path), timeout=_LOCK_TIMEOUT, isolation_level=None)
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(_CREATE)
         connection.execute(_UNIQUE)
@@ -160,10 +161,19 @@ def record_payment(
         connection.execute("COMMIT")
         return True
     except sqlite3.IntegrityError:
-        connection.execute("ROLLBACK")
+        if connection is not None:
+            connection.execute("ROLLBACK")
         return False
+    except sqlite3.Error as exc:
+        if connection is not None:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+        return f"payments ledger unreadable: {exc}"
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def arrival_findings(

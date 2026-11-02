@@ -31,10 +31,12 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
             detail=refusal or "payment blocked",
         )
     else:
-        # The row is written before the mock call. A unique-index miss pays nothing.
+        # The row is written before the mock call. A miss pays nothing.
         wrote = _write_ledger(state, ledger_path)
-        if not wrote:
+        if wrote is False:
             return _refuse_duplicate(state, findings, ledger_path)
+        if wrote is not True:
+            return _hold_unreadable_ledger(state, findings, wrote)
         # Record the key before the mock call so a retry cannot pay twice.
         _USED_KEYS.add(auth.key)
         response = mock_payment(invoice.vendor, invoice.total)
@@ -58,11 +60,12 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
     }
 
 
-def _write_ledger(state: PipelineState, ledger_path) -> bool:
+def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
     """True when there is no ledger, or the row was inserted.
 
-    None keeps the direct unit tests on the authorization key. The graph
-    always passes a path.
+    False is a duplicate. A string is an unreadable ledger. None as the path
+    keeps the direct unit tests on the authorization key. The graph always
+    passes a path.
     """
 
     if ledger_path is None:
@@ -79,6 +82,37 @@ def _write_ledger(state: PipelineState, ledger_path) -> bool:
         source_file=state.filename,
         raw_text=state.raw_text,
     )
+
+
+def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str) -> dict:
+    """The ledger file could not be written. Nothing is paid."""
+
+    findings = list(findings) + [
+        Finding(code="SYSTEM_ERROR", message=message, severity="warning")
+    ]
+    outcome, code, reason, action = explain(findings, state.invoice)
+    record = PaymentRecord(
+        status="not_paid",
+        vendor=state.invoice.vendor,
+        amount=state.invoice.total,
+        currency=state.invoice.currency,
+        detail=message,
+    )
+    result = {
+        "payment": record.model_dump(mode="json"),
+        "outcome": outcome,
+        "reason": reason,
+        "reason_code": code,
+        "codes": finding_codes(findings),
+    }
+    return {
+        "payment": record,
+        "findings": findings,
+        "outcome": outcome,
+        "reason_code": code,
+        "action": action,
+        "logs": state.logs + [stage_log(state.filename, "payment", result)],
+    }
 
 
 def _refuse_duplicate(state: PipelineState, findings: list, ledger_path) -> dict:

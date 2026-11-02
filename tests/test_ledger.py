@@ -554,3 +554,64 @@ def test_reset_ledger_deletes_the_file_only_after_the_client_exists(tmp_path, mo
     monkeypatch.setattr("main.run_invoice", run_again)
     assert main(["--invoice_path", str(invoice)]) == 0
     assert seen["kept"] is True
+
+
+def _finding_messages(result) -> list[str]:
+    messages = []
+    for finding in result["findings"]:
+        if isinstance(finding, dict):
+            messages.append(finding["message"])
+        else:
+            messages.append(finding.message)
+    return messages
+
+
+def test_a_missing_ledger_is_empty_and_the_invoice_is_paid(db_path, tmp_path):
+    ledger = tmp_path / "payments.db"
+    assert not ledger.exists()
+    assert paid_rows(ledger) == []
+    result = _run(INVOICES / "invoice_1001.txt", db_path, ledger)
+    assert result["outcome"] == "approve"
+    assert payment_status(result) == "paid"
+    assert [row.source_file for row in paid_rows(ledger)] == ["invoice_1001.txt"]
+
+
+def test_a_corrupt_ledger_holds_at_validation_and_does_not_pay(db_path, tmp_path):
+    ledger = tmp_path / "payments.db"
+    ledger.write_bytes(b"this is not a sqlite database")
+    result = _run(INVOICES / "invoice_1001.txt", db_path, ledger)
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "SYSTEM_ERROR"
+    assert payment_status(result) == "not_paid"
+    assert "payment" not in [row["stage"] for row in result["logs"]]
+    message = next(text for text in _finding_messages(result) if text.startswith("payments ledger unreadable:"))
+    assert message
+    finding = next(
+        item
+        for item in result["findings"]
+        if (item["code"] if isinstance(item, dict) else item.code) == "SYSTEM_ERROR"
+    )
+    severity = finding["severity"] if isinstance(finding, dict) else finding.severity
+    assert severity == "warning"
+
+
+def test_a_locked_ledger_holds_at_payment_and_does_not_call_the_mock(tmp_path, monkeypatch):
+    ledger = tmp_path / "payments.db"
+    holder = sqlite3.connect(ledger, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    calls = []
+    payment_module = importlib.import_module("pipeline.payment")
+    monkeypatch.setattr(payment_module, "mock_payment", lambda vendor, amount: calls.append(vendor))
+    monkeypatch.setattr("ledger.payments._LOCK_TIMEOUT", 0.2)
+    try:
+        result = payment(_payable("locked-key"), ledger)
+    finally:
+        holder.close()
+    assert calls == []
+    assert result["payment"].status == "not_paid"
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "SYSTEM_ERROR"
+    assert result["findings"][-1].code == "SYSTEM_ERROR"
+    assert result["findings"][-1].severity == "warning"
+    assert result["findings"][-1].message.startswith("payments ledger unreadable:")
+    assert "database is locked" in result["findings"][-1].message

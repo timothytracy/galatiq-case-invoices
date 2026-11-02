@@ -1,5 +1,7 @@
 """Validation. Python rules only. A blocking outcome skips approval."""
 
+import sqlite3
+
 from db import load_stock
 from models import Finding, PipelineState, ValidationReport
 from pipeline.stage_log import _stopped, stage_log
@@ -31,7 +33,16 @@ def validate(state: PipelineState, db_path, as_of=None, ledger_path=None) -> dic
     # No ledger path, or an empty file, adds nothing and leaves the assessment as it was.
     findings = list(assessment.findings)
     if ledger_path is not None:
-        findings.extend(arrival_findings(ledger_path, invoice, state.raw_text))
+        try:
+            findings.extend(arrival_findings(ledger_path, invoice, state.raw_text))
+        except sqlite3.Error as exc:
+            findings.append(
+                Finding(
+                    code="SYSTEM_ERROR",
+                    message=f"payments ledger unreadable: {exc}",
+                    severity="warning",
+                )
+            )
     if len(findings) == len(assessment.findings):
         outcome_name = assessment.outcome
         reason = assessment.reason

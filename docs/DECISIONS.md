@@ -66,11 +66,11 @@ The reasoning object on the decision has `rules_applied`, `evidence`, `risks_con
 
 ## Known limitations / cut scope
 
-A payments ledger (`payments.db`, next to `inventory.db`) records each accepted payment. On the next file, the same vendor and invoice number is a duplicate hold, and a same-vendor split that crosses the approval threshold inside `split_window_days` is a split hold. Eval still scores each invoice on a fresh ledger, so the answer keys do not change. Order is checked with `scripts/eval.py --ordered`. `python3 main.py --reset-ledger` deletes the ledger before a demo run. Pending approval.
+A payments ledger (`payments.db`, next to `inventory.db`) records each accepted payment. On the next file, the same vendor and invoice number is a duplicate hold, and a same-vendor split that crosses the approval threshold inside `split_window_days` is a split hold. Eval still scores each invoice on a fresh ledger, so the answer keys do not change. Order is checked with `scripts/eval.py --ordered`. `python3 main.py --reset-ledger` deletes the ledger before a demo run. Approved on 2026-11-01. The ledger row is written just before the mock payment, so with a real gateway a failure after the insert would need the row removed or the order changed (write after a confirmed payment, or a pending status). The split and same-text checks run at validation and assume a single process at a time; concurrent runs could each pay half of a split.
 
 The in-memory authorization key still refuses a second payment of the same audit key inside one process. The ledger's unique index refuses a second row for the same vendor and invoice number, including across processes. That refusal pays nothing and is a hold.
 
-A revision of an invoice number that has not been paid is still only a revised-invoice hold. Invoice 1004's revision is that case on a fresh ledger. Once 1004 has been paid, the revision is a duplicate hold and the revised-invoice finding stays on the record. Pending approval.
+A revision of an invoice number that has not been paid is still only a revised-invoice hold. Invoice 1004's revision is that case on a fresh ledger. Once 1004 has been paid, the revision is a duplicate hold and the revised-invoice finding stays on the record. Approved on 2026-11-01.
 
 USD reference prices are in `policy.toml`. The rush line on INV-1010 is a descriptor note and a price warning, not a reject. The EUR invoice is not price-checked. The inventory table is the four README rows and has no extra columns.
 
