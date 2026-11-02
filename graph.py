@@ -146,8 +146,13 @@ def run_invoice(
     ledger_path=None opens a fresh temporary payments ledger and deletes it
     when this call returns. Pass a path to remember payments for the next file.
     as_of is the date the agents are told is today. Tests inject it.
+    A record or replay client carries that same date on as_of. Using it
+    here means a replay on a later day still builds the recorded prompts.
+    A live client leaves as_of unset, so the wall clock is still used.
     """
 
+    if as_of is None:
+        as_of = getattr(llm, "as_of", None)
     temporary = ledger_path is None
     if temporary:
         handle, ledger_path = tempfile.mkstemp(prefix="payments-", suffix=".db")

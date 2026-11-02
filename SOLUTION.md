@@ -296,6 +296,18 @@ The bill is $11,500. WidgetA 15 at $250, WidgetB 8 at $500, and GadgetX 5 at $75
 
 **After the fix.** At `e068908e`, the samples scored 20/20 on all three runs, with warnings 19/19. The unseen set scored 21/21 on all three runs, with warnings 9/9. Across those six runs the guard set aside six concerns. All six came from 2106's critique, and all six were fabricated future-date claims. Nothing was set aside on a sample invoice, and nothing was set aside by an audit.
 
+**Replay next to those live runs.** Pending approval. The live 3+3 runs are three passes over the 20 samples and three over the 21 unseen invoices. They are where the model itself can vary. Replay is the other check: the same code, the same saved replies, no API key, no network, and no charge. A replay that scores 20/20 and 21/21 says this tree still handles those known answers the same way. It does not say the model would say them again tomorrow.
+
+| Check | What can change | What stays put |
+|---|---|---|
+| Live, 3 sample runs and 3 unseen runs | The model's wording, from call to call | The code, on the day of the run |
+| `scripts/eval.py --replay` of `recordings/samples.jsonl` and `recordings/unseen.jsonl` | Nothing in the model call | The code, against the saved answers |
+| `scripts/eval.py --ordered --replay recordings/ordered.jsonl` | Nothing in the model call | The code, against the saved answers, on one shared ledger |
+
+Pending approval: the ordered replay uses a new temporary ledger file each run. That path is not part of the fingerprint, so the saved replies still match.
+
+Record stores one header line with the `as_of` date the prompts used, then one line per request. Replay reads that date back, so a later calendar day still hits. Live, with no flag, still uses the wall clock and does not open the file. The commands that produce the four files are in [recordings/README.md](recordings/README.md).
+
 **Tests.** `python3 -m pytest` passed 129 tests.
 
 ## The review screen

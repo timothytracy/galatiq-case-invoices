@@ -1,5 +1,7 @@
 # Galatiq Case: Invoice Processing Automation
 
+[![CI](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml/badge.svg)](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml)
+
 ## Background
 
 Acme Corp is a PE-backed manufacturing firm losing **$2M/year** on manual invoice processing. Invoices arrive via email as PDFs in messy formats with frequent errors. Staff manually extract data, validate against a legacy inventory database (inconsistent), obtain VP approval (via email chains), and process payment (via a banking API).
@@ -143,6 +145,12 @@ Hard rules are Python: stock (summed per item, equal to stock passes, the snapsh
 `XAI_TOOLS` defaults off. Set it to `1` and the audit step may call three read-only tools bound to the current invoice: `lookup_item`, `recompute_totals`, and `get_policy_rule`. Critique does not get tools. The tools do not decide and do not pay. With the flag off, the model request is unchanged. If audit hits the 3-round or 8-call cap, it gets one final reply with no tools. If that reply fails, the invoice is a `SYSTEM_ERROR` hold and nothing is paid. Approved on 2026-11-01. `scripts/eval.py` prints `tools=N` on each invoice and a `tools calls=N repeats=K` line for the run. Repeats are included in the call count.
 
 Pending approval. With `XAI_TOOLS` on, audit may also call `check_payment_ledger`. It takes no arguments and only reads this invoice's vendor and invoice number on the run's ledger. Its duplicate check matches that pair only. In a single process, validation already holds duplicates and splits before audit. The tool gives the model that evidence to cite and can only tighten the decision. If the model calls it, the tool can surface a payment another process wrote between validation and audit; the payment step's unique index already stops a second payment of the same vendor and invoice number, so the new case is a split under a concurrent writer. A missing ledger means no prior payments. A locked or corrupt ledger is a `SYSTEM_ERROR` hold and nothing is paid.
+
+Pending approval: replay is a regression check. It feeds saved model replies back through this code, with no API key and no network, and the score should match every time. The live runs are where model variance shows up. Record once with `--record`, then `--replay` the file. A live run with no flag is unchanged: same payloads, and it does not open a recording. `--record` and `--replay` are mutually exclusive, and both work with `--ordered`. On those two modes the prompts use the `as_of` date stored in the recording header (or `--as-of` when recording), and the audit prompt carries a repo-relative invoice path. The ordered run's temporary ledger path is not part of the fingerprint. A replay miss is a `SYSTEM_ERROR` hold and nothing is paid. `scripts/eval.py` then prints one extra line, `tokens total=N cost_usd=X`, from the recording's token counts. The price is the published short-context rate for this model, with the long-context rate once a prompt reaches 200k tokens.
+
+```bash
+python3 setup_db.py && python3 -m pytest -q && python3 scripts/eval.py --replay recordings/samples.jsonl && python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl && XAI_TOOLS=1 python3 scripts/eval.py --replay recordings/samples_tools.jsonl && XAI_TOOLS=1 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl && python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
+```
 
 Decisions are in `docs/DECISIONS.md`. The pipeline implements the policy approved on 2026-10-31 in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md) and scores against [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md). Those two documents are the approved text.
 

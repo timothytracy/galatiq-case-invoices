@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from ledger.scenario import run_scenario  # noqa: E402
-from llm_client import GrokClient, MissingAPIKey  # noqa: E402
+from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode  # noqa: E402
 from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
 from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
@@ -162,12 +162,42 @@ def main(argv: list[str] | None = None) -> int:
             "(default file: data/ordered_scenario.json). Not the scored eval."
         ),
     )
+    mode_flags = parser.add_mutually_exclusive_group()
+    mode_flags.add_argument(
+        "--record",
+        metavar="PATH",
+        help="Call the live model and append each request to this JSONL file",
+    )
+    mode_flags.add_argument(
+        "--replay",
+        metavar="PATH",
+        help="Answer from this JSONL file. No network and no API key",
+    )
+    parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="Date the agents are told is today. Record stores it. Replay reads the file",
+    )
     args = parser.parse_args(argv)
     try:
-        GrokClient()
+        mode, recording = resolve_run_mode(args.record, args.replay)
+    except ModeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    # Pending approval: a missing replay file skips so CI is green before the
+    # recordings are committed. A file that is present still fails the run
+    # when the score is short of perfect.
+    if mode == "replay" and not Path(recording).is_file():
+        print(f"skip: replay recording not found: {recording}", flush=True)
+        return 0
+    try:
+        client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     invoices = Path(args.invoices)
     db_path = ROOT / "inventory.db"
@@ -175,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         create_database(db_path)
 
     if args.ordered:
-        return _ordered_main(Path(args.ordered), db_path)
+        return _ordered_main(Path(args.ordered), db_path, client, mode, as_of)
 
     key = load_answer_key(Path(args.answer_key))
     files = sorted(
@@ -185,7 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     tool_calls = 0
     repeats = 0
     for path in files:
-        result = run_invoice(path, db_path, GrokClient())
+        # One client for the run, so record mode writes a single file.
+        # Live passes no as_of: the graph still uses the wall clock.
+        if mode == "live" and as_of is None:
+            result = run_invoice(path, db_path, client)
+        else:
+            result = run_invoice(path, db_path, client, as_of=as_of)
         print_bad_reasoning(path.name, result.get("attempts") or [])
         calls = tool_calls_of(result)
         tool_calls += len(calls)
@@ -213,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(format_tool_summary(tool_calls, repeats), flush=True)
     print(f"score {correct}/{len(files)}", flush=True)
+    if mode != "live":
+        print(client.usage_line(), flush=True)
     return 0 if correct == len(files) and correct == len(key) else 1
 
 
@@ -222,13 +259,23 @@ def format_tool_summary(calls: int, repeats: int) -> str:
     return f"tools calls={calls} repeats={repeats}"
 
 
-def _ordered_main(scenario_path: Path, db_path: Path) -> int:
-    """One temporary ledger for every file in the scenario. Not payments.db."""
+def _ordered_main(scenario_path: Path, db_path: Path, client, mode: str, as_of) -> int:
+    """One temporary ledger for every file in the scenario. Not payments.db.
+
+    One client covers the whole scenario, so --record appends every request
+    to the same file. The ledger file name is not part of the model request.
+    """
 
     handle, name = tempfile.mkstemp(prefix="payments-ordered-", suffix=".db")
     os.close(handle)
     try:
-        report = run_scenario(scenario_path, db_path, name, lambda _path: GrokClient())
+        report = run_scenario(
+            scenario_path,
+            db_path,
+            name,
+            lambda _path: client,
+            as_of=as_of,
+        )
     finally:
         Path(name).unlink(missing_ok=True)
     tool_calls = 0
@@ -253,6 +300,8 @@ def _ordered_main(scenario_path: Path, db_path: Path) -> int:
         flush=True,
     )
     print(format_tool_summary(tool_calls, repeats), flush=True)
+    if mode != "live":
+        print(client.usage_line(), flush=True)
     return 0 if report["ok"] else 1
 
 

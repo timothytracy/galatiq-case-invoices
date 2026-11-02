@@ -11,7 +11,7 @@ from pathlib import Path
 
 from db import create_database
 from graph import run_invoice
-from llm_client import GrokClient, MissingAPIKey
+from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode
 from decision.outcome import result_codes
 
 
@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Delete payments.db before this run so a repeated demo file is not a duplicate hold.",
     )
+    mode_flags = parser.add_mutually_exclusive_group()
+    mode_flags.add_argument("--record", metavar="PATH", help="Live call, then append to this JSONL file")
+    mode_flags.add_argument("--replay", metavar="PATH", help="Answer from this JSONL file. No API key")
+    parser.add_argument("--as-of", metavar="YYYY-MM-DD", help="Date the agents are told is today")
     args = parser.parse_args(argv)
 
     path = Path(args.invoice_path)
@@ -34,10 +38,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        client = GrokClient()
+        mode, recording = resolve_run_mode(args.record, args.replay)
+        client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except (ModeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     db_path = Path("inventory.db")
     if not db_path.exists():
@@ -47,7 +58,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.reset_ledger:
         ledger.unlink(missing_ok=True)
 
-    result = run_invoice(path, db_path, client, ledger_path=ledger)
+    if mode == "live" and as_of is None:
+        result = run_invoice(path, db_path, client, ledger_path=ledger)
+    else:
+        result = run_invoice(path, db_path, client, as_of=as_of, ledger_path=ledger)
     _write_log(path, result)
     print(json.dumps(_result_line(path, result)), flush=True)
     return 0
