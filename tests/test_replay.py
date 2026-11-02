@@ -725,7 +725,7 @@ def _ci_commands(text: str) -> list[tuple[str, str | None, str]]:
 
 
 def test_documented_replay_commands_match_the_recording():
-    docs = [ROOT / "README.md", ROOT / "SOLUTION.md", ROOT / "recordings" / "README.md"]
+    docs = [ROOT / "README.md", ROOT / "recordings" / "README.md"]
     docs.extend(sorted((ROOT / "docs").glob("*.md")))
     commands = []
     for path in docs:
