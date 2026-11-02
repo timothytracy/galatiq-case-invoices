@@ -26,6 +26,8 @@ jobs:
         run: python3 scripts/eval.py --replay recordings/samples_tools.jsonl
       - name: Replay unseen invoices
         run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
+      - name: Replay the ordered ledger scenario
+        run: python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
       - name: Replay sample invoices with tools off
         run: python3 scripts/eval.py --replay recordings/samples.jsonl
         env:
@@ -34,8 +36,6 @@ jobs:
         run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
         env:
           XAI_TOOLS: "0"
-      - name: Replay the ordered ledger scenario
-        run: python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
       - name: Replay the ordered ledger scenario with tools off
         run: python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
         env:

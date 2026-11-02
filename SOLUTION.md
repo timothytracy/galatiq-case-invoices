@@ -301,12 +301,16 @@ The bill is $11,500. WidgetA 15 at $250, WidgetB 8 at $500, and GadgetX 5 at $75
 | Check | What can change | What stays put |
 |---|---|---|
 | Live, 3 sample runs and 3 unseen runs | The model's wording, from call to call | The code, on the day of the run |
-| `scripts/eval.py --replay` of `recordings/samples_tools.jsonl` and `recordings/unseen_tools.jsonl` | Nothing in the model call | The code, against the saved answers |
+| `python3 scripts/eval.py --replay recordings/samples_tools.jsonl` | Nothing in the model call | The code, against the saved answers |
+| `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl` | Nothing in the model call | The code, against the saved answers |
+| `python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl` | Nothing in the model call | The code, against the saved answers, on one shared ledger |
+| `XAI_TOOLS=0 python3 scripts/eval.py --replay recordings/samples.jsonl` | Nothing in the model call | The code, against the saved answers |
+| `XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl` | Nothing in the model call | The code, against the saved answers |
 | `XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | Nothing in the model call | The code, against the saved answers, on one shared ledger |
 
 Pending approval: the ordered replay uses a new temporary ledger file each run. That path is not part of the fingerprint, so the saved replies still match.
 
-Record stores one header line with the `as_of` date the prompts used, then one line per request. Replay reads that date back, so a later calendar day still hits. Live, with no flag, still uses the wall clock and does not open the file. The record commands are in [recordings/README.md](recordings/README.md). The six committed files are listed there, including `recordings/ordered_tools.jsonl`. Pending approval. Replay with no flag uses the `_tools` files. `XAI_TOOLS=0` replays `recordings/samples.jsonl`, `recordings/unseen.jsonl`, and `recordings/ordered.jsonl`.
+Record stores one header line with the `as_of` date the prompts used, then one line per request. Replay reads that date back, so a later calendar day still hits. Live, with no flag, still uses the wall clock and does not open the file. The record commands are in [recordings/README.md](recordings/README.md). The six committed files were recorded on 2026-11-01 PT, including `recordings/ordered_tools.jsonl`. Pending approval. Replay with no flag uses the `_tools` files. `XAI_TOOLS=0` replays `recordings/samples.jsonl`, `recordings/unseen.jsonl`, and `recordings/ordered.jsonl`.
 
 **Tests.** `python3 -m pytest` passed 129 tests.
 
