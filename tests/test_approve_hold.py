@@ -107,8 +107,24 @@ def test_second_approval_does_not_pay_again(tmp_path, capsys):
     again = _pay(result, tmp_path)
     assert again["result"] == "held"
     assert again["reason_code"] == "NOT_PAYABLE"
-    assert again["reason"] == "Already paid."
+    assert again["reason"] == f"Invoice {result['invoice'].invoice_number} from this vendor is already paid."
     assert capsys.readouterr().out.count("Paid ") == 1
+
+
+def test_paid_original_blocks_the_revision_without_saying_this_bill_was_paid(tmp_path):
+    ledger = tmp_path / "payments.db"
+    revised = _run(ROOT / "data/invoices/invoice_1004_revised.json", tmp_path, ledger=ledger)
+    assert revised["outcome"] == "hold"
+    assert revised["reason_code"] == "REVISED_INVOICE"
+    assert str(revised["invoice"].total) == "5940.00"
+    original = _run(ROOT / "data/invoices/invoice_1004.json", tmp_path, ledger=ledger)
+    assert original["outcome"] == "approve"
+    assert str(original["invoice"].total) == "1890.00"
+    refused = _pay(revised, tmp_path)
+    assert refused["result"] == "held"
+    assert refused["reason_code"] == "NOT_PAYABLE"
+    assert refused["reason"] == "Invoice INV-1004 from this vendor is already paid."
+    assert "this bill" not in refused["reason"].lower()
 
 
 def test_prior_payment_and_split_block_release(tmp_path):
@@ -132,7 +148,7 @@ def test_prior_payment_and_split_block_release(tmp_path):
     ) is True
     prior = _pay(result, tmp_path)
     assert prior["reason_code"] == "NOT_PAYABLE"
-    assert prior["reason"] == "Already paid."
+    assert prior["reason"] == f"Invoice {result['invoice'].invoice_number} from this vendor is already paid."
 
 
 @pytest.mark.parametrize("kind", ["corrupt", "locked"])
@@ -361,8 +377,6 @@ def test_read_only_stale_record_does_not_pay_in_a_new_process(lock_parent, tmp_p
     releases.chmod(0o555)
     if lock_parent:
         nest.chmod(0o555)
-    from pipeline.payment import _USED_KEYS
-    _USED_KEYS.clear()
     try:
         rerun = _run(ROOT / "data/invoices/invoice_1001.txt", tmp_path, ledger=ledger)
         paid = _approve_in_subprocess(

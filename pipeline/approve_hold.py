@@ -188,9 +188,11 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         saved.get("reason_code"),
     )
     if blocked:
-        # Same refusal. A duplicate found on the recheck means this bill is already paid.
-        if blocked == "DUPLICATE_INVOICE is not a review hold and is never paid.":
-            blocked = "Already paid."
+        # The saved record already passed. A DUPLICATE_INVOICE from the recheck
+        # means this vendor and invoice number already have a paid row.
+        if _fresh_block_code(fresh) == "DUPLICATE_INVOICE":
+            number = "" if invoice is None or not invoice.invoice_number else invoice.invoice_number
+            blocked = f"Invoice {number} from this vendor is already paid."
         return finish("held", NOT_PAYABLE, blocked, saved)
     if invoice is None or not _grounded(invoice, _file_text(ROOT / _repo_path(saved.get("source")))):
         return finish("held", NOT_PAYABLE, "The vendor, invoice number, or total is not in the source file.", saved)
@@ -211,6 +213,17 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     if paid["payment"].status == "paid":
         return finish("paid", None, "Reviewer approved this hold for payment.", saved)
     return finish("held", paid.get("reason_code") or "PAYMENT_REFUSED", paid["payment"].detail, saved)
+
+
+def _fresh_block_code(fresh) -> str | None:
+    """The first recheck code that blocks a release. None when nothing new blocks."""
+
+    from decision.outcome import _blocks_release, finding_codes
+
+    for finding, code in zip(fresh, finding_codes(fresh)):
+        if _blocks_release(code, finding):
+            return code
+    return None
 
 
 def _differs(result, saved) -> str | None:

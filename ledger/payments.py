@@ -52,6 +52,14 @@ _UNIQUE = (
     "ON payments (vendor_key, invoice_number)"
 )
 
+# Authorization keys accepted against this file. Not shared with any other file.
+# A missing table (a ledger written before this existed) means none are used.
+_USED_AUTH = """\
+CREATE TABLE IF NOT EXISTS used_authorizations (
+    key TEXT PRIMARY KEY
+)
+"""
+
 # Seconds a writer waits on a lock before the payment becomes a system-error hold.
 _LOCK_TIMEOUT = 5
 
@@ -112,6 +120,38 @@ def paid_rows(path: str | Path) -> list[PaymentRow]:
     return [PaymentRow._make(row) for row in found]
 
 
+def authorization_used(path: str | Path, key: str) -> bool:
+    """True when this ledger file has already accepted the authorization key.
+
+    A missing file, an empty file, or a ledger with no used_authorizations
+    table has not accepted it. Deleting the file (reset-ledger) drops the keys.
+    """
+
+    db_path = Path(path)
+    if not db_path.is_file() or db_path.stat().st_size == 0:
+        return False
+    try:
+        connection = _connect_readonly(db_path)
+    except sqlite3.Error:
+        return False
+    try:
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'used_authorizations'"
+        ).fetchone()
+        if table is None:
+            return False
+        return (
+            connection.execute(
+                "SELECT 1 FROM used_authorizations WHERE key = ?", (key,)
+            ).fetchone()
+            is not None
+        )
+    except sqlite3.Error:
+        return False
+    finally:
+        connection.close()
+
+
 def record_payment(
     path: str | Path,
     *,
@@ -123,12 +163,15 @@ def record_payment(
     invoice_date: str | None,
     source_file: str,
     raw_text: str,
+    authorization_key: str | None = None,
 ) -> bool | str:
     """Insert one paid row.
 
     True means the row was inserted. False means this invoice was already
-    paid. "SPLIT_INVOICE" means the split rule fired. Any other string means
-    the file could not be written. Nothing was inserted in those cases.
+    paid. "SPLIT_INVOICE" means the split rule fired.
+    "USED_AUTHORIZATION" means this ledger already accepted authorization_key.
+    Any other string means the file could not be written. Nothing was inserted
+    in those cases.
     The duplicate and split checks run inside the write lock, so two callers
     cannot both pass the split rule. The caller writes this before the mock
     payment. Anything but True means the mock must not run.
@@ -154,6 +197,7 @@ def record_payment(
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(_CREATE)
         connection.execute(_UNIQUE)
+        connection.execute(_USED_AUTH)
         rows = [
             PaymentRow._make(item)
             for item in connection.execute(
@@ -181,6 +225,15 @@ def record_payment(
             + ")",
             row,
         )
+        if authorization_key:
+            try:
+                connection.execute(
+                    "INSERT INTO used_authorizations (key) VALUES (?)",
+                    (authorization_key,),
+                )
+            except sqlite3.IntegrityError:
+                connection.execute("ROLLBACK")
+                return "USED_AUTHORIZATION"
         connection.execute("COMMIT")
         return True
     except sqlite3.IntegrityError:

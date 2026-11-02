@@ -65,7 +65,7 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
+Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. `invoice_2115.txt` is the example: the deterministic parser rejects the misread total `$3,5OO.00` as `MISSING_FIELD`, and the recorded model read gives the listed alternate `TOTAL_MISMATCH`. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
 
 ### Reviewer quick path
 

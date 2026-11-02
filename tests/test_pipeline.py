@@ -1128,6 +1128,29 @@ def test_payment_refuses_a_mismatched_vendor_or_currency():
     assert "currency does not match" in currency["payment"].detail
 
 
+def test_authorization_key_is_once_per_ledger_and_free_on_a_fresh_one(tmp_path, capsys):
+    same = tmp_path / "same.db"
+    other = tmp_path / "other.db"
+    state = _payable(_signed(key="ledger-scope"))
+    first = payment(state, same)
+    second = payment(state, same)
+    fresh = payment(state, other)
+    assert first["payment"].status == "paid"
+    assert second["payment"].status == "not_paid"
+    assert "already used" in second["payment"].detail
+    assert fresh["payment"].status == "paid"
+    same.unlink()
+    assert payment(state, same)["payment"].status == "paid"
+    from ledger.payments import _CREATE, _UNIQUE
+    bare = sqlite3.connect(tmp_path / "old.db")
+    bare.execute(_CREATE)
+    bare.execute(_UNIQUE)
+    bare.commit()
+    bare.close()
+    assert payment(_payable(_signed(key="old-file")), tmp_path / "old.db")["payment"].status == "paid"
+    assert capsys.readouterr().out.count("Paid 500.00 to Widgets Inc.") == 4
+
+
 def test_payment_pays_once_and_refuses_a_reused_key(capsys):
     state = _payable(_signed(key="once-only"))
     first = payment(state)

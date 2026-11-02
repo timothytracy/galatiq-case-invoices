@@ -9,15 +9,26 @@ from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_
 from decision.policy import POLICY
 from decision.wording import explain
 from ledger import arrival_findings, record_payment
+from ledger.payments import authorization_used
 
-# Keys already accepted in this process.
-_USED_KEYS: set[str] = set()
+# Keys from payment() calls that passed no ledger. A ledger file keeps its own.
+_NO_LEDGER_KEYS: set[str] = set()
+
+
+def clear_keys_without_ledger() -> None:
+    """Forget keys remembered only because payment() had no ledger file.
+
+    Does not change any payments.db. A ledger stores its own used keys, and
+    deleting that file drops them.
+    """
+
+    _NO_LEDGER_KEYS.clear()
 
 
 def payment(state: PipelineState, ledger_path=None, *, release: bool = False) -> dict:
     invoice = state.invoice
     blocked = "" if release else _payment_blocked(state)
-    refusal = blocked or _authorization_refusal(state)
+    refusal = blocked or _authorization_refusal(state, ledger_path)
     auth = state.authorization
     findings = list(state.findings)
     if refusal or invoice is None or not isinstance(auth, PaymentAuthorization):
@@ -40,15 +51,36 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
                 return _hold_unreadable_ledger(
                     state, findings, noted or "release record could not be written", release
                 )
-        wrote = _write_ledger(state, ledger_path)
+        wrote = _write_ledger(state, ledger_path, auth.key)
         if wrote is False:
             return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
         if wrote == "SPLIT_INVOICE":
             return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
+        if wrote == "USED_AUTHORIZATION":
+            detail = "payment refused: authorization key was already used"
+            findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
+            record = PaymentRecord(
+                status="not_paid",
+                vendor=invoice.vendor,
+                amount=invoice.total,
+                currency=invoice.currency,
+                detail=detail,
+            )
+            result = {
+                "payment": record.model_dump(mode="json"),
+                "outcome": state.outcome,
+                "codes": finding_codes(findings),
+            }
+            return {
+                "payment": record,
+                "findings": findings,
+                "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
+            }
         if wrote is not True:
             return _hold_unreadable_ledger(state, findings, wrote, release)
-        # Record the key before the mock call so a retry cannot pay twice.
-        _USED_KEYS.add(auth.key)
+        # No ledger file: remember the key here. A file stored it in the same write.
+        if ledger_path is None:
+            _NO_LEDGER_KEYS.add(auth.key)
         response = mock_payment(invoice.vendor, invoice.total)
         record = PaymentRecord(
             status="paid",
@@ -70,7 +102,7 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
     }
 
 
-def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
+def _write_ledger(state: PipelineState, ledger_path, authorization_key: str) -> bool | str:
     """True when there is no ledger, or the row was inserted.
 
     False is a duplicate. "SPLIT_INVOICE" is the split rule. Any other string
@@ -91,6 +123,7 @@ def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
         invoice_date=invoice.invoice_date,
         source_file=state.filename,
         raw_text=state.raw_text,
+        authorization_key=authorization_key,
     )
 
 
@@ -188,7 +221,15 @@ def _payment_blocked(state: PipelineState) -> str:
     return ""
 
 
-def _authorization_refusal(state: PipelineState) -> str:
+def _key_was_used(ledger_path, key: str) -> bool:
+    """True when this ledger, or the no-ledger bucket, has already accepted key."""
+
+    if ledger_path is None:
+        return key in _NO_LEDGER_KEYS
+    return authorization_used(ledger_path, key)
+
+
+def _authorization_refusal(state: PipelineState, ledger_path=None) -> str:
     """Empty when the PASS audit's sign-off matches this invoice and is unused."""
 
     auth = state.authorization
@@ -203,7 +244,7 @@ def _authorization_refusal(state: PipelineState) -> str:
         return "payment refused: amount does not match the audit authorization"
     if invoice.currency != auth.currency:
         return "payment refused: currency does not match the audit authorization"
-    if auth.key in _USED_KEYS:
+    if _key_was_used(ledger_path, auth.key):
         return "payment refused: authorization key was already used"
     return ""
 
