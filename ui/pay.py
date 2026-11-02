@@ -4,10 +4,11 @@ The pipeline function is ``pipeline.approve_hold.approve_and_pay``:
 
     approve_and_pay(result, *, reviewer, note, amount, ledger_path=None, log_path=None, demo=False)
 
-``result`` is the invoice's pipeline state dict. ``amount`` is the extracted
-total. ``demo=True`` tells that function to use a temporary ledger, so an
-offline run never passes payments.db. This module does not check currency,
-amounts, or the ledger, and it does not pay.
+``result`` is the pipeline result dict, the same object the run loaded or
+``run_one`` stored. It is not a display row. ``amount`` is that invoice's
+extracted total, unchanged. ``demo=True`` tells the pipeline to use a
+temporary ledger, so an offline run never passes payments.db. This module
+does not check currency, amounts, or the ledger, and it does not pay.
 
 The shaped result is ``status`` "paid" or "refused", plus ``result``,
 ``reason_code``, ``reason``, and ``payment_status`` from the pipeline.
@@ -19,6 +20,30 @@ import importlib
 BACKEND_UNAVAILABLE = "backend not available"
 _BACKEND_MODULE = "pipeline.approve_hold"
 _BACKEND_NAME = "approve_and_pay"
+
+
+def saved_result(entry: dict) -> dict:
+    """The pipeline result on a run entry. Same object, not a rebuilt row.
+
+    A later change can point this at the pipeline's saved output. Until that
+    location is known, this is the state dict already stored on the entry.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    state = entry.get("state")
+    if isinstance(state, dict):
+        return state
+    return entry
+
+
+def extracted_total(result: dict):
+    """The invoice total field, or None. Not a formatted display amount."""
+    if not isinstance(result, dict):
+        return None
+    invoice = result.get("invoice")
+    if isinstance(invoice, dict) and "total" in invoice:
+        return invoice["total"]
+    return None
 
 
 def approve_and_pay(
@@ -74,6 +99,7 @@ def shape_pay_result(raw) -> dict:
         "reason": reason,
         "payment_status": payment_status,
         "payment": {"status": payment_status},
+        "critique_concerns": _concerns(body.get("critique_concerns")),
     }
 
 
@@ -85,7 +111,14 @@ def _unavailable() -> dict:
         "reason": BACKEND_UNAVAILABLE,
         "payment_status": "not_paid",
         "payment": None,
+        "critique_concerns": [],
     }
+
+
+def _concerns(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if item is not None and str(item).strip()]
 
 
 def _find_backend():

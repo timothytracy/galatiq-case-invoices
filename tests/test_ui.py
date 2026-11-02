@@ -10,7 +10,13 @@ from streamlit.testing.v1 import AppTest
 from db import create_database
 from decision.policy import APPROVAL_THRESHOLD_USD
 from llm_client import TOOL_CALL_CAP, TOOL_ROUND_CAP
-from ui.pay import BACKEND_UNAVAILABLE, approve_and_pay, shape_pay_result
+from ui.pay import (
+    BACKEND_UNAVAILABLE,
+    approve_and_pay,
+    extracted_total,
+    saved_result,
+    shape_pay_result,
+)
 from ui.present import (
     INVOICE_FIELDS,
     LINE_FIELDS,
@@ -18,6 +24,7 @@ from ui.present import (
     agent_trail,
     blank,
     can_pay,
+    concern_text,
     confirm_label,
     format_amount,
     holds,
@@ -695,6 +702,47 @@ def test_missing_backend_refuses_without_writing_a_ledger(monkeypatch, tmp_path)
     assert (real.read_bytes() if real.exists() else None) == before
 
 
+def test_adapter_passes_the_loaded_result_unchanged(monkeypatch, tmp_path):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    entry = _review_hold("held.txt", "500.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.")
+    entry["state"]["critique_concerns"] = ["new bank account"]
+    path = tmp_path / "review_run.json"
+    save_run(path, [entry])
+    loaded = load_run(path)[0]
+    original = saved_result(loaded)
+    assert original is loaded["state"]
+    assert original is not invoice_view(loaded)
+    before = json.loads(json.dumps(original))
+    seen = []
+
+    def backend(state, *, reviewer, note, amount, ledger_path=None, log_path=None, demo=False):
+        seen.append({"state": state, "amount": amount, "demo": demo})
+        return {
+            "result": "held",
+            "reason_code": "NOT_PAYABLE",
+            "reason": "held for the test",
+            "payment_status": "not_paid",
+            "critique_concerns": state.get("critique_concerns"),
+        }
+
+    monkeypatch.setattr(_approve_module(), "approve_and_pay", backend, raising=False)
+    total = extracted_total(original)
+    shaped = approve_and_pay(
+        original, reviewer="Ada", note="Same company.", amount=total, demo=True,
+    )
+    assert seen[0]["state"] is original
+    assert seen[0]["amount"] is original["invoice"]["total"]
+    assert seen[0]["demo"] is True
+    assert loaded["state"] == before
+    assert shaped["critique_concerns"] == ["new bank account"]
+    assert concern_text(None) == ""
+    assert concern_text(shaped["critique_concerns"]) == "Critique concerns: new bank account"
+    kind, text = pay_message(invoice_view(loaded), shaped)
+    assert kind == "error"
+    assert text == "NOT_PAYABLE. held for the test Critique concerns: new bank account"
+    assert invoice_view({"state": {"filename": "held.txt", "outcome": "hold"}})["critique_concerns"] == []
+
+
 def test_real_demo_pay_refuses_a_mismatched_amount(monkeypatch, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -724,6 +772,50 @@ def test_real_demo_pay_refuses_a_mismatched_amount(monkeypatch, tmp_path):
     assert not (tmp_path / "payments.db").exists()
     assert (real.read_bytes() if real.exists() else None) == before
     assert "northwind.txt" in log.read_text(encoding="utf-8")
+    short = approve_and_pay(
+        state, reviewer="A", note="x", amount=extracted_total(state), demo=True, log_path=log,
+    )
+    assert short["result"] == "held"
+    assert short["reason_code"] == "MISSING_REVIEWER"
+    assert short["reason"] == "A reviewer name is required."
+    zero = _review_hold("zero.txt", "0.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.")["state"]
+    zero_pay = approve_and_pay(
+        zero, reviewer="Ada", note="Same company.", amount=extracted_total(zero), demo=True, log_path=log,
+    )
+    assert zero_pay["reason_code"] == "NOT_PAYABLE"
+    assert zero_pay["reason"] == "The total must be greater than zero."
+    assert pay_message({"file": "zero.txt", "amount": "0.00", "currency": "USD"}, zero_pay)[1] == (
+        "NOT_PAYABLE. The total must be greater than zero."
+    )
+    from decision.outcome import SEND_BACK_CAP_MESSAGE
+
+    capped = _review_hold("capped.txt", "500.00", "USD", "AUDIT_ESCALATED", SEND_BACK_CAP_MESSAGE)
+    assert can_pay(invoice_view(capped)) is False
+    assert "SEND_BACK_CAP_MESSAGE" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
+    assert "SEND_BACK_CAP_MESSAGE" not in (ROOT / "ui" / "present.py").read_text(encoding="utf-8")
+    refused_cap = approve_and_pay(
+        saved_result(capped),
+        reviewer="Ada",
+        note="Same company.",
+        amount=extracted_total(saved_result(capped)),
+        demo=True,
+        log_path=log,
+    )
+    assert refused_cap["result"] == "held"
+    assert refused_cap["reason"]
+    assert refused_cap["reason"] in pay_message(invoice_view(capped), refused_cap)[1]
+    source = tmp_path / "northwind.txt"
+    source.write_text("on disk\n", encoding="utf-8")
+    mismatched = json.loads(json.dumps(state))
+    mismatched["invoice"]["source"]["path"] = str(source)
+    mismatched["raw_text"] = "different\n"
+    source_refusal = approve_and_pay(
+        mismatched, reviewer="Ada", note="Same company.", amount=extracted_total(mismatched), demo=True, log_path=log,
+    )
+    assert source_refusal["reason_code"] == "NOT_PAYABLE"
+    assert "does not match the source file" in source_refusal["reason"]
+    assert "does not match the source file" in pay_message({"file": "northwind.txt"}, source_refusal)[1]
+    assert not (tmp_path / "payments.db").exists()
 
 
 def test_pay_action_is_only_for_review_holds():
@@ -840,8 +932,18 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     assert "A note is required." in missing
     assert "Confirm payment of 500.00 USD for northwind.txt before paying." in missing
 
+    app.text_input(key="pay-reviewer-0-northwind.txt").set_value("A")
+    app.text_area(key="pay-note-0-northwind.txt").set_value("x")
+    app.checkbox(key="pay-confirm-0-northwind.txt").set_value(True)
+    _submit_pay(app, "northwind.txt", 0)
+    short = _visible(app)
+    assert "A reviewer name is required." in short
+    assert "A note is required." in short
+    assert "Payment status:" not in short
+
     app.text_input(key="pay-reviewer-0-northwind.txt").set_value("Ada")
     app.text_area(key="pay-note-0-northwind.txt").set_value("Release this hold.")
+    app.checkbox(key="pay-confirm-0-northwind.txt").set_value(False)
     _submit_pay(app, "northwind.txt", 0)
     unconfirmed = _visible(app)
     assert "Confirm payment of 500.00 USD for northwind.txt before paying." in unconfirmed
@@ -960,7 +1062,7 @@ def _review_hold(filename, total, currency, code, message):
     entry["llm"] = "fake"
     entry["state"]["reason_code"] = code
     entry["state"]["action"] = "Confirm with the vendor."
-    entry["state"]["raw_text"] = f"{filename}\n{code}\n"
+    entry["state"]["raw_text"] = f"{filename}\nWidgetA\n"
     entry["state"]["findings"] = [{"code": code, "message": message, "severity": "warning"}]
     entry["state"]["invoice"] = {
         "vendor": "Northwind Supply",

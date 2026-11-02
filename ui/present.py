@@ -52,6 +52,7 @@ def invoice_view(entry: dict) -> dict:
         "payment": payment, "findings": _findings(state), "invoice": invoice or None,
         "logs": logs, "elapsed_seconds": _elapsed(entry),
         "raw_text": state.get("raw_text") or "", "llm": entry.get("llm"),
+        "critique_concerns": concern_list(state.get("critique_concerns")),
         "tool_calls": tool_call_view(logs, entry.get("result_line"), state.get("attempts")),
     }
 def _place(view: dict, key: str) -> str:
@@ -100,24 +101,39 @@ def confirm_label(view: dict) -> str:
     if amount:
         return f"Confirm payment of {amount} for {name}"
     return f"Confirm payment for {name}"
+def concern_list(value) -> list[str]:
+    """Critique concerns as plain text. A missing or empty value is no concerns."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if not blank(item) and str(item).strip()]
+def concern_text(value) -> str:
+    items = concern_list(value)
+    if not items:
+        return ""
+    return "Critique concerns: " + "; ".join(items)
 def pay_message(view: dict, result: dict) -> tuple[str, str]:
     """("success", text) or ("error", text).
 
     Paid names the payment status. A refusal shows the reason code and the reason.
+    Critique concerns are added when the result includes them.
     """
+    concerns = concern_text(None if not isinstance(result, dict) else result.get("critique_concerns"))
     if result.get("result") == "paid" or result.get("status") == "paid":
         status = payment_text(result.get("payment_status") or "paid") or "Paid"
         text = f"Paid {view.get('file') or 'invoice'}. Payment status: {status}."
         amount = format_amount(view.get("amount"), view.get("currency"))
         if amount:
             text = f"{text} {amount}."
+        if concerns:
+            text = f"{text} {concerns}"
         return "success", text
     reason = result.get("reason")
     reason = reason.strip() if isinstance(reason, str) and reason.strip() else "Payment refused."
     code = result.get("reason_code")
-    if isinstance(code, str) and code.strip():
-        return "error", f"{code.strip()}. {reason}"
-    return "error", reason
+    text = f"{code.strip()}. {reason}" if isinstance(code, str) and code.strip() else reason
+    if concerns:
+        text = f"{text} {concerns}"
+    return "error", text
 
 def summarize(entries: list[dict]) -> dict:
     counts = {name: 0 for name in OUTCOMES}

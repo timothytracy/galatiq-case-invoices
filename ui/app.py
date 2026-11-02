@@ -12,11 +12,11 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 
 from llm_client import MissingAPIKey
-from ui.pay import approve_and_pay
+from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
     INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
     detail_index, format_amount, format_money, invoice_view, label, pay_block, pay_message,
-    payment_text, reason_code_text, show_text, summarize, table_rows,
+    payment_text, reason_code_text, show_text, summarize, table_rows, concern_text,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
@@ -197,6 +197,9 @@ def screen_holds(entries: list[dict], live: bool) -> None:
         if action_text(view):
             st.caption("Next action")
             st.write(action_text(view))
+        concerns = concern_text(view.get("critique_concerns"))
+        if concerns:
+            st.write(concerns)
         existing = saved.get(view["file"])
         if existing:
             st.info(
@@ -421,11 +424,14 @@ def _pay_form(index: int, entry: dict, view: dict, live: bool) -> None:
             if _pay_hold(entry, view, reviewer, note, confirmed, live):
                 st.rerun()
 
+def _two_letters(value: str) -> bool:
+    return sum(character.isalpha() for character in (value or "")) >= 2
+
 def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool, live: bool) -> bool:
     missing = []
-    if not (reviewer or "").strip():
+    if not _two_letters(reviewer):
         missing.append("A reviewer name is required.")
-    if not (note or "").strip():
+    if not _two_letters(note):
         missing.append("A note is required.")
     if not confirmed:
         missing.append(f"{confirm_label(view)} before paying.")
@@ -434,11 +440,12 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
     if missing:
         return False
     demo = not live
+    pipeline = saved_result(entry)
     result = approve_and_pay(
-        entry.get("state") if isinstance(entry.get("state"), dict) else {},
+        pipeline,
         reviewer=reviewer.strip(),
         note=note.strip(),
-        amount=view.get("amount"),
+        amount=extracted_total(pipeline),
         ledger_path=None if demo else PAYMENTS_DB,
         demo=demo,
     )
