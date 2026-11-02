@@ -769,7 +769,7 @@ def test_free_text_with_no_cited_codes_is_kept(tmp_path, db_path):
     assert "AUDIT_NOTE" not in codes(result)
 
 
-def test_residential_unit_is_a_note_and_a_business_street_is_not(tmp_path, db_path):
+def test_residential_unit_is_a_note_and_a_business_street_is_not():
     from decimal import Decimal
 
     from db import SEED

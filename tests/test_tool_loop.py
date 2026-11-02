@@ -133,7 +133,7 @@ def test_parallel_calls_all_run_and_each_counts(monkeypatch):
     assert tool_ids == ["c1", "c2"]
 
 
-def test_identical_repeat_does_not_count_or_rerun(monkeypatch):
+def test_identical_repeat_does_not_count_or_rerun():
     runs = {"n": 0}
 
     def echo(arguments):
@@ -184,7 +184,7 @@ def test_identical_repeat_does_not_count_or_rerun(monkeypatch):
     assert body == step.log[0]["result"]
 
 
-def test_repeat_does_not_spend_the_call_cap_but_rounds_still_count(monkeypatch):
+def test_repeat_does_not_spend_the_call_cap_but_rounds_still_count():
     runs = {"n": 0}
 
     def echo(arguments):
@@ -479,7 +479,7 @@ def test_api_error_on_the_final_turn_is_a_hold_without_retry(db_path, monkeypatc
     assert line["payment_status"] == "not_paid"
 
 
-def test_repair_turn_sends_no_tools(monkeypatch):
+def test_repair_turn_sends_no_tools():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(text_step("not-json"))
     steps.append(text_step(ANSWER))
@@ -510,7 +510,7 @@ def test_repair_turn_sends_no_tools(monkeypatch):
     )
 
 
-def test_retry_keeps_counting_toward_the_cap(monkeypatch):
+def test_retry_keeps_counting_toward_the_cap():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(2)]
     steps.append(LLMError("http_429", True, "busy"))
     steps.append(_echo(note="after", call_id="after"))
@@ -560,7 +560,7 @@ def test_retry_then_cap_logs_each_call_once(db_path, monkeypatch):
     assert out["logs"][-1]["result"]["forced_final_turn"] is True
 
 
-def test_retry_does_not_reset_the_round_cap(monkeypatch):
+def test_retry_does_not_reset_the_round_cap():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(LLMError("http_429", True, "busy"))
     steps.append(_echo(note="over", call_id="over"))
@@ -590,7 +590,7 @@ def test_retry_does_not_reset_the_round_cap(monkeypatch):
     assert log[-1]["result"] is None
 
 
-def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
+def test_reusing_the_callable_for_a_second_step_starts_fresh():
     steps = [_echo(note=f"a{index}", call_id=f"a{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(text_step(ANSWER))
     steps.append(_echo(note="b1", call_id="b1"))
@@ -628,7 +628,7 @@ def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
     assert log[0]["call_id"] == "b1"
 
 
-def test_a_new_tool_step_starts_fresh(monkeypatch):
+def test_a_new_tool_step_starts_fresh():
     spent = ScriptedToolModel(
         [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
     )
@@ -789,7 +789,7 @@ def test_only_the_audit_prompt_names_the_tools(tmp_path, db_path):
             assert "check_payment_ledger" not in system
 
 
-def test_final_turn_follows_the_flag_not_the_agent_name(monkeypatch):
+def test_final_turn_follows_the_flag_not_the_agent_name():
     messages = [{"role": "user", "content": "Answer with JSON."}]
 
     def drive(agent, flag):

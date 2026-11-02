@@ -629,7 +629,7 @@ def test_tool_call_view_renders(monkeypatch):
     assert "[]" not in detail
 
 
-def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch, tmp_path):
+def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     seen = []
 
@@ -765,7 +765,7 @@ def test_adapter_passes_the_loaded_result_unchanged(monkeypatch, tmp_path):
     assert invoice_view({"state": {"filename": "held.txt", "outcome": "hold"}})["critique_concerns"] == []
 
 
-def test_loaded_run_without_a_record_is_refused(monkeypatch, tmp_path):
+def test_loaded_run_without_a_record_is_refused(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert Path.cwd().resolve() == ROOT.resolve()
     assert "chdir" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
