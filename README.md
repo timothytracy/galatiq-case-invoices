@@ -18,10 +18,10 @@ Live runs the same day matched those scores: samples 20/20 three times, unseen 2
 
 ### Quick start
 
-Python 3.12 (the version CI uses). No API key needed.
+Python 3.12 or newer. CI uses 3.12. No API key needed.
 
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python3 -m pytest
 python3 scripts/eval.py --replay recordings/samples.jsonl
@@ -29,7 +29,7 @@ python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --r
 streamlit run ui/app.py
 ```
 
-That runs the test suite, scores the 20 samples from the recorded Grok run (exits 0 at 20/20), walks one invoice through every agent, and opens the review screen in Replay mode. The databases and logs always go in the repository root (or `INVOICE_DATA_DIR`). Invoice and recording paths are relative to where you run, so the commands above assume the repository root. How each agent works, and why code decides, is in [docs/DESIGN.md](docs/DESIGN.md).
+That runs the test suite, scores the 20 samples from the recorded Grok run (exits 0 at 20/20), walks one invoice through every agent, and opens the review screen in Replay mode. The same `main.py` command with no key and no `--replay` falls back to the recordings on its own. The databases and logs always go in the repository root (or `INVOICE_DATA_DIR`). Invoice and recording paths are relative to where you run, so the commands above assume the repository root. How each agent works, and why code decides, is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ![Review screen from the recorded Grok run](docs/review_screen.png)
 
@@ -111,7 +111,7 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. `invoice_2115.txt` is the example: the deterministic parser rejects the misread total `$3,5OO.00` as `MISSING_FIELD`, and the recorded model read gives the listed alternate `TOTAL_MISMATCH`. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
+Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
 
 ### Reviewer quick path
 
@@ -125,13 +125,15 @@ python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --r
 
 `inventory.db`, `payments.db`, and `logs/` live in the data folder: the repository root, or `INVOICE_DATA_DIR` when it is set. The folder you run from does not change it, so the command line, the review screen, and a release all read the same ledger. `--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`, including the release records stored there, so a held invoice must be rerun before it can be approved. `--reset` does both. `scripts/eval.py --reset` and `--reset-db` rebuild inventory only; eval does not use `payments.db`. They do not change `recordings/`, `data/`, or `logs/`.
 
-A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
+With no `XAI_API_KEY` in the environment or in `.env`, `python3 main.py --invoice_path=...` falls back to the recordings. It prints `No XAI_API_KEY set. Using replay (recorded Grok runs). Set XAI_API_KEY to run live.` and replays `recordings/samples.jsonl` or `recordings/unseen.jsonl`, whichever has that invoice. A file in neither exits 1 and asks for a key. `recordings/ordered.jsonl` is not used. This fallback runs only when you pass no `--replay` or `--record` and `XAI_MODE` is unset. With a key set, that same command calls Grok. `scripts/eval.py` does not fall back.
+
+With a key already set (see `.env.example`; leave the key out of the command):
 
 ```bash
-cp .env.example .env
-# set XAI_API_KEY in .env
-python3 main.py --invoice_path=data/invoices/invoice_1001.txt
+python3 scripts/eval.py
 ```
+
+That scores the 20 samples live. Exit 0 means 20/20. Without a key, that command stops.
 
 The review screen is `streamlit run ui/app.py`. With no key it uses replay, which covers every provided invoice. A new invoice needs `XAI_API_KEY`.
 
