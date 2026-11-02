@@ -17,17 +17,15 @@ Replay of the six committed recordings, with no API key, on 2026-11-01 PT:
 
 Live runs on 2026-11-01 PT matched the keys every time (samples 20/20 x3, unseen 21/21 x3, ordered ok). Measured cost was $0.004923 to $0.006428 per invoice with audit tools and $0.002571 to $0.002821 without (run cost divided by invoice count; details in [docs/METRICS.md](docs/METRICS.md)).
 
-![Invoice review screen in offline mode, sample results](docs/review_screen.png)
+![Replay of the recorded Grok run of the 20 sample invoices](docs/review_screen.png)
 
-The screenshot is the review screen after an offline run of `data/invoices/`: 7 approve, 9 reject, 4 hold.
+The screenshot is a replay of the recorded Grok run of the 20 sample invoices, 2026-11-01 PT.
 
 ### Business impact
 
-[REQUIREMENTS.md](REQUIREMENTS.md) describes a manual process losing $2M a year, with a 30% error rate and five-day delays. The labeled invoices are decided in one run, and a bill the keys mark as bad is not paid.
+The brief's delay is five days ([REQUIREMENTS.md](REQUIREMENTS.md): $2M a year, a 30% error rate, five-day delays). The live runs on 2026-11-01 PT finished the whole CLI command, one invoice after another. With audit tools, the 20 samples took 57, 58, and 62 seconds, which is 57/20 = 2.85 s, 58/20 = 2.9 s, and 62/20 = 3.1 s per invoice. The 21 unseen invoices took 62, 63, and 82 seconds, which is 62/21 = 2.952381 s, 63/21 = 3 s, and 82/21 = 3.904762 s per invoice (half up to six decimal places). With tools off, samples took 48 s (48/20 = 2.4 s per invoice) and unseen took 54 s (54/21 = 2.571429 s per invoice). On those same runs, cost was $0.004923 to $0.006428 per invoice with audit tools and $0.002571 to $0.002821 without (run cost divided by invoice count).
 
-Of the 20 sample invoices, 16 are decided in the run (7 approve, 9 reject) and 4 are held for a person. Of the 21 unseen invoices, 15 are decided in the run (8 approve, 7 reject) and 6 are held. Together that is 31 decided automatically and 10 held, out of 41. Every reject and every hold in both answer keys is unpaid. The 15 approves are the invoices the keys mark as passing. Warning-only notes on an approve do not block payment.
-
-The five-day delay in the brief is the human chain: retype the bill, check inventory, chase a VP by email, then pay. Approves and rejects finish in the run. Holds are the queue a person still works, the 10 of 41 above. This page does not turn the brief's $2M into a savings figure. The brief does not give an invoice volume, so a dollar of loss avoided is not computed here.
+Of the 41 labeled invoices, 31 are decided automatically and 10 are held. No invoice the answer keys mark as bad is paid.
 
 ## Quick start
 

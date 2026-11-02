@@ -40,19 +40,19 @@ The rates in that file are the published rates for `grok-4.20-0309-non-reasoning
 
 ## Live runs
 
-These runs were on 2026-11-01 PT. The request code is identical to main. Each cost is the captured usage priced at the rates in [Cost method](#cost-method), the same rates `recording.py` uses. A replay of a saved file does not move. These are separate live calls.
+These runs were on 2026-11-01 PT, commit `400d7b9`, request building identical to main. Each cost is the captured usage priced at the rates in [Cost method](#cost-method), the same rates `recording.py` uses. Wall time is the whole CLI command, end minus start, with the invoices run one after another. A replay of a saved file does not move. These are separate live calls.
 
-| Set | Tools | Score | Cost USD |
-|---|---|---|---|
-| samples | on | 20/20 | 0.102653 |
-| samples | on | 20/20 | 0.098994 |
-| samples | on | 20/20 | 0.098465 |
-| unseen | on | 21/21 | 0.134998 |
-| unseen | on | 21/21 | 0.119826 |
-| unseen | on | 21/21 | 0.118861 |
-| ordered | on | 11 steps ok, ledger matches | 0.047564 |
-| samples | off (`XAI_TOOLS=0`) | 20/20 | 0.051425 |
-| unseen | off (`XAI_TOOLS=0`) | 21/21 | 0.059249 |
+| Set | Tools | Score | Cost USD | Wall s |
+|---|---|---|---|---|
+| samples | on | 20/20 | 0.102653 | 62 |
+| samples | on | 20/20 | 0.098994 | 58 |
+| samples | on | 20/20 | 0.098465 | 57 |
+| unseen | on | 21/21 | 0.134998 | 82 |
+| unseen | on | 21/21 | 0.119826 | 63 |
+| unseen | on | 21/21 | 0.118861 | 62 |
+| ordered | on | 11 steps ok, ledger matches | 0.047564 | 28 |
+| samples | off (`XAI_TOOLS=0`) | 20/20 | 0.051425 | 48 |
+| unseen | off (`XAI_TOOLS=0`) | 21/21 | 0.059249 | 54 |
 
 One unseen tools-on run hit the tool-call cap on `invoice_2106`. The forced final turn still gave the correct outcome.
 
@@ -86,3 +86,28 @@ Replay costs use the same division on the usage stored in the committed recordin
 - Unseen, tools off: $0.058625 / 21 = $0.002792
 - Ordered, tools on: $0.047920 / 11 = $0.004356 per step
 - Ordered, tools off: $0.026695 / 11 = $0.002427 per step
+
+Per-invoice time is wall seconds divided by the invoice count. The ordered row is 11 steps, so that quotient is per step. Each non-terminating quotient is half up to six decimal places.
+
+Live, tools on, samples (20 invoices):
+
+- 62 / 20 = 3.1 s
+- 58 / 20 = 2.9 s
+- 57 / 20 = 2.85 s
+
+That range is 2.85 s to 3.1 s per invoice.
+
+Live, tools on, unseen (21 invoices):
+
+- 82 / 21 = 3.904762 s
+- 63 / 21 = 3 s
+- 62 / 21 = 2.952381 s
+
+That range is 2.952381 s to 3.904762 s per invoice.
+
+Live, tools off:
+
+- Samples: 48 / 20 = 2.4 s per invoice
+- Unseen: 54 / 21 = 2.571429 s per invoice
+
+Ordered, tools on: 28 / 11 = 2.545455 s per step.
