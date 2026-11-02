@@ -1,5 +1,11 @@
 """Score sample invoices against data/answer_key.json. Exit 0 only on a full match.
 
+A match is the outcome plus the primary reason code, or a listed alternate
+code from the answer key. The unseen scorer uses that same rule.
+invoice_2115.txt is the example: the deterministic parser rejects the misread
+total '$3,5OO.00' as MISSING_FIELD, and the recorded model read gives the
+listed alternate TOTAL_MISMATCH.
+
 --ordered runs data/ordered_scenario.json on one shared ledger. The scored
 path does not pass a ledger, so each invoice still gets a fresh one.
 --verbose also prints each stage's JSON record. Without it, stdout is the
@@ -84,10 +90,12 @@ def _accepted_codes(expected: dict) -> set:
 def grade(result: dict, expected: dict) -> dict:
     """Compare one graph result to one answer-key row.
 
-    Outcome and reason code decide ok. also_accepted_reasons, when present, is
-    a list of reason texts in the same form as primary_reason. A predicted code
-    matches the primary or any of those. An unknown name in that list is not a
-    code, and it is printed rather than dropped quietly. Warnings are informational.
+    The unseen scorer checks the outcome plus the primary reason code, or a
+    listed alternate code (also_accepted_reasons). invoice_2115.txt is the
+    example: the deterministic parser rejects the misread total '$3,5OO.00' as
+    MISSING_FIELD, and the recorded model read gives the listed alternate
+    TOTAL_MISMATCH. An unknown name in that list is not a code, and it is
+    printed rather than dropped quietly. Warnings are informational.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()

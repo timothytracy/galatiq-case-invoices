@@ -1,20 +1,20 @@
-"""Process-wide payment keys must not leak from one test into the next."""
+"""Payment keys with no ledger must not leak from one test into the next."""
 
 from pathlib import Path
 
 import pytest
 
 from db import ensure_inventory_db
-from pipeline.payment import _USED_KEYS
+from pipeline.payment import clear_keys_without_ledger
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
 def clear_used_payment_keys():
-    _USED_KEYS.clear()
+    clear_keys_without_ledger()
     yield
-    _USED_KEYS.clear()
+    clear_keys_without_ledger()
 
 
 @pytest.fixture(autouse=True)

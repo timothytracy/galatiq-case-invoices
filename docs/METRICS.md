@@ -10,6 +10,8 @@ Every replay number is from a committed recording, run on 2026-11-01 PT, with no
 
 The ordered command prints one line per step, then the ledger line. All 11 steps were ok. The ledger line was `ledger 3 rows: invoice_1001.txt, invoice_1011.pdf, invoice_1004.json`, and it was ok.
 
+The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. `invoice_2115.txt` is the example: the deterministic parser rejects the misread total `$3,5OO.00` as `MISSING_FIELD`, and the recorded model read gives the listed alternate `TOTAL_MISMATCH`.
+
 Warning matches do not change the exit code. Samples were 19/19 and unseen were 9/9. The ordered command does not print warnings.
 
 No replay call was blocked by the tool cap. No replay result had `tool_cap_hit` or `forced_final_turn`.

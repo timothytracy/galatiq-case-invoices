@@ -18,7 +18,6 @@ from llm_client import (
     call_with_retries,
     tool_request,
 )
-from pipeline.payment import _USED_KEYS
 from pipeline.tools import example_registry
 from recording import estimate_cost, request_fingerprint
 from scripts.eval import main as eval_main
@@ -427,7 +426,6 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     _freeze_today(monkeypatch, wording, date(2027, 12, 12))
     _freeze_today(monkeypatch, llm_client, date(2027, 12, 12))
-    _USED_KEYS.clear()
     replayed = eval_main(
         [
             "--invoices",
@@ -492,7 +490,6 @@ def test_record_prompt_path_is_repo_relative_and_replays_from_another_directory(
     assert live_result["outcome"] == "approve"
     assert source_path(live_seen) == str(invoice)
 
-    _USED_KEYS.clear()
     recording = tmp_path / "path.jsonl"
     record_seen = install_openai(monkeypatch, list(replies))
     recorder = GrokClient(api_key="test-key", mode="record", recording=recording, as_of=date(2026, 11, 1))
@@ -508,7 +505,6 @@ def test_record_prompt_path_is_repo_relative_and_replays_from_another_directory(
     assert source_path(record_seen) == "data/invoices/invoice_1001.txt"
     assert str(invoice) not in source_path(record_seen)
 
-    _USED_KEYS.clear()
     install_openai_raise(monkeypatch)
     monkeypatch.chdir(tmp_path)
     player = GrokClient(mode="replay", recording=recording)
@@ -670,7 +666,6 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
 
     install_openai_raise(monkeypatch)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    _USED_KEYS.clear()
     replayed = eval_main(["--ordered", str(scenario), "--replay", str(recording)])
     replayed_out = capsys.readouterr().out
     assert replayed == 0, replayed_out
