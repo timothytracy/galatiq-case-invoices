@@ -1,6 +1,6 @@
 # Answer key: original sample invoices
 
-This is the expected outcome for each of the 20 files in `data/invoices/`, under [docs/DECISION_POLICY.md](DECISION_POLICY.md). That includes its precedence rule: **Reject over Hold over Approve**. When a Reject condition applies, any Hold findings or fraud signals are still recorded in Warnings and named in the reason. Eval scores the machine-readable copy, `data/answer_key.json`.
+This is the expected outcome for each of the 20 files in `data/invoices/`, under [docs/DESIGN.md](DESIGN.md). That includes its precedence rule: **Reject over Hold over Approve**. When a Reject condition applies, any Hold findings or fraud signals are still recorded in Warnings and named in the reason. Eval scores the machine-readable copy, `data/answer_key.json`.
 
 How each file was decided:
 - Each file was read on its own. PDF and text twins each get their own row.

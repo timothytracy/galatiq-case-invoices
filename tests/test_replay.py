@@ -306,7 +306,6 @@ def test_replay_miss_is_a_system_error_hold_and_is_not_paid(tmp_path, db_path, m
 def test_tool_loop_forced_final_and_repair_replay_without_a_network_client(tmp_path, monkeypatch):
     from llm_client import GrokClient
 
-    monkeypatch.setenv("XAI_TOOLS", "1")
     path = tmp_path / "tools.jsonl"
 
     def call(call_id, note):
@@ -679,73 +678,50 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert "MISS" not in replayed_out
 
 
-_TOOLS_OFF_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl"}
-_TOOLS_ON_RECORDINGS = {
-    "samples_tools.jsonl",
-    "unseen_tools.jsonl",
-    "ordered_tools.jsonl",
-}
+_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl"}
+_RECORDING = re.compile(r"recordings/([A-Za-z0-9_.-]+\.jsonl)")
 
 
-def _eval_commands(text: str) -> list[tuple[str, str | None, str]]:
-    """Each python3 scripts/eval.py command, its XAI_TOOLS value, and the recording."""
+def _eval_commands(text: str) -> list[tuple[str, str]]:
+    """Each python3 scripts/eval.py command and the recording it names."""
 
     found = []
     for match in re.finditer(r"python3\s+scripts/eval\.py\b[^`\n]*?(?=&&|\n|`|$)", text):
         command = re.sub(r"\s+", " ", match.group(0).strip())
-        recording = re.search(r"recordings/([A-Za-z0-9_.-]+\.jsonl)", command)
-        if recording is None:
-            continue
-        prefix = text[max(0, match.start() - 24) : match.start()]
-        flag = re.search(r"XAI_TOOLS=(\S+)\s+$", prefix)
-        found.append((command, None if flag is None else flag.group(1), recording.group(1)))
+        recording = _RECORDING.search(command)
+        if recording is not None:
+            found.append((command, recording.group(1)))
     return found
 
 
-def _ci_commands(text: str) -> list[tuple[str, str | None, str]]:
-    lines = text.splitlines()
+def _ci_commands(text: str) -> list[tuple[str, str]]:
     found = []
-    for index, line in enumerate(lines):
+    for line in text.splitlines():
         if "python3 scripts/eval.py" not in line:
             continue
         command = re.sub(r"\s+", " ", line.split("run:", 1)[-1].strip())
-        recording = re.search(r"recordings/([A-Za-z0-9_.-]+\.jsonl)", command)
-        if recording is None:
-            continue
-        tools = None
-        for follow in lines[index + 1 : index + 6]:
-            if follow.strip().startswith("- name:"):
-                break
-            flag = re.search(r'XAI_TOOLS:\s*"([^"]+)"', follow)
-            if flag:
-                tools = flag.group(1)
-                break
-        found.append((command, tools, recording.group(1)))
+        recording = _RECORDING.search(command)
+        if recording is not None:
+            found.append((command, recording.group(1)))
     return found
 
 
 def test_documented_replay_commands_match_the_recording():
-    docs = [ROOT / "README.md", ROOT / "SOLUTION.md", ROOT / "recordings" / "README.md"]
+    docs = [ROOT / "README.md", ROOT / "recordings" / "README.md"]
     docs.extend(sorted((ROOT / "docs").glob("*.md")))
     commands = []
     for path in docs:
         commands.extend(_eval_commands(path.read_text(encoding="utf-8")))
     ci = _ci_commands((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    assert len(ci) == 6
-    for command, tools, name in commands + ci:
-        if name in _TOOLS_OFF_RECORDINGS:
-            assert tools == "0", command
-        elif name in _TOOLS_ON_RECORDINGS:
-            assert tools is None, command
-        else:
-            raise AssertionError(name)
-    replay = [(command, tools) for command, tools, _name in ci]
+    assert len(ci) == 3
+    for command, name in commands + ci:
+        assert name in _RECORDINGS, command
+        assert (ROOT / "recordings" / name).is_file(), command
     readme = _eval_commands((ROOT / "README.md").read_text(encoding="utf-8"))
-    readme_replay = [(command, tools) for command, tools, _name in readme if "--replay" in command]
+    readme_replay = [command for command, _name in readme if "--replay" in command]
     start = 0
-    for item in replay:
-        assert item in readme_replay[start:], item
-        start = readme_replay.index(item, start) + 1
+    for command, _name in ci:
+        assert command in readme_replay[start:], command
+        start = readme_replay.index(command, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
-    assert "2026-11-01 PT" in recorded
-    assert "These six were recorded on 2026-11-01 PT." in recorded
+    assert "These three were recorded on 2026-11-01 PT." in recorded

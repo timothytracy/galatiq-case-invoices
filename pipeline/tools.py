@@ -3,7 +3,7 @@
 A ToolInputError (unknown tool, bad arguments, unknown item or code) becomes
 {"error": "..."} for the model. Any other exception leaves call() and the
 loop turns it into a non-retryable LLMError. echo_note is for tests and
-the probe. Audit gets audit_registry when XAI_TOOLS is on. Critique does not.
+the probe. Audit always gets audit_registry. Critique does not.
 """
 
 from decimal import Decimal
@@ -21,7 +21,7 @@ from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
 from decision.wording import ACTION, RULE_TEXT
 from ledger import paid_rows, split_window, vendor_key
-from llm_client import parse_tool_arguments
+from tool_loop import parse_tool_arguments
 
 
 class Tool:

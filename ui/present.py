@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from decision.outcome import PAYABLE_HOLD_CODES, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
-from llm_client import TOOL_CALL_CAP, TOOL_ROUND_CAP
+from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
 from main import payment_status
 
 OUTCOMES = ("approve", "reject", "hold")

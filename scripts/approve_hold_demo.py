@@ -71,7 +71,7 @@ def _offline(path: Path, ledger: Path):
     database = Path("inventory.db")
     if not database.is_file():
         create_database(database)
-    client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples_tools.jsonl"), None)
+    client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples.jsonl"), None)
     with redirect_stdout(io.StringIO()):
         return run_invoice(path, database, client, as_of=as_of, ledger_path=ledger)
 

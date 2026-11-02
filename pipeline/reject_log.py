@@ -1,7 +1,7 @@
 """Reject log. The other exit. Nothing here is paid."""
 
 from models import PaymentRecord, PipelineState
-from pipeline.decisions import _decision_from_validation, _failure_decision, _tighten
+from pipeline.decisions import decision_from_validation, failure_decision, tighten
 from pipeline.stage_log import stage_log
 from decision.outcome import finding_codes
 from decision.wording import ACTION, explain
@@ -22,11 +22,11 @@ def reject_log(state: PipelineState, ledger_path=None) -> dict:
     elif state.outcome in {"reject", "hold"}:
         outcome = state.outcome
     if state.agent_error:
-        decision = _failure_decision(state, reason)
+        decision = failure_decision(state, reason)
     elif state.decision is not None:
         decision = state.decision
         if decision.decision != outcome:
-            decision = _tighten(decision, outcome, reason, [reason])
+            decision = tighten(decision, outcome, reason, [reason])
         else:
             decision = decision.model_copy(
                 update={
@@ -34,7 +34,7 @@ def reject_log(state: PipelineState, ledger_path=None) -> dict:
                 }
             )
     else:
-        _, decision = _decision_from_validation(state, outcome)
+        _, decision = decision_from_validation(state, outcome)
         decision = decision.model_copy(
             update={"reasoning": decision.reasoning.model_copy(update={"conclusion": reason})}
         )

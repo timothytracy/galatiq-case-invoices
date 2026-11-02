@@ -470,7 +470,7 @@ def test_eval_replay_leaves_the_repo_logs_alone(monkeypatch):
     logs = ROOT / "logs"
     before = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     from scripts.eval import main as eval_main
-    assert eval_main(["--replay", str(ROOT / "recordings" / "samples_tools.jsonl")]) == 0
+    assert eval_main(["--replay", str(ROOT / "recordings" / "samples.jsonl")]) == 0
     after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     assert after == before
 

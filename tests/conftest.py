@@ -13,16 +13,19 @@ def clear_used_payment_keys():
 
 
 @pytest.fixture(autouse=True)
-def tools_default_on(monkeypatch):
-    """Drop XAI_TOOLS so a test sees the process default, which is on.
+def no_recording_env(monkeypatch):
+    """Record and replay stay off, so a developer shell cannot redirect a test."""
 
-    A test that needs the rollback sets XAI_TOOLS=0. Record and replay stay
-    off too, so a developer shell cannot redirect a test.
-    """
-
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
     monkeypatch.delenv("XAI_MODE", raising=False)
     monkeypatch.delenv("XAI_RECORDING", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_dotenv(monkeypatch):
+    """A developer .env must not put a real key back into a test."""
+
+    monkeypatch.setattr("llm_client.load_dotenv", lambda path=None: None)
+    monkeypatch.setattr("ui.runner.load_dotenv", lambda path=None: None)
 
 
 @pytest.fixture(autouse=True)

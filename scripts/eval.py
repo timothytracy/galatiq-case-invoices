@@ -2,15 +2,18 @@
 
 --ordered runs data/ordered_scenario.json on one shared ledger. The scored
 path does not pass a ledger, so each invoice still gets a fresh one.
+--verbose also prints each stage's JSON record. Without it, stdout is the
+score lines only.
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +27,6 @@ from llm_client import (  # noqa: E402
     ModeError,
     begin_client,
     resolve_run_mode,
-    tools_enabled,
 )
 from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
@@ -186,10 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         metavar="YYYY-MM-DD",
         help="Date the agents are told is today. Record stores it. Replay reads the file",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Also print each stage's JSON record and the mock payment line",
+    )
     args = parser.parse_args(argv)
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
-        tools_enabled()
     except ModeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -212,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with _release_dir():
         if args.ordered:
-            return _ordered_main(Path(args.ordered), db_path, client, mode, as_of)
+            return _ordered_main(Path(args.ordered), db_path, client, mode, as_of, args.verbose)
 
         key = load_answer_key(Path(args.answer_key))
         files = sorted(
@@ -224,10 +230,11 @@ def main(argv: list[str] | None = None) -> int:
         for path in files:
             # One client for the run, so record mode writes a single file.
             # Live passes no as_of: the graph still uses the wall clock.
-            if mode == "live" and as_of is None:
-                result = run_invoice(path, db_path, client)
-            else:
-                result = run_invoice(path, db_path, client, as_of=as_of)
+            with stage_output(args.verbose):
+                if mode == "live" and as_of is None:
+                    result = run_invoice(path, db_path, client)
+                else:
+                    result = run_invoice(path, db_path, client, as_of=as_of)
             print_bad_reasoning(path.name, result.get("attempts") or [])
             calls = tool_calls_of(result)
             tool_calls += len(calls)
@@ -253,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"{'ok' if ok else 'MISS'}",
                 flush=True,
             )
+            if not ok and result.get("agent_error"):
+                print(f"{path.name}\terror={result['agent_error']}", flush=True)
         print(format_tool_summary(tool_calls, repeats), flush=True)
         print(f"score {correct}/{len(files)}", flush=True)
         if mode != "live":
@@ -260,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if correct == len(files) and correct == len(key) else 1
 
 
-@contextmanager
+@contextlib.contextmanager
 def _release_dir():
     """Replay records stay out of logs/ unless INVOICE_RELEASE_DIR is already set."""
 
@@ -282,7 +291,17 @@ def format_tool_summary(calls: int, repeats: int) -> str:
     return f"tools calls={calls} repeats={repeats}"
 
 
-def _ordered_main(scenario_path: Path, db_path: Path, client, mode: str, as_of) -> int:
+def stage_output(verbose: bool):
+    """Pass stage records through, or swallow them so the score lines stand out."""
+
+    if verbose:
+        return contextlib.nullcontext()
+    return contextlib.redirect_stdout(io.StringIO())
+
+
+def _ordered_main(
+    scenario_path: Path, db_path: Path, client, mode: str, as_of, verbose: bool = False
+) -> int:
     """One temporary ledger for every file in the scenario. Not payments.db.
 
     One client covers the whole scenario, so --record appends every request
@@ -292,13 +311,14 @@ def _ordered_main(scenario_path: Path, db_path: Path, client, mode: str, as_of) 
     handle, name = tempfile.mkstemp(prefix="payments-ordered-", suffix=".db")
     os.close(handle)
     try:
-        report = run_scenario(
-            scenario_path,
-            db_path,
-            name,
-            lambda _path: client,
-            as_of=as_of,
-        )
+        with stage_output(verbose):
+            report = run_scenario(
+                scenario_path,
+                db_path,
+                name,
+                lambda _path: client,
+                as_of=as_of,
+            )
     finally:
         Path(name).unlink(missing_ok=True)
     tool_calls = 0
