@@ -20,6 +20,10 @@ Live runs the same day matched those scores: samples 20/20 three times, unseen 2
 
 The review screen shows ten sample invoices from that recorded run.
 
+![Demo of the review screen replaying the recorded Grok run](docs/demo.gif)
+
+Demo: the review screen replays the recorded Grok run with no API key, shows approve, reject and hold outcomes with their reasons and audit trail, pays held invoice 1012 from the hold queue, and refuses a second payment ([full video](docs/demo.mp4)).
+
 ### Business impact
 
 The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
