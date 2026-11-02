@@ -1,11 +1,11 @@
 """Pay a held invoice after a reviewer approves it.
 
-The review screen calls approve_and_pay. It does not change the pipeline
-outcome. A reject, a reject-class finding, or any hold that is not a review
-hold is never paid. Currency, amount, and the payments ledger are checked
-again, then the existing one-time authorization and payment step run.
+approve_and_pay is the release function. The review screen does not call it
+yet. The pipeline outcome is left as recorded. A reject, a reject-class
+finding, or any hold that is not a review hold is never paid. The invoice is
+validated again before the existing authorization and payment step run.
 
-Demo, with a temporary ledger and no model call:
+Demo, on a temporary ledger and log, with no model call:
 
     python3 -m pipeline.approve_hold --demo
 """
@@ -13,15 +13,16 @@ Demo, with a temporary ledger and no model call:
 import argparse
 import json
 import os
-import sqlite3
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from pydantic import ValidationError
 
+from db import create_database
 from models import (
     ApprovalDecision,
     ApprovalReasoning,
@@ -33,15 +34,21 @@ from models import (
 )
 from pipeline.audit import issue_authorization
 from pipeline.payment import payment
-from decision.invoice_fields import different, non_usd_message, show_money
-from decision.outcome import review_release_block
+from pipeline.validation import validate
+from decision.invoice_fields import non_usd_message, show_money
+from decision.outcome import (
+    HOLD_CODES,
+    PAYABLE_HOLD_CODES,
+    REJECT_CODES,
+    review_release_block,
+)
 from decision.policy import POLICY
-from ledger import arrival_findings, paid_rows, split_window
 
 DEFAULT_LOG = Path("output") / "reviews" / "approve_pay.jsonl"
+_OUTCOMES = {"approve", "reject", "hold"}
+_CENT = Decimal("0.01")
+_INVISIBLE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u180e]")
 
-# Stable codes for a release that does not pay. Ledger and currency reuse
-# the pipeline's codes: NON_USD, DUPLICATE_INVOICE, SPLIT_INVOICE, SYSTEM_ERROR.
 MISSING_REVIEWER = "MISSING_REVIEWER"
 MISSING_NOTE = "MISSING_NOTE"
 NOT_PAYABLE = "NOT_PAYABLE"
@@ -61,15 +68,16 @@ def approve_and_pay(
 ) -> dict:
     """Approve one held invoice for payment.
 
-    reviewer and note must be non-empty. amount must equal the extracted
-    total. demo=True uses a temporary ledger and deletes it before returning.
-    Otherwise ledger_path defaults to payments.db in the working directory.
-    The decision is appended to log_path (default output/reviews/approve_pay.jsonl).
-    The caller's result is not modified, and its outcome is not rewritten.
+    reviewer and note need at least two letters after whitespace and
+    zero-width characters are removed. amount must match the extracted total
+    to the cent. demo=True uses a temporary ledger and a temporary log, and
+    deletes both before returning. Otherwise ledger_path defaults to
+    payments.db and log_path to output/reviews/approve_pay.jsonl.
+    The caller's result is not modified.
     """
 
-    ledger, temporary = _ledger(ledger_path, demo)
-    log = Path(log_path) if log_path is not None else DEFAULT_LOG
+    ledger, temp_ledger = _ledger(ledger_path, demo)
+    log, temp_log = _log(log_path, demo)
     try:
         return _approve(
             result,
@@ -81,47 +89,49 @@ def approve_and_pay(
             now=now,
         )
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        if temp_ledger is not None:
+            temp_ledger.unlink(missing_ok=True)
+        if temp_log is not None:
+            temp_log.unlink(missing_ok=True)
 
 
 def _approve(result, *, reviewer, note, amount, ledger_path, log_path, now) -> dict:
-    name = (reviewer or "").strip()
-    text = (note or "").strip()
+    name = _plain(reviewer)
+    text = _plain(note)
     when = _timestamp(now)
+    concerns: list[str] = []
     state, load_error = _state_from(result)
     invoice_name = _invoice_name(state)
-    outcome = None if state is None else state.outcome
-    findings = [] if state is None else [_public_finding(item) for item in state.findings]
+    outcome = _stated_outcome(result) if state is None else state.outcome
+    codes = [] if state is None else [item.code for item in state.findings]
+    if state is not None:
+        concerns = list(state.critique_concerns)
 
-    def finish(status: str, code: str | None, message: str) -> dict:
-        record = {
-            "reviewer": name,
-            "note": text,
-            "time": when,
-            "invoice": invoice_name,
-            "pipeline_outcome": outcome,
-            "pipeline_findings": findings,
-            "result": status,
-            "reason_code": code,
-            "reason": message,
-        }
+    def finish(decision: str, code: str | None, message: str, *, status: str | None = None) -> dict:
+        kept = decision if status is None else status
+        record = _entry(
+            when, invoice_name, state, outcome, codes, name, text, concerns, kept, code, message
+        )
         _append(log_path, record)
+        paid = kept == "paid"
         return {
-            "result": status,
+            "result": "paid" if paid else "held",
             "reason_code": code,
             "reason": message,
             "pipeline_outcome": outcome,
-            "pipeline_findings": findings,
+            "pipeline_findings": [] if state is None else [_public_finding(item) for item in state.findings],
+            "critique_concerns": concerns,
             "invoice": invoice_name,
-            "payment_status": "paid" if status == "paid" else "not_paid",
+            "payment_status": "paid" if paid else "not_paid",
             "record": record,
         }
 
-    if not name:
+    if not _two_letters(name):
         return finish("held", MISSING_REVIEWER, "A reviewer name is required.")
-    if not text:
+    if not _two_letters(text):
         return finish("held", MISSING_NOTE, "A note is required.")
+    if outcome not in _OUTCOMES:
+        return finish("held", NOT_PAYABLE, "Only a held invoice can be approved for payment.")
     if load_error is not None or state is None or state.invoice is None:
         return finish("held", NOT_PAYABLE, load_error or "The invoice result could not be read.")
 
@@ -129,49 +139,63 @@ def _approve(result, *, reviewer, note, amount, ledger_path, log_path, now) -> d
     if blocked is not None:
         return finish("held", NOT_PAYABLE, blocked)
 
+    mismatch = _source_mismatch(state)
+    if mismatch is not None:
+        return finish("held", NOT_PAYABLE, mismatch)
+
     invoice = state.invoice
+    if invoice.total is None or invoice.total <= 0:
+        return finish("held", NOT_PAYABLE, "The total must be greater than zero.")
     if invoice.currency not in POLICY.allowed_currencies:
         return finish("held", "NON_USD", non_usd_message(invoice.currency))
 
     paid_amount = _money(amount)
-    if invoice.total is None or paid_amount is None or different(paid_amount, invoice.total):
+    if paid_amount is None or _cents(paid_amount) != _cents(invoice.total):
         shown = "missing" if paid_amount is None else show_money(paid_amount)
-        extracted = "missing" if invoice.total is None else show_money(invoice.total)
         return finish(
             "held",
             AMOUNT_MISMATCH,
-            f"Amount {shown} does not equal the extracted total {extracted}.",
+            f"Amount {shown} does not equal the extracted total {show_money(invoice.total)}.",
         )
 
-    try:
-        rows = paid_rows(ledger_path)
-        prior = arrival_findings(ledger_path, invoice, state.raw_text)
-    except sqlite3.Error as exc:
-        return finish("held", "SYSTEM_ERROR", f"payments ledger unreadable: {exc}")
+    checked = validate(state, _stock_db(), ledger_path=ledger_path)
+    blocked = _validation_block(checked.get("findings") or [])
+    if blocked is not None:
+        return finish("held", blocked[0], blocked[1])
 
-    duplicate = next((item for item in prior if item.code == "DUPLICATE_INVOICE"), None)
-    if duplicate is not None:
-        return finish("held", "DUPLICATE_INVOICE", duplicate.message)
-    _window, over = split_window(invoice, rows)
-    if over:
-        split = next((item for item in prior if item.code == "SPLIT_INVOICE"), None)
-        message = (
-            split.message
-            if split is not None
-            else "This invoice plus payments in the split window is over the approval threshold."
-        )
-        return finish("held", "SPLIT_INVOICE", message)
-
-    # payment() still checks this sign-off against the invoice. The copy
-    # exists so that step can run; the logged pipeline outcome stays hold.
+    # The attempt line is on disk before payment() runs.
+    _append(log_path, _entry(
+        when, invoice_name, state, outcome, codes, name, text, concerns,
+        "attempt", None, "Paying after the guards passed.",
+    ))
     authorization = issue_authorization(state)
     if authorization is None:
         return finish("held", NOT_PAYABLE, "The invoice has no vendor or total to pay.")
+    # Re-validation already refused rejects. This copy only lets payment()
+    # run its authorization and ledger checks.
     paid = payment(_for_payment(state, authorization), ledger_path)
     if paid["payment"].status == "paid":
         return finish("paid", None, "Reviewer approved this hold for payment.")
     code = paid.get("reason_code") or "PAYMENT_REFUSED"
     return finish("held", code, paid["payment"].detail)
+
+
+def _validation_block(findings) -> tuple[str, str] | None:
+    """A code from a fresh validate() that means do not pay."""
+
+    for finding in findings:
+        if finding.code == "SYSTEM_ERROR":
+            return "SYSTEM_ERROR", finding.message
+    for code in ("DUPLICATE_INVOICE", "SPLIT_INVOICE"):
+        for finding in findings:
+            if finding.code == code:
+                return code, finding.message
+    for finding in findings:
+        if finding.code in REJECT_CODES:
+            return NOT_PAYABLE, f"{finding.code} is a reject-class finding and is never paid."
+        if finding.code in HOLD_CODES and finding.code not in PAYABLE_HOLD_CODES:
+            return NOT_PAYABLE, f"{finding.code} is not a review hold and is never paid."
+    return None
 
 
 def _for_payment(state: PipelineState, authorization) -> PipelineState:
@@ -200,6 +224,35 @@ def _for_payment(state: PipelineState, authorization) -> PipelineState:
     )
 
 
+def _entry(when, invoice_name, state, outcome, codes, name, text, concerns, decision, code, message) -> dict:
+    invoice = None if state is None else state.invoice
+    return {
+        "time": when,
+        "invoice": invoice_name,
+        "invoice_number": None if invoice is None else invoice.invoice_number,
+        "vendor": None if invoice is None else invoice.vendor,
+        "amount": None if invoice is None or invoice.total is None else show_money(invoice.total),
+        "currency": None if invoice is None else invoice.currency,
+        "pipeline_outcome": outcome,
+        "pipeline_codes": list(codes),
+        "reviewer": name,
+        "note": text,
+        "critique_concerns": list(concerns),
+        "decision": decision,
+        "reason_code": code,
+        "reason": message,
+    }
+
+
+def _stated_outcome(result):
+    if isinstance(result, PipelineState):
+        return result.outcome
+    if isinstance(result, dict):
+        body = result["state"] if "outcome" not in result and isinstance(result.get("state"), dict) else result
+        return body.get("outcome")
+    return None
+
+
 def _state_from(result) -> tuple[PipelineState | None, str | None]:
     if isinstance(result, PipelineState):
         return result, None
@@ -207,9 +260,13 @@ def _state_from(result) -> tuple[PipelineState | None, str | None]:
         return None, "The invoice result could not be read."
     if "outcome" not in result and isinstance(result.get("state"), dict):
         result = result["state"]
+    outcome = result.get("outcome")
+    if outcome is not None and outcome not in _OUTCOMES:
+        return None, "Only a held invoice can be approved for payment."
     try:
         invoice = _invoice_from(result.get("invoice"))
         findings = [_finding_from(item) for item in result.get("findings") or []]
+        concerns = [str(item) for item in result.get("critique_concerns") or []]
     except (TypeError, ValidationError, ValueError):
         return None, "The invoice result could not be read."
     filename = result.get("filename") or (invoice.source.filename if invoice is not None else "")
@@ -223,11 +280,39 @@ def _state_from(result) -> tuple[PipelineState | None, str | None]:
             raw_text=raw,
             invoice=invoice,
             findings=findings,
-            outcome=result.get("outcome"),
+            outcome=outcome,
             reason_code=result.get("reason_code"),
+            critique_concerns=concerns,
         ),
         None,
     )
+
+
+def _source_mismatch(state: PipelineState) -> str | None:
+    """The carried text must match the file when that file is present."""
+
+    path = None
+    if state.invoice is not None and state.invoice.source.path:
+        path = Path(state.invoice.source.path)
+    elif state.invoice_path:
+        path = Path(state.invoice_path)
+    if path is None or not path.is_file():
+        return None
+    try:
+        on_disk = _file_text(path)
+    except (OSError, ValueError):
+        return "The source file could not be read."
+    carried = state.raw_text or ""
+    if carried != on_disk:
+        return "The invoice text does not match the source file."
+    return None
+
+
+def _file_text(path: Path) -> str:
+    if path.suffix.lower() == ".pdf":
+        from parsers.pdf_invoice import pdf_text
+        return pdf_text(path)
+    return path.read_text(encoding="utf-8")
 
 
 def _invoice_from(value) -> ExtractedInvoice | None:
@@ -265,6 +350,14 @@ def _invoice_name(state: PipelineState | None) -> str:
     return "unknown"
 
 
+def _plain(value) -> str:
+    return _INVISIBLE.sub("", value or "").strip()
+
+
+def _two_letters(value: str) -> bool:
+    return sum(character.isalpha() for character in value) >= 2
+
+
 def _money(value) -> Decimal | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -280,6 +373,10 @@ def _money(value) -> Decimal | None:
     return amount
 
 
+def _cents(amount: Decimal) -> Decimal:
+    return amount.quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
 def _timestamp(now) -> str:
     moment = now() if now is not None else datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -287,21 +384,45 @@ def _timestamp(now) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _temp(prefix: str, suffix: str) -> Path:
+    handle, name = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(handle)
+    return Path(name)
+
+
 def _ledger(ledger_path, demo: bool) -> tuple[Path, Path | None]:
     if demo:
-        handle, name = tempfile.mkstemp(prefix="payments-", suffix=".db")
-        os.close(handle)
-        path = Path(name)
+        path = _temp("payments-", ".db")
         return path, path
     if ledger_path is None:
         return Path("payments.db"), None
     return Path(ledger_path), None
 
 
+def _log(log_path, demo: bool) -> tuple[Path, Path | None]:
+    if demo and log_path is None:
+        path = _temp("approve-", ".jsonl")
+        return path, path
+    if log_path is None:
+        return DEFAULT_LOG, None
+    return Path(log_path), None
+
+
+def _stock_db() -> Path:
+    root = Path(__file__).resolve().parents[1] / "inventory.db"
+    if root.is_file():
+        return root
+    local = Path("inventory.db")
+    if local.is_file():
+        return local
+    return create_database(root)
+
+
 def _append(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
+        handle.flush()
 
 
 def _demo_state(filename: str, number: str, outcome: str, code: str, severity: str, message: str):
@@ -336,62 +457,37 @@ def _demo_state(filename: str, number: str, outcome: str, code: str, severity: s
     )
 
 
-def _run_demo(log_path: Path | None) -> int:
-    """One review hold is paid. One reject is refused. The ledger is temporary."""
+def _run_demo() -> int:
+    """One review hold is paid. One reject is refused. Ledger and log are temporary."""
 
-    temporary = log_path is None
-    if log_path is None:
-        handle, name = tempfile.mkstemp(prefix="approve-", suffix=".jsonl")
-        os.close(handle)
-        log_path = Path(name)
-    held = _demo_state(
-        "demo_hold.txt",
-        "INV-900",
-        "hold",
-        "VENDOR_RENAMED",
-        "warning",
-        "The vendor name says formerly.",
+    first = approve_and_pay(
+        _demo_state(
+            "demo_hold.txt", "INV-900", "hold", "VENDOR_RENAMED", "warning",
+            "The vendor name says formerly.",
+        ),
+        reviewer="Avery Chen",
+        note="Confirmed this is the same company.",
+        amount="500.00",
+        demo=True,
     )
-    rejected = _demo_state(
-        "demo_reject.txt",
-        "INV-901",
-        "reject",
-        "STOCK_SHORTFALL",
-        "blocking",
-        "WidgetA quantity 20 exceeds stock of 5.",
+    second = approve_and_pay(
+        _demo_state(
+            "demo_reject.txt", "INV-901", "reject", "STOCK_SHORTFALL", "blocking",
+            "WidgetA quantity 20 exceeds stock of 5.",
+        ),
+        reviewer="Avery Chen",
+        note="Stock is short, so this cannot be paid.",
+        amount="500.00",
+        demo=True,
     )
-    try:
-        first = approve_and_pay(
-            held,
-            reviewer="Avery Chen",
-            note="Confirmed this is the same company.",
-            amount="500.00",
-            demo=True,
-            log_path=log_path,
-        )
-        second = approve_and_pay(
-            rejected,
-            reviewer="Avery Chen",
-            note="Stock is short, so this cannot be paid.",
-            amount="500.00",
-            demo=True,
-            log_path=log_path,
-        )
-        print(json.dumps(first["record"]), flush=True)
-        print(json.dumps(second["record"]), flush=True)
-        return 0 if first["result"] == "paid" and second["result"] == "held" else 1
-    finally:
-        if temporary:
-            log_path.unlink(missing_ok=True)
+    print(json.dumps(first["record"]), flush=True)
+    print(json.dumps(second["record"]), flush=True)
+    return 0 if first["result"] == "paid" and second["result"] == "held" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Approve a held invoice for payment.")
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="Pay one sample hold and refuse one sample reject on a temporary ledger.",
-    )
+    parser.add_argument("--demo", action="store_true", help="Pay one sample hold and refuse one reject.")
     parser.add_argument("--result", help="Pipeline result JSON for one invoice")
     parser.add_argument("--reviewer", help="Reviewer name")
     parser.add_argument("--note", help="Why this hold is being released")
@@ -399,9 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", help="Payments ledger. Defaults to payments.db")
     parser.add_argument("--log", help="Append-only decision log")
     args = parser.parse_args(argv)
-
     if args.demo:
-        return _run_demo(Path(args.log) if args.log else None)
+        return _run_demo()
     if not args.result or args.reviewer is None or args.note is None or args.amount is None:
         print("Need --result, --reviewer, --note, and --amount. Or pass --demo.", file=sys.stderr)
         return 2

@@ -48,7 +48,8 @@ HOLD_CODES = (
 #   FRAUD_CLUSTER — confirm the signals with the vendor, using contacts on file.
 #   PRICE_SPIKE — confirm the price with the vendor.
 #   CRITIQUE_HOLD — review the critique concern. No hard finding is attached.
-#   AUDIT_ESCALATED — the audit sent the invoice to a person. No hard finding is attached.
+#   AUDIT_ESCALATED — the audit sent the invoice to a person, except the
+#     send-back cap (see SEND_BACK_CAP_MESSAGE), which is rerun-by-hand.
 # Reject codes are not here. The other holds stay unpaid: SYSTEM_ERROR and
 # BAD_REASONING are a failed run, ITEM_NOT_IN_SOURCE is an extraction miss,
 # NON_USD is never converted, CREDIT_NOTE is a credit, and DUPLICATE_INVOICE
@@ -78,6 +79,10 @@ WARNING_CODES = (
 
 # Payment records this when it refuses. It does not change the invoice outcome.
 PAYMENT_REFUSED = "PAYMENT_REFUSED"
+
+# The audit uses this sentence when the send-back cap becomes a hold.
+# That case is not a review hold. Other AUDIT_ESCALATED messages still are.
+SEND_BACK_CAP_MESSAGE = "Audit send-back cap reached. Hold, no payment."
 
 
 def outcome_from_findings(findings: list[Finding]) -> Outcome:
@@ -134,9 +139,17 @@ def result_codes(result: dict) -> list[str]:
     return finding_codes(result.get("findings") or [])
 
 
-def _blocks_release(code: str) -> bool:
+def _message_of(finding) -> str:
+    if isinstance(finding, dict):
+        return finding.get("message") or ""
+    return finding.message or ""
+
+
+def _blocks_release(code: str, message: str = "") -> bool:
     """True when this code keeps a reviewer from paying."""
 
+    if code == "AUDIT_ESCALATED" and message == SEND_BACK_CAP_MESSAGE:
+        return True
     if code in REJECT_CODES:
         return True
     if code in HOLD_CODES:
@@ -162,8 +175,8 @@ def review_release_block(
     if outcome != "hold":
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
-    for code in codes:
-        if not _blocks_release(code):
+    for finding, code in zip(findings, codes):
+        if not _blocks_release(code, _message_of(finding)):
             continue
         if code in REJECT_CODES:
             return f"{code} is a reject-class finding and is never paid."

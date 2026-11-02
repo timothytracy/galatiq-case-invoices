@@ -19,7 +19,13 @@ from pipeline.fact_guard import (
 from pipeline.stage_log import _stopped, agent_finding, stage_log
 from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
-from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, finding_codes
+from decision.outcome import (
+    HOLD_CODES,
+    REJECT_CODES,
+    SEND_BACK_CAP_MESSAGE,
+    WARNING_CODES,
+    finding_codes,
+)
 from decision.policy import MAX_SEND_BACKS
 from decision.findings import assess
 from decision.wording import explain, resolve_as_of, today_line
@@ -220,7 +226,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     if any(finding.code in HOLD_CODES for finding in findings):
         return None
     authored = {
-        "Audit send-back cap reached. Hold, no payment.",
+        SEND_BACK_CAP_MESSAGE,
         "Critique concerns were not addressed.",
     }
     message = guarded["conclusion"]
@@ -446,7 +452,7 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
             return _box(
                 "ESCALATE",
                 "hold",
-                "Audit send-back cap reached. Hold, no payment.",
+                SEND_BACK_CAP_MESSAGE,
                 feedback,
                 feedback or ["send-back cap reached"],
             )

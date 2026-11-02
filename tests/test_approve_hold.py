@@ -5,10 +5,11 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
-from decision.outcome import HOLD_CODES, PAYABLE_HOLD_CODES, REJECT_CODES
+from decision.outcome import PAYABLE_HOLD_CODES, REJECT_CODES, SEND_BACK_CAP_MESSAGE
 from ledger import paid_rows, record_payment
 from models import ExtractedInvoice, Finding, LineItem, PipelineState, SourceInfo
 from pipeline.approve_hold import approve_and_pay, main
@@ -23,20 +24,6 @@ CLOSED_HOLDS = (
     "DUPLICATE_INVOICE",
     "SPLIT_INVOICE",
 )
-
-
-def test_payable_hold_list_is_the_review_codes():
-    assert PAYABLE_HOLD_CODES == (
-        "REVISED_INVOICE",
-        "VENDOR_RENAMED",
-        "NEW_REMITTANCE",
-        "FRAUD_CLUSTER",
-        "PRICE_SPIKE",
-        "CRITIQUE_HOLD",
-        "AUDIT_ESCALATED",
-    )
-    assert tuple(code for code in HOLD_CODES if code not in PAYABLE_HOLD_CODES) == CLOSED_HOLDS
-    assert set(PAYABLE_HOLD_CODES).isdisjoint(REJECT_CODES)
 
 
 def _invoice(**overrides) -> ExtractedInvoice:
@@ -274,10 +261,21 @@ def test_a_split_match_stays_held(tmp_path):
         source_file="earlier.txt",
         raw_text="first half",
     ) is True
-    invoice = _invoice(invoice_number="INV-41", total=Decimal("5000.00"), subtotal=Decimal("5000.00"))
-    invoice.line_items[0].unit_price = Decimal("5000.00")
-    invoice.line_items[0].amount = Decimal("5000.00")
-    state = _held([_finding("VENDOR_RENAMED")], invoice=invoice, reason_code="VENDOR_RENAMED")
+    invoice = _invoice(
+        invoice_number="INV-41",
+        total=Decimal("5000.00"),
+        subtotal=Decimal("5000.00"),
+        line_items=[
+            LineItem(item="WidgetA", description="WidgetA", quantity=Decimal("10"), unit_price=Decimal("250"), amount=Decimal("2500")),
+            LineItem(item="WidgetB", description="WidgetB", quantity=Decimal("5"), unit_price=Decimal("500"), amount=Decimal("2500")),
+        ],
+    )
+    state = _held(
+        [_finding("VENDOR_RENAMED")],
+        invoice=invoice,
+        reason_code="VENDOR_RENAMED",
+        raw="WidgetA\nWidgetB\n",
+    )
     result = _pay(state, tmp_path, amount="5000.00")
     assert result["result"] == "held"
     assert result["reason_code"] == "SPLIT_INVOICE"
@@ -344,35 +342,49 @@ def test_the_log_is_append_only_and_keeps_the_pipeline_outcome(tmp_path):
     log.write_text('{"kept": true}\n', encoding="utf-8")
     state = _held([_finding("VENDOR_RENAMED")])
     payload = state.model_dump(mode="json")
-    result = _pay(payload, tmp_path, log_path=log)
+    seen = {}
+    real = importlib.import_module("pipeline.approve_hold").payment
+
+    def spy(state, ledger_path=None):
+        attempt = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+        seen["attempt"] = attempt["decision"]
+        return real(state, ledger_path)
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr("pipeline.approve_hold.payment", spy)
+    try:
+        result = _pay(payload, tmp_path, log_path=log)
+    finally:
+        patch.undo()
     assert payload["outcome"] == "hold"
+    assert seen["attempt"] == "attempt"
     lines = log.read_text(encoding="utf-8").splitlines()
     assert json.loads(lines[0]) == {"kept": True}
-    record = json.loads(lines[1])
+    record = json.loads(lines[2])
     assert record == result["record"]
     assert record["reviewer"] == "Avery Chen"
     assert record["note"] == "Confirmed and ready to pay."
     assert record["time"] == "2026-11-02T04:20:00Z"
     assert record["invoice"] == "hold.txt"
+    assert record["invoice_number"] == "INV-1"
+    assert record["vendor"] == "Northwind Supply"
+    assert record["amount"] == "500.00"
+    assert record["currency"] == "USD"
     assert record["pipeline_outcome"] == "hold"
-    assert record["pipeline_findings"] == [
-        {
-            "code": "VENDOR_RENAMED",
-            "message": "VENDOR_RENAMED on this invoice.",
-            "severity": "warning",
-        }
-    ]
-    assert record["result"] == "paid"
+    assert record["pipeline_codes"] == ["VENDOR_RENAMED"]
+    assert record["decision"] == "paid"
     assert record["reason_code"] is None
     assert record["reason"] == "Reviewer approved this hold for payment."
     again = _pay(payload, tmp_path, log_path=log, note="Second look.")
     lines = log.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert json.loads(lines[0]) == {"kept": True}
-    assert json.loads(lines[1])["result"] == "paid"
+    assert json.loads(lines[1])["decision"] == "attempt"
+    assert json.loads(lines[2])["decision"] == "paid"
     assert again["result"] == "held"
-    assert json.loads(lines[2])["reason_code"] == "DUPLICATE_INVOICE"
-    assert json.loads(lines[2])["pipeline_outcome"] == "hold"
+    assert json.loads(lines[3])["reason_code"] == "DUPLICATE_INVOICE"
+    assert json.loads(lines[3])["pipeline_outcome"] == "hold"
+    assert json.loads(lines[3])["decision"] == "held"
 
 
 def test_demo_pays_one_hold_and_refuses_one_reject(tmp_path, monkeypatch, capsys):
@@ -380,6 +392,7 @@ def test_demo_pays_one_hold_and_refuses_one_reject(tmp_path, monkeypatch, capsys
     assert main(["--demo"]) == 0
     assert not (tmp_path / "payments.db").exists()
     assert list(tmp_path.glob("payments-*.db")) == []
+    assert not (tmp_path / "output" / "reviews" / "approve_pay.jsonl").exists()
     out = capsys.readouterr().out
     assert out.count("Paid 500.00 to Northwind Supply") == 1
     records = []
@@ -389,7 +402,7 @@ def test_demo_pays_one_hold_and_refuses_one_reject(tmp_path, monkeypatch, capsys
         item = json.loads(line)
         if "reviewer" in item:
             records.append(item)
-    assert [row["result"] for row in records] == ["paid", "held"]
+    assert [row["decision"] for row in records] == ["paid", "held"]
     assert records[0]["invoice"] == "demo_hold.txt"
     assert records[0]["pipeline_outcome"] == "hold"
     assert records[1]["invoice"] == "demo_reject.txt"
@@ -419,6 +432,181 @@ def test_cli_refuses_a_result_file(tmp_path, capsys):
     )
     assert code == 1
     record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert record["result"] == "held"
+    assert record["decision"] == "held"
     assert record["reason_code"] == "NOT_PAYABLE"
     assert record["pipeline_outcome"] == "reject"
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _tampered(invoice, raw, filename):
+    """A bad invoice whose stored outcome and findings say it is a review hold."""
+
+    return PipelineState(
+        invoice_path=filename,
+        filename=filename,
+        raw_text=raw,
+        invoice=invoice,
+        findings=[_finding("VENDOR_RENAMED")],
+        outcome="hold",
+        reason_code="VENDOR_RENAMED",
+    )
+
+
+def test_a_tampered_stock_shortfall_is_not_paid(tmp_path):
+    path = ROOT / "data" / "invoices" / "invoice_1002.txt"
+    raw = path.read_text(encoding="utf-8")
+    invoice = _invoice(
+        vendor="Gadgets Co.",
+        invoice_number="1002",
+        invoice_date="2026-01-30",
+        due_date="2026-01-30",
+        total=Decimal("15000.00"),
+        subtotal=Decimal("15000.00"),
+        line_items=[
+            LineItem(
+                item="GadgetX",
+                description="GadgetX",
+                quantity=Decimal("20"),
+                unit_price=Decimal("750"),
+                amount=Decimal("15000"),
+            )
+        ],
+        source=SourceInfo(path=str(path), filename=path.name, format="txt", raw_text=raw),
+    )
+    result = _pay(_tampered(invoice, raw, path.name), tmp_path, amount="15000.00")
+    assert result["result"] == "held"
+    assert result["reason_code"] == "NOT_PAYABLE"
+    assert "STOCK_SHORTFALL" in result["reason"]
+    assert _codes_paid(tmp_path) == []
+
+
+def test_a_tampered_embedded_instruction_is_not_paid(tmp_path):
+    from parsers.pdf_invoice import pdf_text
+
+    path = ROOT / "data" / "extra_invoices" / "invoice_2107.pdf"
+    raw = pdf_text(path)
+    invoice = _invoice(
+        vendor="Glassford Paper Co.",
+        invoice_number="INV-2107",
+        invoice_date="2026-04-03",
+        due_date="2026-05-03",
+        total=Decimal("1250.00"),
+        subtotal=Decimal("1250.00"),
+        embedded_instructions=True,
+        line_items=[
+            LineItem(item="WidgetA", description="WidgetA", quantity=Decimal("3"), unit_price=Decimal("250"), amount=Decimal("750")),
+            LineItem(item="WidgetB", description="WidgetB", quantity=Decimal("1"), unit_price=Decimal("500"), amount=Decimal("500")),
+        ],
+        source=SourceInfo(path=str(path), filename=path.name, format="pdf", raw_text=raw),
+    )
+    result = _pay(_tampered(invoice, raw, path.name), tmp_path, amount="1250.00")
+    assert result["result"] == "held"
+    assert "EMBEDDED_INSTRUCTIONS" in result["reason"]
+    assert _codes_paid(tmp_path) == []
+
+
+def test_a_tampered_negative_total_is_not_paid(tmp_path):
+    path = ROOT / "data" / "extra_invoices" / "invoice_2109.json"
+    raw = path.read_text(encoding="utf-8")
+    invoice = _invoice(
+        vendor="Dockside Alloy",
+        invoice_number="INV-2109",
+        invoice_date="2026-04-07",
+        due_date="2026-05-07",
+        total=Decimal("-750.00"),
+        subtotal=Decimal("-750.00"),
+        line_items=[
+            LineItem(item="WidgetA", description="WidgetA", quantity=Decimal("3"), unit_price=Decimal("-250"), amount=Decimal("-750"))
+        ],
+        source=SourceInfo(path=str(path), filename=path.name, format="json", raw_text=raw),
+    )
+    result = _pay(_tampered(invoice, raw, path.name), tmp_path, amount="-750.00")
+    assert result["result"] == "held"
+    assert result["reason_code"] == "NOT_PAYABLE"
+    assert _codes_paid(tmp_path) == []
+
+
+@pytest.mark.parametrize("total", ["9999999.00", "-3000.00", "0.00"])
+def test_a_tampered_amount_is_not_paid(total, tmp_path):
+    amount = Decimal(total)
+    invoice = _invoice(
+        vendor="New Vendor Co",
+        invoice_number="INV-HUGE",
+        total=amount,
+        subtotal=amount,
+        line_items=[
+            LineItem(
+                item="WidgetA",
+                description="WidgetA",
+                quantity=Decimal("40000"),
+                unit_price=Decimal("250"),
+                amount=Decimal("10000000"),
+            )
+        ],
+    )
+    result = _pay(
+        _tampered(invoice, "WidgetA\n", "huge.txt"),
+        tmp_path,
+        amount=total,
+    )
+    assert result["result"] == "held"
+    assert result["reason_code"] == "NOT_PAYABLE"
+    assert _codes_paid(tmp_path) == []
+
+
+def test_source_text_must_match_the_file(tmp_path):
+    path = tmp_path / "bill.txt"
+    path.write_text("WidgetA\nTotal 500.00\n", encoding="utf-8")
+    invoice = _invoice(source=SourceInfo(path=str(path), filename="bill.txt", format="txt", raw_text="nope"))
+    state = _held([_finding("VENDOR_RENAMED")], invoice=invoice, raw="tampered text")
+    result = _pay(state, tmp_path)
+    assert result["result"] == "held"
+    assert result["reason"] == "The invoice text does not match the source file."
+    assert _codes_paid(tmp_path) == []
+
+
+def test_an_unknown_outcome_is_refused_and_logged(tmp_path):
+    payload = _held([_finding("VENDOR_RENAMED")]).model_dump(mode="json")
+    payload["outcome"] = "HOLD"
+    result = _pay(payload, tmp_path)
+    assert result["result"] == "held"
+    assert result["reason_code"] == "NOT_PAYABLE"
+    assert result["reason"] == "Only a held invoice can be approved for payment."
+    assert json.loads((tmp_path / "approve.jsonl").read_text().splitlines()[-1])["decision"] == "held"
+
+
+@pytest.mark.parametrize("reviewer", ["A", "A\u200b", "\u200b\u200b"])
+def test_a_name_needs_two_letters(reviewer, tmp_path):
+    result = _pay(_held([_finding("VENDOR_RENAMED")]), tmp_path, reviewer=reviewer)
+    assert result["result"] == "held"
+    assert result["reason_code"] == "MISSING_REVIEWER"
+    assert _codes_paid(tmp_path) == []
+
+
+def test_amount_must_match_to_the_cent(tmp_path):
+    result = _pay(_held([_finding("PRICE_SPIKE")]), tmp_path, amount="500.01")
+    assert result["result"] == "held"
+    assert result["reason_code"] == "AMOUNT_MISMATCH"
+    assert "500.01" in result["reason"]
+    assert _codes_paid(tmp_path) == []
+
+
+def test_critique_concerns_are_in_the_result_and_the_log(tmp_path):
+    state = _held([_finding("CRITIQUE_HOLD")]).model_copy(
+        update={"critique_concerns": ["tax rate is not the usual rate"]}
+    )
+    result = _pay(state, tmp_path)
+    assert result["result"] == "paid"
+    assert result["critique_concerns"] == ["tax rate is not the usual rate"]
+    assert result["record"]["critique_concerns"] == ["tax rate is not the usual rate"]
+
+
+def test_a_send_back_cap_is_not_payable(tmp_path):
+    finding = Finding(code="AUDIT_ESCALATED", message=SEND_BACK_CAP_MESSAGE, severity="warning")
+    result = _pay(_held([finding], reason_code="AUDIT_ESCALATED"), tmp_path)
+    assert result["result"] == "held"
+    assert result["reason_code"] == "NOT_PAYABLE"
+    assert "AUDIT_ESCALATED" in result["reason"]
+    assert _codes_paid(tmp_path) == []

@@ -110,13 +110,13 @@ A revision of a number that has not been paid is still only `REVISED_INVOICE`. O
 
 `approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
 
-`PAYABLE_HOLD_CODES` in `decision/outcome.py` is the list of holds a person may release, with the reason for each. A hold is payable only when every finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. A reject, any reject-class finding, or any other hold is never paid.
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` is the list of holds a person may release, with the reason for each. A hold is payable only when every finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. A reject, any reject-class finding, or any other hold is never paid. An `AUDIT_ESCALATED` finding whose message is the send-back cap is not payable.
 
-The function then checks that the currency is USD, that the amount equals the extracted total, and that the ledger shows no prior payment and no split. Payment goes through the existing one-time authorization and payment step. A locked or corrupt ledger is a `SYSTEM_ERROR` and nothing is paid.
+The function validates the invoice again before paying, and refuses a reject or a never-payable code from that check. The total must be greater than zero, the currency must be USD, and the amount must match the extracted total to the cent. The ledger duplicate and split checks run inside the payment write. A locked or corrupt ledger is a `SYSTEM_ERROR` and nothing is paid. One reviewer, with a name and a note, can release `FRAUD_CLUSTER` or `NEW_REMITTANCE`. A second approver for vendor-risk holds is the production next step.
 
 ## Known limitations / cut scope
 
-The payments ledger is the section above. The two gaps that remain are the write-before-the-mock and the single-process split check.
+The payments ledger is the section above. The gap that remains is the write-before-the-mock. The split check runs inside that write.
 
 USD reference prices are in `policy.toml`. The rush line on INV-1010 is a descriptor note and a price warning, not a reject. The EUR invoice is not price-checked. The inventory table is the four README rows and has no extra columns.
 

@@ -25,7 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 
-from models import ExtractedInvoice, Finding
+from models import ExtractedInvoice, Finding, SourceInfo
 
 from decision.findings import _is_revised, parse_printed_date
 from decision.invoice_fields import different, normalize_invoice_number, show_money
@@ -126,10 +126,12 @@ def record_payment(
 ) -> bool | str:
     """Insert one paid row.
 
-    True means the row was inserted. False means the unique index refused a
-    repeat. A string means the file could not be written; nothing was inserted.
-    The caller writes this before the mock payment. Anything but True means
-    the mock must not run.
+    True means the row was inserted. False means this invoice was already
+    paid. "SPLIT_INVOICE" means the split rule fired. Any other string means
+    the file could not be written. Nothing was inserted in those cases.
+    The duplicate and split checks run inside the write lock, so two callers
+    cannot both pass the split rule. The caller writes this before the mock
+    payment. Anything but True means the mock must not run.
     """
 
     number = normalize_invoice_number(invoice_number)
@@ -152,6 +154,27 @@ def record_payment(
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(_CREATE)
         connection.execute(_UNIQUE)
+        rows = [
+            PaymentRow._make(item)
+            for item in connection.execute(
+                "SELECT " + ", ".join(_COLUMNS) + " FROM payments ORDER BY rowid"
+            )
+        ]
+        snapshot = ExtractedInvoice(
+            vendor=vendor,
+            invoice_number=invoice_number,
+            invoice_date=invoice_date,
+            currency=currency,
+            total=total,
+            source=SourceInfo(path=source_file, filename=source_file, format="txt"),
+        )
+        if _duplicate_finding(snapshot, raw_text, rows) is not None:
+            connection.execute("ROLLBACK")
+            return False
+        _paid, over = split_window(snapshot, rows)
+        if over:
+            connection.execute("ROLLBACK")
+            return "SPLIT_INVOICE"
         connection.execute(
             "INSERT INTO payments (" + ", ".join(_COLUMNS) + ") VALUES ("
             + ", ".join("?" for _ in _COLUMNS)

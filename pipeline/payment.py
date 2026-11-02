@@ -35,6 +35,8 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
         wrote = _write_ledger(state, ledger_path)
         if wrote is False:
             return _refuse_duplicate(state, findings, ledger_path)
+        if wrote == "SPLIT_INVOICE":
+            return _refuse_split(state, findings, ledger_path)
         if wrote is not True:
             return _hold_unreadable_ledger(state, findings, wrote)
         # Record the key before the mock call so a retry cannot pay twice.
@@ -63,9 +65,9 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
 def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
     """True when there is no ledger, or the row was inserted.
 
-    False is a duplicate. A string is an unreadable ledger. None as the path
-    keeps the direct unit tests on the authorization key. The graph always
-    passes a path.
+    False is a duplicate. "SPLIT_INVOICE" is the split rule. Any other string
+    is an unreadable ledger. None as the path keeps the direct unit tests on
+    the authorization key. The graph always passes a path.
     """
 
     if ledger_path is None:
@@ -90,6 +92,49 @@ def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str) 
     findings = list(findings) + [
         Finding(code="SYSTEM_ERROR", message=message, severity="warning")
     ]
+    outcome, code, reason, action = explain(findings, state.invoice)
+    record = PaymentRecord(
+        status="not_paid",
+        vendor=state.invoice.vendor,
+        amount=state.invoice.total,
+        currency=state.invoice.currency,
+        detail=message,
+    )
+    result = {
+        "payment": record.model_dump(mode="json"),
+        "outcome": outcome,
+        "reason": reason,
+        "reason_code": code,
+        "codes": finding_codes(findings),
+    }
+    return {
+        "payment": record,
+        "findings": findings,
+        "outcome": outcome,
+        "reason_code": code,
+        "action": action,
+        "logs": state.logs + [stage_log(state.filename, "payment", result)],
+    }
+
+
+def _refuse_split(state: PipelineState, findings: list, ledger_path) -> dict:
+    """The write lock saw a split. Nothing is paid."""
+
+    extra = arrival_findings(ledger_path, state.invoice, state.raw_text)
+    if not any(item.code == "SPLIT_INVOICE" for item in extra):
+        extra = extra + [
+            Finding(
+                code="SPLIT_INVOICE",
+                message=(
+                    "This invoice plus payments in the split window "
+                    "is over the approval threshold."
+                ),
+                severity="warning",
+                item="total",
+            )
+        ]
+    message = next(item.message for item in extra if item.code == "SPLIT_INVOICE")
+    findings = list(findings) + extra
     outcome, code, reason, action = explain(findings, state.invoice)
     record = PaymentRecord(
         status="not_paid",
