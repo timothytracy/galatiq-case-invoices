@@ -20,6 +20,16 @@ def stage_log(filename: str, stage: str, result: dict) -> dict:
     return payload
 
 
+def _unique_tool_calls(step_attempts) -> list:
+    """The last attempt's list. That snapshot already holds every call so far."""
+
+    calls = []
+    for row in step_attempts:
+        if isinstance(row, dict) and row.get("tool_calls"):
+            calls = row["tool_calls"]
+    return calls
+
+
 def agent_finding(exc) -> Finding:
     """The finding for a model step that will not be retried again."""
 
@@ -45,6 +55,9 @@ def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=
         "attempts": step_attempts,
         "codes": finding_codes(findings),
     }
+    calls = _unique_tool_calls(step_attempts)
+    if calls:
+        result["tool_calls"] = calls
     return {
         "outcome": decided,
         "reason_code": code,

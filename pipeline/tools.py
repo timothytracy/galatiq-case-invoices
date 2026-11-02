@@ -1,11 +1,16 @@
 """Read-only tools. A tool is a function plus the JSON schema the model sees.
 
-A ToolInputError (unknown tool, bad arguments, nothing found) becomes
+A ToolInputError (unknown tool, bad arguments, unknown item) becomes
 {"error": "..."} for the model. Any other exception leaves call() and the
 loop turns it into a non-retryable LLMError. echo_note is for tests and
-the probe. No agent is given a registry yet.
+the probe. Critique gets critique_registry when XAI_TOOLS is on.
 """
 
+from decimal import Decimal
+from functools import partial
+
+from decision.invoice_fields import canonical_item, show_money, show_qty, summed_quantities
+from decision.policy import POLICY
 from llm_client import parse_tool_arguments
 
 
@@ -95,6 +100,88 @@ def example_registry() -> ToolRegistry:
             )
         ]
     )
+
+
+_ITEM = {
+    "type": "object",
+    "properties": {
+        "item": {"type": "string", "description": "Item name as printed or extracted"},
+    },
+    "required": ["item"],
+}
+
+def critique_registry(invoice, stock: dict[str, int]) -> ToolRegistry:
+    """check_stock and get_reference_price for this invoice.
+
+    stock is the snapshot critique already loaded read-only. The functions
+    do not open inventory.db. An unknown item raises ToolInputError.
+    """
+
+    return ToolRegistry(
+        [
+            Tool(
+                name="check_stock",
+                description=(
+                    "Read-only. Available stock for one item, and the summed quantity "
+                    "this invoice requests for it. Names match after ignoring case, "
+                    "spaces, and hyphens only."
+                ),
+                parameters=_ITEM,
+                function=partial(check_stock, invoice=invoice, stock=stock),
+            ),
+            Tool(
+                name="get_reference_price",
+                description="Read-only. USD reference unit price for one item.",
+                parameters=_ITEM,
+                function=get_reference_price,
+            ),
+        ]
+    )
+
+
+def check_stock(arguments: dict, invoice, stock: dict[str, int]) -> dict:
+    """Stock for one item against this invoice's summed quantity."""
+
+    item = arguments["item"]
+    matched = _matched_name(item, stock)
+    if matched is None:
+        raise ToolInputError(f"unknown item: {item}")
+    requested = summed_quantities(invoice, stock).get(matched, Decimal(0))
+    available = int(stock[matched])
+    return {
+        "item": item,
+        "matched_item": matched,
+        "available": available,
+        "requested_on_invoice": show_qty(requested),
+        "covered": requested <= Decimal(available),
+    }
+
+
+def get_reference_price(arguments: dict) -> dict:
+    """USD reference price from policy.toml. Unknown items are an input error."""
+
+    item = arguments["item"]
+    table = POLICY.reference_prices
+    matched = _matched_name(item, table)
+    if matched is None:
+        raise ToolInputError(f"unknown item: {item}")
+    return {
+        "item": item,
+        "matched_item": matched,
+        "reference_price": show_money(table[matched]),
+        "currency": "USD",
+    }
+
+
+def _matched_name(name: str, table: dict) -> str | None:
+    """Inventory or price-table spelling. None when the name is not in the table."""
+
+    if not isinstance(name, str) or name.strip() == "":
+        return None
+    found = canonical_item(name, table)
+    if found in table:
+        return found
+    return None
 
 
 _JSON_TYPES = {

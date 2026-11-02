@@ -50,7 +50,7 @@ def _write_log(path: Path, result: dict) -> None:
 
 
 def _result_line(path: Path, result: dict) -> dict:
-    return {
+    line = {
         "record": "result",
         "file": path.name,
         "outcome": result.get("outcome"),
@@ -59,6 +59,28 @@ def _result_line(path: Path, result: dict) -> dict:
         "payment_status": payment_status(result),
         "codes": result_codes(result),
     }
+    calls = tool_calls_of(result)
+    if calls:
+        line["tool_calls"] = calls
+    return line
+
+
+def tool_calls_of(result: dict) -> list:
+    """Tool calls recorded on stage results. Empty when a stage made none.
+
+    The review screen reads these on state.logs[].result.tool_calls and, for a
+    pipeline log, on the result record's tool_calls field. A missing key means
+    the stage made no tool call.
+    """
+
+    calls = []
+    for row in result.get("logs") or []:
+        if not isinstance(row, dict):
+            continue
+        body = row.get("result")
+        if isinstance(body, dict) and body.get("tool_calls"):
+            calls.extend(body["tool_calls"])
+    return calls
 
 
 def payment_status(result: dict) -> str:

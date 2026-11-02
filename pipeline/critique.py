@@ -3,7 +3,7 @@
 import json
 
 from db import load_stock
-from llm_client import AgentStepFailed, call_with_retries
+from llm_client import AgentStepFailed, call_with_retries, tool_request, tools_enabled
 from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
 from pipeline.fact_guard import (
     CRITIQUE_CLAIMS,
@@ -13,7 +13,14 @@ from pipeline.fact_guard import (
     verified_payload,
 )
 from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.tools import critique_registry
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
+
+# One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
+TOOLS_LINE = (
+    "You may call the read-only tools to look up stock and the reference price "
+    "rather than guess them."
+)
 
 
 def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
@@ -37,9 +44,14 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
         facts = verified_payload(state.invoice, stock, as_of)
 
     step_attempts: list[dict] = []
+    request = llm.request
+    step = None
+    if tools_enabled():
+        step = tool_request(llm, critique_registry(state.invoice, stock), agent="critique")
+        request = step
     try:
         draft = call_with_retries(
-            llm.request,
+            request,
             _critique_messages(decision, as_of, facts),
             CritiqueDraft,
             max_attempts=max_attempts,
@@ -74,6 +86,8 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
         "round": state.critique_rounds + 1,
         "attempts": step_attempts,
     }
+    if step is not None and step.log:
+        result["tool_calls"] = list(step.log)
     update = {
         "critique_rounds": state.critique_rounds + 1,
         "critique_concerns": concerns,
@@ -105,7 +119,9 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts) -> list[dict]:
                 "Being over the scrutiny threshold is not a risk. Do not set stricter only "
                 "because the total is over it. "
                 "You cannot approve a failure and you cannot clear a non-USD hold. "
-                f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Return JSON only."
+                f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} "
+                + (f"{TOOLS_LINE} " if tools_enabled() else "")
+                + "Return JSON only."
             ),
         },
         {
