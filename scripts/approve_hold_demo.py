@@ -34,18 +34,23 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_demo() -> int:
     records = Path(tempfile.mkdtemp(prefix="releases-"))
+    ledger_fd, ledger_name = tempfile.mkstemp(prefix="payments-", suffix=".db")
+    log_fd, log_name = tempfile.mkstemp(prefix="approve-", suffix=".jsonl")
+    os.close(ledger_fd)
+    os.close(log_fd)
+    ledger, log = Path(ledger_name), Path(log_name)
     previous = os.environ.get("INVOICE_RELEASE_DIR")
     os.environ["INVOICE_RELEASE_DIR"] = str(records)
     try:
-        hold = _offline(ROOT / "data" / "invoices" / "invoice_1012.txt")
-        rejected = _offline(ROOT / "data" / "invoices" / "invoice_1002.txt")
+        hold = _offline(ROOT / "data" / "invoices" / "invoice_1012.txt", ledger)
+        rejected = _offline(ROOT / "data" / "invoices" / "invoice_1002.txt", ledger)
         first = approve_and_pay(
             hold, reviewer="Avery Chen", note="Confirmed this is the same company.",
-            amount=hold["invoice"].total, demo=True,
+            amount=hold["invoice"].total, ledger_path=ledger, log_path=log,
         )
         second = approve_and_pay(
             rejected, reviewer="Avery Chen", note="Stock is short, so this cannot be paid.",
-            amount=rejected["invoice"].total, demo=True,
+            amount=rejected["invoice"].total, ledger_path=ledger, log_path=log,
         )
     finally:
         if previous is None:
@@ -53,12 +58,14 @@ def _run_demo() -> int:
         else:
             os.environ["INVOICE_RELEASE_DIR"] = previous
         shutil.rmtree(records, ignore_errors=True)
+        ledger.unlink(missing_ok=True)
+        log.unlink(missing_ok=True)
     print(json.dumps(first["record"]), flush=True)
     print(json.dumps(second["record"]), flush=True)
     return 0 if first["result"] == "paid" and second["result"] == "held" else 1
 
 
-def _offline(path: Path):
+def _offline(path: Path, ledger: Path):
     """Replay one saved invoice. No test double and no API key."""
 
     database = Path("inventory.db")
@@ -66,7 +73,7 @@ def _offline(path: Path):
         create_database(database)
     client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples_tools.jsonl"), None)
     with redirect_stdout(io.StringIO()):
-        return run_invoice(path, database, client, as_of=as_of)
+        return run_invoice(path, database, client, as_of=as_of, ledger_path=ledger)
 
 
 if __name__ == "__main__":

@@ -2,17 +2,14 @@
 
 import pytest
 
-from pipeline.approve_hold import _FAILED
 from pipeline.payment import _USED_KEYS
 
 
 @pytest.fixture(autouse=True)
 def clear_used_payment_keys():
     _USED_KEYS.clear()
-    _FAILED.clear()
     yield
     _USED_KEYS.clear()
-    _FAILED.clear()
 
 
 @pytest.fixture(autouse=True)

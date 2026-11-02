@@ -13,7 +13,7 @@ def _stage_name(outcome: str) -> str:
     return "hold" if outcome == "hold" else "reject_log"
 
 
-def reject_log(state: PipelineState) -> dict:
+def reject_log(state: PipelineState, ledger_path=None) -> dict:
     findings = list(state.findings)
     outcome, code, reason, action = explain(findings, state.invoice)
     if state.agent_error and code not in {"SYSTEM_ERROR", "BAD_REASONING"}:
@@ -40,7 +40,11 @@ def reject_log(state: PipelineState) -> dict:
         )
     decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
     from pipeline.approve_hold import remember
-    remember(state.model_copy(update={"outcome": outcome, "reason_code": code, "decision": decision}))
+    saved = state.model_copy(update={"outcome": outcome, "reason_code": code, "decision": decision})
+    if remember(saved, ledger_path) is not True:
+        outcome, code, action = "hold", "SYSTEM_ERROR", ACTION["SYSTEM_ERROR"]
+        reason = f"release record could not be written {action}"
+        decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
 
     invoice = state.invoice
     record = PaymentRecord(

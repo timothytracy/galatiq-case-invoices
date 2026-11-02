@@ -27,8 +27,8 @@ from decision.outcome import review_release_block
 from decision.policy import POLICY
 
 ROOT = Path(__file__).resolve().parents[1]
-_FAILED: set[str] = set()
 _FILLERS = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u180e\u3164\uffa0\u115f\u1160\u00ad\u200e\u200f"))
+_NOT_LATEST = "release record is not the latest"
 MISSING_REVIEWER = "MISSING_REVIEWER"
 MISSING_NOTE = "MISSING_NOTE"
 NOT_PAYABLE = "NOT_PAYABLE"
@@ -47,10 +47,8 @@ def approve_and_pay(
     now=None,
 ) -> dict:
     """Release one held invoice. `result` selects the pipeline record.
-
-    reviewer and note need two Unicode letters after fillers are removed.
-    amount must equal the recorded total with no rounding. demo=True uses a
-    temporary ledger and log. The caller's result is not modified.
+    reviewer and note need two letters. amount must equal the recorded total.
+    demo=True uses a temporary ledger and log. The caller's result is not modified.
     """
 
     result = _view(result)
@@ -59,7 +57,7 @@ def approve_and_pay(
         ledger = _scratch("payments-", ".db")
         temps.append(ledger)
     else:
-        ledger = Path(ledger_path) if ledger_path is not None else ROOT / "payments.db"
+        ledger = Path(ledger_path) if ledger_path is not None else Path("payments.db")
     if demo and log_path is None:
         log = _scratch("approve-", ".jsonl")
         temps.append(log)
@@ -72,13 +70,8 @@ def approve_and_pay(
             path.unlink(missing_ok=True)
 
 
-def remember(result) -> bool:
-    """Write the release record. False on a disk error. Never raises.
-
-    A source outside the repository is not a release record. Payment of that
-    file still proceeds. A failed write removes the previous record. If the
-    old file cannot be removed, the path is blocked until a later write works.
-    """
+def remember(result, ledger_path=None) -> bool:
+    """Write the release record after its sha row. False on a disk or database error."""
 
     data = _view(result)
     rel = _repo_path(_source_of(data))
@@ -103,27 +96,20 @@ def remember(result) -> bool:
             "invoice": invoice.model_dump(mode="json"),
             "findings": [_finding_row(item) for item in findings],
         }
+        text = json.dumps(record) + "\n"
+        payable = review_release_block(record["outcome"], findings, record["reason_code"]) is None
+        digest = hashlib.sha256(text.encode()).hexdigest() if payable else None
+        if ledger_path is not None:
+            from ledger.payments import save_release_sha
+            save_release_sha(ledger_path, rel.as_posix(), digest)
         path = _record_path(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
+    except sqlite3.Error as exc:
+        return f"payments ledger unreadable: {exc}"
     except OSError:
-        _drop(rel)
         return False
-    _FAILED.discard(rel.as_posix())
-    _unblock(rel)
     return True
-
-
-def _drop(rel: Path) -> None:
-    """A failed write must not leave the previous record payable."""
-
-    _FAILED.add(rel.as_posix())
-    try:
-        _record_path(rel).unlink(missing_ok=True)
-    except OSError:
-        pass
-    if _record_path(rel).exists():
-        _block(rel)
 
 
 def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
@@ -167,13 +153,19 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", MISSING_REVIEWER, "A reviewer name is required.")
     if sum(ch.isalpha() for ch in text) < 2:
         return finish("held", MISSING_NOTE, "A note is required.")
-    if _is_blocked(filename):
-        return finish("held", "SYSTEM_ERROR", "The release record could not be replaced.")
     saved = _load(filename)
     if saved is None:
         return finish("held", NOT_PAYABLE, "No pipeline record for this invoice.")
     invoice = _invoice(saved.get("invoice"))
     saved["invoice"] = invoice
+    on_disk = _record_path(_repo_path(filename))
+    try:
+        digest = hashlib.sha256(on_disk.read_bytes()).hexdigest()
+    except OSError:
+        digest = None
+    from ledger.payments import stored_release_sha
+    if digest is None or digest != stored_release_sha(ledger, filename):
+        return finish("held", "SYSTEM_ERROR", _NOT_LATEST, saved)
     mismatch = _differs(result, saved)
     if mismatch:
         return finish("held", NOT_PAYABLE, mismatch, saved)
@@ -330,71 +322,7 @@ def _record_dir() -> Path:
     return Path(raw) if raw else ROOT / "logs"
 
 
-def _block_file() -> Path:
-    """Beside the release folder, so a read-only folder cannot hide a failed rewrite."""
-
-    directory = _record_dir()
-    return directory.parent / f"{directory.name}.blocked"
-
-
-def _blocked_names() -> set[str] | None:
-    path = _block_file()
-    if not path.exists():
-        return set()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    return {line.strip() for line in text.splitlines() if line.strip()}
-
-
-def _write_blocked(names: set[str]) -> None:
-    path = _block_file()
-    if not names:
-        path.unlink(missing_ok=True)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text("\n".join(sorted(names)) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def _block(rel: Path) -> None:
-    names = _blocked_names()
-    if names is None:
-        names = set()
-    names.add(rel.as_posix())
-    try:
-        _write_blocked(names)
-    except OSError:
-        pass
-
-
-def _unblock(rel: Path) -> None:
-    names = _blocked_names()
-    if not names:
-        return
-    names.discard(rel.as_posix())
-    try:
-        _write_blocked(names)
-    except OSError:
-        pass
-
-
-def _is_blocked(filename: str) -> bool:
-    rel = _repo_path(filename)
-    if rel is None:
-        return False
-    if rel.as_posix() in _FAILED:
-        return True
-    names = _blocked_names()
-    if names is None:
-        return True
-    return rel.as_posix() in names
-
-
 def _record_path(rel: Path) -> Path:
-    # quote keeps a__b/x.txt and a/b__x.txt from sharing one file.
     return _record_dir() / (quote(rel.as_posix(), safe="") + ".release.json")
 
 
@@ -428,7 +356,7 @@ def _source_of(result):
 
 def _load(filename: str):
     rel = _repo_path(filename)
-    if rel is None or rel.as_posix() in _FAILED:
+    if rel is None:
         return None
     path = _record_path(rel)
     if not path.is_file():

@@ -35,9 +35,10 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
         # pays nothing and does not raise.
         if not release:
             from pipeline.approve_hold import remember
-            if not remember(state):
+            noted = remember(state, ledger_path)
+            if noted is not True:
                 return _hold_unreadable_ledger(
-                    state, findings, "release record could not be written", release
+                    state, findings, noted or "release record could not be written", release
                 )
         wrote = _write_ledger(state, ledger_path)
         if wrote is False:

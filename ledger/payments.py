@@ -331,3 +331,47 @@ def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     name = path.resolve().as_posix()
     return sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=5)
+
+
+def save_release_sha(ledger, path: str, digest: str | None) -> None:
+    """Upsert the latest release sha. SQLite serializes concurrent writers."""
+
+    connection = sqlite3.connect(ledger, timeout=_LOCK_TIMEOUT, isolation_level=None)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(_CREATE)
+        connection.execute(_UNIQUE)
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS release_records (path TEXT PRIMARY KEY, record_sha TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO release_records (path, record_sha) VALUES (?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET record_sha = excluded.record_sha",
+            (path, digest),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.Error:
+        try:
+            connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        connection.close()
+
+
+def stored_release_sha(ledger, path: str) -> str | None:
+    """The stored sha, or None when the row is missing, NULL, or unreadable."""
+
+    try:
+        name = Path(ledger).resolve().as_posix()
+        connection = sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=_LOCK_TIMEOUT)
+        try:
+            row = connection.execute(
+                "SELECT record_sha FROM release_records WHERE path = ?", (path,)
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    return None if row is None else row[0]
