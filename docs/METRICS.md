@@ -39,3 +39,33 @@ One unseen run hit the tool-call cap on `invoice_2106`. The forced final turn st
 Per-invoice time is wall seconds divided by the invoice count, to two decimal places. Per-invoice cost is the run cost divided by the invoice count, half up to six decimal places. Samples are 20 invoices. Unseen are 21.
 
 Live: 2.85–3.90 s and $0.004923–$0.006428 per invoice. The low time is 57/20. The high time is 82/21. The low cost is $0.098465/20. The high cost is $0.134998/21.
+
+## How often each loop fired
+
+The seven runs above kept only their score and cost lines. The three committed recordings are also live runs: `--record` calls the API and saves every reply. Replaying a recording re-runs the same code on the same replies, so these counts are exact for those three runs. `scripts/loop_stats.py` produces them with no API key.
+
+```bash
+python3 scripts/loop_stats.py --replay recordings/samples.jsonl
+python3 scripts/loop_stats.py --replay recordings/unseen.jsonl --invoices data/extra_invoices
+python3 scripts/loop_stats.py --replay recordings/ordered.jsonl --ordered
+```
+
+| Loop | Samples (20) | Unseen (21) | Ordered (11) |
+|---|---|---|---|
+| Audits run | 7 | 8 | 3 |
+| Audit send-backs | 0 | 0 | 0 |
+| Schema repairs | 0 | 1 | 0 |
+| Critiques run | 0 | 1 | 0 |
+| Critique holds | 0 | 0 | 0 |
+| Fact-guard set-asides | 0 | 2 | 0 |
+| Audit tool calls | 42 | 49 | 17 |
+| Tool calls that affected the verdict | 0 | 0 | 0 |
+| Model retries | 0 | 0 | 0 |
+
+The audit runs only on invoices that validation passed. Every audit in these runs returned PASS, and the model asked for no send-back.
+
+The one schema repair and both set-asides were on `invoice_2106.txt`, the clean $11,500 bill. The critique's first reply failed JSON validation, and the repair turn fixed it. That critique asked for a stricter decision on two claims: the invoice date 2026-04-16 and the due date 2026-05-16 were "after today". Today was 2026-11-01, so the guard set both aside. No concern was left, so the bill stayed an approve and no critique hold was raised. Without the guard, a correct $11,500 approve would have been held.
+
+A tool call counts as affecting the verdict when the audit made it and the verdict was not PASS. None did. As a second check, no tool result disagreed with what code had already checked. No item was uncovered or unknown, no total failed to reconcile, no prior payment or split was found, and no tool returned an error. The tools confirmed the facts the audit was already given. In a single process, validation catches a duplicate or a split before the audit runs. The ledger tool is there for a payment written by another process in between.
+
+One of the seven runs above hit the tool-call cap on `invoice_2106`, and the forced final turn gave the correct outcome. That run was not recorded, so its other counts are not known.
