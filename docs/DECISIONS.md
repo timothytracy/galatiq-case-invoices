@@ -106,6 +106,14 @@ The split and same-text checks run at validation and assume one process at a tim
 
 A revision of a number that has not been paid is still only `REVISED_INVOICE`. On a fresh ledger, `invoice_1004_revised.json` is that case. Once `invoice_1004.json` has been paid, the revision is `DUPLICATE_INVOICE` and the revised-invoice finding stays. The ordered scenario is that second case: the step is a duplicate hold, and the scenario still requires `REVISED_INVOICE` on the finding list.
 
+## Releasing a hold
+
+`approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
+
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` is the list of holds a person may release, with the reason for each. A hold is payable only when every finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. A reject, any reject-class finding, or any other hold is never paid.
+
+The function then checks that the currency is USD, that the amount equals the extracted total, and that the ledger shows no prior payment and no split. Payment goes through the existing one-time authorization and payment step. A locked or corrupt ledger is a `SYSTEM_ERROR` and nothing is paid.
+
 ## Known limitations / cut scope
 
 The payments ledger is the section above. The two gaps that remain are the write-before-the-mock and the single-process split check.

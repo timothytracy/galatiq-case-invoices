@@ -195,7 +195,11 @@ def authorization_key(invoice_path: str, content: str) -> str:
 
 
 def issue_authorization(state: PipelineState) -> PaymentAuthorization | None:
-    """Build the payment sign-off. Only a PASS audit calls this."""
+    """One-time sign-off for this invoice's vendor, total, and currency.
+
+    A PASS audit calls this. A reviewer release calls it only after the hold
+    guards have passed. The payment step checks the three fields again.
+    """
 
     invoice = state.invoice
     if invoice is None or not invoice.vendor or invoice.total is None:
