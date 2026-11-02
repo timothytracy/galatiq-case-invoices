@@ -1,0 +1,255 @@
+{
+  "record": "review_run",
+  "llm": "fake",
+  "invoices": [
+    {
+      "elapsed_seconds": 0.4,
+      "llm": "fake",
+      "result_line": {
+        "record": "result",
+        "file": "invoice_1042.txt",
+        "outcome": "hold",
+        "reason_code": "SYSTEM_ERROR",
+        "action": "Rerun the invoice.",
+        "payment_status": "not_paid",
+        "tool_cap_hit": "rounds",
+        "forced_final_turn": true,
+        "tool_calls": [
+          {
+            "agent": "audit",
+            "round": 1,
+            "attempt": 1,
+            "call_id": "call_1_1",
+            "name": "lookup_item",
+            "arguments": {"item": "WidgetB"},
+            "result": {"item": "WidgetB", "stock": 4, "unit_price": "25.00"},
+            "error": null,
+            "latency_ms": 12
+          },
+          {
+            "agent": "audit",
+            "round": 1,
+            "attempt": 1,
+            "call_id": "call_1_2",
+            "name": "lookup_item",
+            "arguments": {"item": "WidgetB"},
+            "result": {"item": "WidgetB", "stock": 4, "unit_price": "25.00"},
+            "error": null,
+            "latency_ms": 3,
+            "repeat": true
+          },
+          {
+            "agent": "audit",
+            "round": 3,
+            "attempt": 2,
+            "call_id": "call_3_1",
+            "name": "get_policy_rule",
+            "arguments": {"rule": "approval_threshold"},
+            "result": null,
+            "error": "blocked: tool_cap",
+            "latency_ms": 0
+          },
+          {
+            "agent": "audit",
+            "round": 2,
+            "attempt": 1,
+            "call_id": "call_2_1",
+            "name": "recompute_totals",
+            "arguments": {"invoice": "INV-1042"},
+            "result": null,
+            "error": "item not found",
+            "latency_ms": 8
+          },
+          {
+            "agent": "audit",
+            "round": 2,
+            "attempt": 1,
+            "call_id": "call_raw",
+            "name": "lookup_item",
+            "arguments": null,
+            "arguments_raw": "{item: WidgetB}",
+            "result": null,
+            "error": "arguments are not valid JSON",
+            "latency_ms": 1
+          },
+          {"name": "recompute_totals"},
+          {
+            "agent": "audit",
+            "round": 1,
+            "attempt": 1,
+            "call_id": "call_1_3",
+            "name": "get_policy_rule",
+            "arguments": {"rule": "currency"},
+            "result": {"currency": "USD"},
+            "error": null,
+            "latency_ms": 5,
+            "batch_id": "b-9"
+          }
+        ]
+      },
+      "state": {
+        "filename": "invoice_1042.txt",
+        "outcome": "hold",
+        "reason_code": "SYSTEM_ERROR",
+        "action": "Rerun the invoice.",
+        "invoice": {
+          "vendor": "Northwind Supply",
+          "invoice_number": "INV-1042",
+          "currency": "USD",
+          "total": "1800.00",
+          "line_items": []
+        },
+        "decision": {
+          "amount": "1800.00",
+          "currency": "USD",
+          "reasoning": {
+            "conclusion": "The audit stopped when the tool cap was reached."
+          }
+        },
+        "payment": {
+          "status": "not_paid",
+          "detail": "Not paid. The tool cap stopped the audit."
+        },
+        "findings": [
+          {
+            "code": "SYSTEM_ERROR",
+            "message": "Tool cap reached during audit.",
+            "severity": "warning"
+          }
+        ],
+        "logs": [
+          {
+            "record": "stage",
+            "stage": "ingestion",
+            "timestamp": "2026-10-31T00:00:00Z",
+            "result": {
+              "invoice": {
+                "vendor": "Northwind Supply",
+                "total": "1800.00",
+                "currency": "USD"
+              }
+            }
+          },
+          {
+            "record": "stage",
+            "stage": "validation",
+            "timestamp": "2026-10-31T00:00:01Z",
+            "result": {"passed": true, "outcome": "approve"}
+          },
+          {
+            "record": "stage",
+            "stage": "approval",
+            "timestamp": "2026-10-31T00:00:02Z",
+            "result": {"decision": {"decision": "approve"}}
+          },
+          {
+            "record": "stage",
+            "stage": "audit",
+            "timestamp": "2026-10-31T00:00:03Z",
+            "result": {
+              "verdict": "ESCALATE",
+              "outcome": "hold",
+              "trace_id": "t-1",
+              "tool_cap_hit": "rounds",
+              "forced_final_turn": true,
+              "tool_calls": [
+                {
+                  "agent": "audit",
+                  "round": 1,
+                  "attempt": 1,
+                  "call_id": "call_1_1",
+                  "name": "lookup_item",
+                  "arguments": {"item": "WidgetB"},
+                  "result": {"item": "WidgetB", "stock": 4, "unit_price": "25.00"},
+                  "error": null,
+                  "latency_ms": 12
+                },
+                {
+                  "agent": "audit",
+                  "round": 1,
+                  "attempt": 1,
+                  "call_id": "call_1_2",
+                  "name": "lookup_item",
+                  "arguments": {"item": "WidgetB"},
+                  "result": {"item": "WidgetB", "stock": 4, "unit_price": "25.00"},
+                  "error": null,
+                  "latency_ms": 3,
+                  "repeat": true
+                },
+                {
+                  "agent": "audit",
+                  "round": 3,
+                  "attempt": 2,
+                  "call_id": "call_3_1",
+                  "name": "get_policy_rule",
+                  "arguments": {"rule": "approval_threshold"},
+                  "result": null,
+                  "error": "blocked: tool_cap",
+                  "latency_ms": 0
+                },
+                {
+                  "agent": "audit",
+                  "round": 2,
+                  "attempt": 1,
+                  "call_id": "call_2_1",
+                  "name": "recompute_totals",
+                  "arguments": {"invoice": "INV-1042"},
+                  "result": null,
+                  "error": "item not found",
+                  "latency_ms": 8
+                },
+                {
+                  "agent": "audit",
+                  "round": 2,
+                  "attempt": 1,
+                  "call_id": "call_raw",
+                  "name": "lookup_item",
+                  "arguments": null,
+                  "arguments_raw": "{item: WidgetB}",
+                  "result": null,
+                  "error": "arguments are not valid JSON",
+                  "latency_ms": 1
+                },
+                {"name": "recompute_totals"},
+                {
+                  "agent": "audit",
+                  "round": 1,
+                  "attempt": 1,
+                  "call_id": "call_1_3",
+                  "name": "get_policy_rule",
+                  "arguments": {"rule": "currency"},
+                  "result": {"currency": "USD"},
+                  "error": null,
+                  "latency_ms": 5,
+                  "batch_id": "b-9"
+                }
+              ],
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "error_type": "http_429",
+                  "backoff_seconds": 1.0,
+                  "retryable": true,
+                  "queue_id": "q-1",
+                  "tool_calls": [
+                    {
+                      "agent": "audit",
+                      "round": 1,
+                      "attempt": 1,
+                      "call_id": "call_fail_1",
+                      "name": "lookup_item",
+                      "arguments": {"item": "WidgetC"},
+                      "result": {"item": "WidgetC", "stock": 0},
+                      "error": null,
+                      "latency_ms": 20
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

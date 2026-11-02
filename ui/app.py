@@ -36,7 +36,9 @@ st.markdown(
     ".badge{display:inline-block;padding:2px 8px;border-radius:999px;color:#fff;font-size:12px;font-weight:700}"
     ".badge-approve{background:#1f7a4d}.badge-reject,.badge-blocking{background:#9d2c2c}"
     ".badge-hold,.badge-warning{background:#8a5a12}.badge-info,.badge-gray{background:#5c6b73}"
+    ".badge-repeat{background:#3d5a80}.badge-blocked{background:#6b3fa0}"
     ".file{font-weight:600}.sub,.note{color:#555}.reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+    ".tool-call{margin:2px 0 6px}"
     "#MainMenu,footer,div[data-testid='stToolbar']{visibility:hidden}</style>",
     unsafe_allow_html=True,
 )
@@ -159,6 +161,7 @@ def screen_detail(entries: list[dict]) -> None:
         ("Extracted invoice", lambda: _invoice_block(view.get("invoice") or {})),
         ("Findings", lambda: _findings_block(view["findings"])),
         ("Agent trail", lambda: _trail_block(view)),
+        ("Tool calls", lambda: _tool_block(view)),
     ):
         st.subheader(title)
         block()
@@ -256,6 +259,57 @@ def _findings_block(findings: list) -> None:
         f"<td>{escape(item.get('message') or '')}</td></tr>"
         for item in findings
     ])
+
+def _tool_block(view: dict) -> None:
+    shown = view.get("tool_calls") if isinstance(view.get("tool_calls"), dict) else {}
+    for note in shown.get("extras") or []:
+        if note:
+            st.caption(str(note))
+    calls = [call for call in (shown.get("calls") or []) if isinstance(call, dict)]
+    if not calls:
+        st.write("No tool calls.")
+        return
+    for call in calls:
+        with st.container(border=True):
+            st.markdown(_tool_heading(call), unsafe_allow_html=True)
+            if call.get("repeat"):
+                st.caption("Reused an earlier result. This call does not count toward the cap.")
+            if call.get("arguments"):
+                st.caption(f"Arguments: {call['arguments']}")
+            if call.get("arguments_raw"):
+                st.caption(f"Raw arguments: {call['arguments_raw']}")
+            if call.get("extra"):
+                st.caption(str(call["extra"]))
+            detail = str(call.get("detail") or "")
+            if call.get("blocked") and detail:
+                st.warning(detail)
+            elif call.get("error") and detail:
+                st.error(detail)
+            elif detail:
+                st.caption(f"Result: {detail}")
+
+def _tool_heading(call: dict) -> str:
+    bits = []
+    if call.get("who"):
+        bits.append(escape(label(call["who"])))
+    if call.get("round"):
+        bits.append("round " + escape(str(call["round"])))
+    if call.get("attempt"):
+        bits.append("attempt " + escape(str(call["attempt"])))
+    if call.get("name"):
+        bits.append(escape(str(call["name"])))
+    if call.get("latency"):
+        bits.append(escape(str(call["latency"])))
+    title = " · ".join(bits) or "Tool call"
+    markers = []
+    if call.get("repeat"):
+        markers.append(_badge("repeat", "Repeat"))
+    if call.get("blocked"):
+        markers.append(_badge("blocked", "Blocked by cap"))
+    if call.get("failed_attempt"):
+        markers.append(_badge("info", "Failed attempt"))
+    marks = f" {''.join(markers)}" if markers else ""
+    return f"<div class='tool-call file'>{title}{marks}</div>"
 
 def _trail_block(view: dict) -> None:
     trail = agent_trail(view["logs"], view["amount"])
