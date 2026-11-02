@@ -720,3 +720,51 @@ def test_documented_replay_commands_match_the_recording():
         start = readme_replay.index(command, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
     assert "These three were recorded on 2026-11-01 PT." in recorded
+
+
+def _invoices(folder: Path) -> list[Path]:
+    return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix in {".txt", ".pdf", ".json", ".csv", ".xml"})
+
+
+def test_every_provided_invoice_is_recorded_once():
+    from llm_client import GrokClient
+    from pipeline.ingestion import is_recorded
+
+    samples = GrokClient(mode="replay", recording=ROOT / "recordings" / "samples.jsonl")
+    unseen = GrokClient(mode="replay", recording=ROOT / "recordings" / "unseen.jsonl")
+    provided = _invoices(ROOT / "data" / "invoices")
+    extra = _invoices(ROOT / "data" / "extra_invoices")
+    assert len(provided) == 20 and len(extra) == 21
+    assert all(is_recorded(path, samples) for path in provided)
+    assert all(is_recorded(path, unseen) for path in extra)
+    assert not any(is_recorded(path, unseen) for path in provided)
+    assert not any(is_recorded(path, samples) for path in extra)
+    assert samples.usage_summary()["total_tokens"] == 0
+
+
+def test_a_new_invoice_is_not_recorded_and_has_does_not_consume(tmp_path):
+    from llm_client import GrokClient
+    from pipeline.ingestion import is_recorded
+
+    client = GrokClient(mode="replay", recording=ROOT / "recordings" / "samples.jsonl")
+    fresh = write_invoice(tmp_path, "new.txt", "Vendor: New Co\nWidgetA\nTotal: 5.00\n")
+    assert is_recorded(fresh, client) is False
+    assert is_recorded(tmp_path / "missing.txt", client) is False
+    known = ROOT / "data" / "invoices" / "invoice_1001.txt"
+    assert is_recorded(known, client) and is_recorded(known, client)
+
+
+def test_replayed_grok_rejects_the_injection_invoice_2107(tmp_path, db_path):
+    from llm_client import GrokClient
+
+    client = GrokClient(mode="replay", recording=ROOT / "recordings" / "unseen.jsonl")
+    result = run_invoice(
+        ROOT / "data" / "extra_invoices" / "invoice_2107.pdf",
+        db_path,
+        client,
+        as_of=client.as_of,
+        ledger_path=tmp_path / "payments.db",
+    )
+    assert result["outcome"] == "reject"
+    assert result["reason_code"] == "EMBEDDED_INSTRUCTIONS"
+    assert result["payment"].status == "not_paid"

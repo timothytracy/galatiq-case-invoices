@@ -1,4 +1,4 @@
-"""Review screen: fake-LLM runs, saved logs, hold notes, and the Streamlit boot."""
+"""Review screen: replay runs, saved logs, hold notes, and the Streamlit boot."""
 
 import json
 import os
@@ -47,6 +47,7 @@ from ui.runner import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+SAMPLES = ROOT / "recordings" / "samples.jsonl"
 
 
 @pytest.fixture
@@ -56,11 +57,11 @@ def db_path(tmp_path):
     return path
 
 
-def test_fake_llm_run_exposes_pipeline_fields(db_path, monkeypatch):
+def test_replay_run_exposes_pipeline_fields(db_path, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    reject = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path)
-    approve = run_one(ROOT / "data" / "invoices" / "invoice_1010.txt", db_path)
-    hold = run_one(ROOT / "data" / "invoices" / "invoice_1014.xml", db_path)
+    reject = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, replay=SAMPLES)
+    approve = run_one(ROOT / "data" / "invoices" / "invoice_1010.txt", db_path, replay=SAMPLES)
+    hold = run_one(ROOT / "data" / "invoices" / "invoice_1014.xml", db_path, replay=SAMPLES)
 
     rejected = invoice_view(reject)
     assert rejected["outcome"] == "reject"
@@ -111,7 +112,7 @@ def test_fake_llm_run_exposes_pipeline_fields(db_path, monkeypatch):
 
 
 def test_pipeline_log_and_review_run_roundtrip(db_path, tmp_path):
-    entry = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path)
+    entry = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, replay=SAMPLES)
     state = entry["state"]
     log_path = tmp_path / "invoice_1002.txt.json"
     payload = list(state["logs"])
@@ -140,13 +141,13 @@ def test_pipeline_log_and_review_run_roundtrip(db_path, tmp_path):
     again = load_run(saved)[0]
     assert again["state"]["outcome"] == "reject"
     assert again["elapsed_seconds"] == entry["elapsed_seconds"]
-    assert again["llm"] == "fake"
-    assert json.loads(saved.read_text(encoding="utf-8"))["llm"] == "fake"
+    assert again["llm"] == "replay"
+    assert json.loads(saved.read_text(encoding="utf-8"))["llm"] == "replay"
     assert load_run(log_path)[0]["llm"] == "grok"
 
 
 def test_hold_review_does_not_change_the_pipeline_decision(db_path, tmp_path):
-    entry = run_one(ROOT / "data" / "invoices" / "invoice_1014.xml", db_path)
+    entry = run_one(ROOT / "data" / "invoices" / "invoice_1014.xml", db_path, replay=SAMPLES)
     before = json.dumps(entry)
     view = invoice_view(entry)
     path = tmp_path / "hold_reviews.json"
@@ -246,7 +247,7 @@ def test_paid_hold_moves_from_held_to_released():
     }
 
 
-def test_live_mode_uses_the_cli_client_and_offline_does_not(monkeypatch, db_path):
+def test_live_mode_uses_the_cli_client_and_needs_a_mode(monkeypatch, db_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert grok_key_set() is False
     monkeypatch.setenv("XAI_API_KEY", "not-a-real-key")
@@ -269,12 +270,14 @@ def test_live_mode_uses_the_cli_client_and_offline_does_not(monkeypatch, db_path
     assert calls["client"] == "Stub"
     assert calls["kwargs"] == {"ledger_path": PAYMENTS_DB}
     assert entry["llm"] == "grok"
+    with pytest.raises(ValueError, match="live=True or a replay recording"):
+        run_one(ROOT / "data" / "invoices" / "invoice_1001.txt", db_path)
 
 
 def test_screens_do_not_render_empty_literals(db_path, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     entries = [
-        run_one(ROOT / "data" / "invoices" / name, db_path)
+        run_one(ROOT / "data" / "invoices" / name, db_path, replay=SAMPLES)
         for name in ("invoice_1002.txt", "invoice_1010.txt", "invoice_1014.xml")
     ]
     text = "\n".join(_screen_text(entry) for entry in entries)
@@ -305,14 +308,13 @@ def test_review_app_starts(monkeypatch):
     assert "Load run file" in labels
     mode = next(radio for radio in app.sidebar.radio if radio.label == "Mode")
     assert mode.value == "Replay (recorded Grok)"
-    assert "Live (Grok)" in mode.options
-    mode.set_value("Offline (fake LLM)").run()
+    assert list(mode.options) == ["Live (Grok)", "Replay (recorded Grok)"]
 
     app.text_input[0].set_value("data/invoices/invoice_1010.txt").run()
     next(button for button in app.button if button.label == "Process this invoice").click().run()
     assert not app.exception, app.exception
     rendered = _visible(app)
-    assert "This run used Offline (fake LLM)." in rendered
+    assert "This run used Replay (recorded Grok)." in rendered
     assert "null" not in rendered.lower()
     assert "None" not in rendered
     assert "[]" not in rendered
@@ -802,7 +804,7 @@ def test_loaded_run_without_a_record_is_refused(monkeypatch, tmp_path):
     assert "SEND_BACK_CAP_MESSAGE" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
 
 
-def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatch, tmp_path):
+def test_replay_process_writes_a_release_record_and_can_pay(db_path, monkeypatch, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert Path.cwd().resolve() == ROOT.resolve()
     releases = tmp_path / "releases"
@@ -814,17 +816,17 @@ def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatc
     ledger = temporary_ledger()
     assert not is_real_payments_db(ledger)
     held = run_one(
-        ROOT / "data" / "invoices" / "invoice_1012.txt", db_path, live=False, ledger_path=ledger,
+        ROOT / "data" / "invoices" / "invoice_1012.txt", db_path, replay=SAMPLES, ledger_path=ledger,
     )
     state = saved_result(held)
-    assert held["llm"] == "fake"
+    assert held["llm"] == "replay"
     assert state["outcome"] == "hold"
-    assert str(extracted_total(state)) == "9975.00"
+    assert Decimal(str(extracted_total(state))) == Decimal("9975.00")
     written = list(releases.glob("*.release.json"))
     assert len(written) == 1
     record = json.loads(written[0].read_text(encoding="utf-8"))
     assert record["record"] == "release"
-    assert str(record["invoice"]["total"]) == "9975.00"
+    assert Decimal(str(record["invoice"]["total"])) == Decimal("9975.00")
     after = {path.name for path in logs.glob("*.release.json")} if logs.is_dir() else set()
     assert after == before
     assert held["ledger_path"] == str(ledger)
@@ -844,7 +846,7 @@ def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatc
     number = state["invoice"]["invoice_number"]
     assert again["reason"] == f"Invoice {number} from this vendor is already paid."
     rejected = run_one(
-        ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, live=False, ledger_path=ledger,
+        ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, replay=SAMPLES, ledger_path=ledger,
     )
     assert saved_result(rejected)["outcome"] == "reject"
     unpaid = approve_and_pay(
@@ -889,7 +891,7 @@ def test_pay_action_is_only_for_review_holds():
     assert [view["file"] for view in queued] == ["held.txt", "euros.txt"]
 
 
-def test_offline_run_does_not_write_payments_db(db_path, monkeypatch, tmp_path):
+def test_replay_run_does_not_write_payments_db(db_path, monkeypatch, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     real = ROOT / "payments.db"
@@ -903,9 +905,9 @@ def test_offline_run_does_not_write_payments_db(db_path, monkeypatch, tmp_path):
         return path
 
     monkeypatch.setattr("ui.runner.temporary_ledger", spy)
-    entry = run_one(ROOT / "data" / "invoices" / "invoice_1010.txt", db_path, live=False)
+    entry = run_one(ROOT / "data" / "invoices" / "invoice_1010.txt", db_path, replay=SAMPLES)
     assert entry["state"]["outcome"] == "approve"
-    assert entry["llm"] == "fake"
+    assert entry["llm"] == "replay"
     assert created
     ledger = created[0]
     assert entry["ledger_path"] == str(ledger)
@@ -931,7 +933,7 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     )
     blocked = _review_hold("blocked.txt", "40.00", "USD", "NON_USD", "Non-USD currency (USD).")
     reject = _entry("reject", "80.00", "USD", 1.0, "rejected.txt")
-    reject["llm"] = "fake"
+    reject["llm"] = "replay"
     run_path = tmp_path / "review_run.json"
     save_run(run_path, [payable, refused, blocked, reject])
 
@@ -940,7 +942,6 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     assert not app.exception, app.exception
     mode = next(radio for radio in app.sidebar.radio if radio.label == "Mode")
     assert mode.value == "Replay (recorded Grok)"
-    mode.set_value("Offline (fake LLM)").run()
     run_file = next(item for item in app.text_input if item.label == "Run file")
     run_file.set_value(str(run_path)).run()
     next(button for button in app.button if button.label == "Load run file").click().run()
@@ -1066,7 +1067,7 @@ def test_processing_the_same_invoice_twice_matches(monkeypatch):
     assert "authorization key was already used" not in body
 
 
-def test_replay_mode_lists_recordings_and_runs_offline(monkeypatch):
+def test_replay_mode_lists_recordings_and_runs_without_a_key(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     names = [path.name for path in recording_files()]
     assert {"ordered.jsonl", "samples.jsonl", "unseen.jsonl"} <= set(names)
@@ -1091,10 +1092,24 @@ def test_replay_mode_lists_recordings_and_runs_offline(monkeypatch):
     assert not is_real_payments_db(played["ledger_path"])
     assert os.environ.get("XAI_MODE") != "replay"
     assert not os.environ.get("XAI_API_KEY", "").strip()
+    assert "No XAI_API_KEY set. Using replay" in visible
+
+
+def test_replay_stops_before_running_an_unrecorded_invoice(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    created = []
+    monkeypatch.setattr("ui.runner.temporary_ledger", lambda: created.append(1))
+    ran = []
+    monkeypatch.setattr("ui.runner.run_invoice", lambda *args, **kwargs: ran.append(args))
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
     _process_path(app, "data/extra_invoices/invoice_2108.txt")
-    missed = _visible(app)
-    assert "replay miss" in missed.lower()
-    assert "no recording for fingerprint" in missed
+    shown = _visible(app)
+    assert "invoice_2108.txt is not in the recordings. Processing a new invoice needs XAI_API_KEY." in shown
+    assert "replay miss" not in shown.lower()
+    assert not app.session_state["entries"]
+    assert not ran
+    assert not created
 
 
 def test_load_run_skips_release_records(tmp_path):
@@ -1249,7 +1264,7 @@ def _visible(app) -> str:
 
 def _review_hold(filename, total, currency, code, message):
     entry = _entry("hold", total, currency, 0.2, filename)
-    entry["llm"] = "fake"
+    entry["llm"] = "replay"
     entry["state"]["reason_code"] = code
     entry["state"]["action"] = "Confirm with the vendor."
     entry["state"]["raw_text"] = f"{filename}\nWidgetA\n"

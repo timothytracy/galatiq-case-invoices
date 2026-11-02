@@ -192,6 +192,11 @@ class ReplayStore:
         if self.as_of is None:
             raise ValueError(f"recording header has no as_of date: {path}")
 
+    def has(self, fingerprint: str) -> bool:
+        """True when an answer is still queued. Does not consume it."""
+
+        return bool(self._queues.get(fingerprint))
+
     def take(self, fingerprint: str) -> dict | None:
         """The next saved answer, or None when this fingerprint was not recorded."""
 

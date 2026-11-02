@@ -1,4 +1,4 @@
-"""Offline demo: pay one hold and refuse one reject. No model call.
+"""Replay demo: pay one hold and refuse one reject. No model call.
 
     python3 scripts/approve_hold_demo.py --demo
 """
@@ -24,7 +24,7 @@ from pipeline.approve_hold import approve_and_pay  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Approve a held invoice for payment.")
-    parser.add_argument("--demo", action="store_true", help="Run two offline invoices, then release them.")
+    parser.add_argument("--demo", action="store_true", help="Replay two recorded invoices, then release them.")
     args = parser.parse_args(argv)
     if not args.demo:
         print("Pass --demo.", file=sys.stderr)
@@ -42,8 +42,8 @@ def _run_demo() -> int:
     previous = os.environ.get("INVOICE_RELEASE_DIR")
     os.environ["INVOICE_RELEASE_DIR"] = str(records)
     try:
-        hold = _offline(ROOT / "data" / "invoices" / "invoice_1012.txt", ledger)
-        rejected = _offline(ROOT / "data" / "invoices" / "invoice_1002.txt", ledger)
+        hold = _replay(ROOT / "data" / "invoices" / "invoice_1012.txt", ledger)
+        rejected = _replay(ROOT / "data" / "invoices" / "invoice_1002.txt", ledger)
         first = approve_and_pay(
             hold, reviewer="Avery Chen", note="Confirmed this is the same company.",
             amount=hold["invoice"].total, ledger_path=ledger, log_path=log,
@@ -65,7 +65,7 @@ def _run_demo() -> int:
     return 0 if first["result"] == "paid" and second["result"] == "held" else 1
 
 
-def _offline(path: Path, ledger: Path):
+def _replay(path: Path, ledger: Path):
     """Replay one saved invoice. No test double and no API key."""
 
     database = ensure_inventory_db(inventory_db_path())

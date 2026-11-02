@@ -346,24 +346,3 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
                 assert "Likely meant" not in assessed.reason
                 assert "Likely meant" not in result["decision"].reasoning.conclusion
     assert seen == 41
-
-
-def test_offline_2107_matches_the_live_reject(db_path):
-    """Offline extraction flags the injected instructions, so 2107 is rejected and unpaid."""
-
-    path = ROOT / "data" / "extra_invoices" / "invoice_2107.pdf"
-    expected = load_answer_key(ROOT / "data" / "extra_answer_key.json")[
-        "data/extra_invoices/invoice_2107.pdf"
-    ]
-    result = run_invoice(
-        path,
-        db_path,
-        FakeLLM(handler_for(path)),
-        clock=FakeClock(),
-        rng=ZeroRandom(),
-        max_attempts=5,
-    )
-    row = grade(result, expected)
-    assert row["outcome_ok"] and row["reason_ok"], row
-    assert result["reason_code"] == "EMBEDDED_INSTRUCTIONS"
-    assert result["payment"].status == "not_paid"

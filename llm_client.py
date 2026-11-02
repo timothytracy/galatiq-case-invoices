@@ -53,6 +53,10 @@ _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
     "(see .env.example). The pipeline does not run without a key."
 )
+REPLAY_NOTICE = (
+    "No XAI_API_KEY set. Using replay (recorded Grok runs). Set XAI_API_KEY to run live."
+)
+NEEDS_KEY = "{file} is not in the recordings. Processing a new invoice needs XAI_API_KEY."
 
 
 class MissingAPIKey(RuntimeError):
@@ -94,6 +98,13 @@ def load_dotenv(path: Path | None = None) -> None:
         value = value.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
+
+
+def key_available() -> bool:
+    """True when a live client would start. Reads .env first."""
+
+    load_dotenv()
+    return bool(os.environ.get("XAI_API_KEY", "").strip())
 
 
 def read_max_attempts() -> int:
@@ -474,6 +485,21 @@ class GrokClient:
             return _message_text(message.content)
         calls = [_read_tool_call(item) for item in (message.tool_calls or [])]
         return {"content": _message_text(message.content), "tool_calls": calls}
+
+    def has_answer(self, messages: list[dict]) -> bool:
+        """Replay only. True when request(messages) would be answered from the file."""
+
+        if self._replay is None:
+            return False
+        fingerprint = request_fingerprint(
+            model=self.model,
+            messages=messages,
+            tools=None,
+            tool_choice=None,
+            response_format=None,
+            temperature=0,
+        )
+        return self._replay.has(fingerprint)
 
     def _replay_answer(self, messages, tools, tool_choice, as_text: bool):
         fingerprint = request_fingerprint(

@@ -93,6 +93,7 @@ When we tried Grok lookup tools on the critique in [PR #20](https://github.com/t
 | Multi-process safety | Two workers could each pay half of a split invoice. The prototype runs one process at a time. | A database lock or queue around the split check and payment. |
 | Auth and a shared review queue | The brief says run locally. Review notes are local files. | Sign-in, roles, and a durable queue so a release is attributed to a person. |
 | A dedicated fraud agent | Fraud signals are caught by validation rules and the approval and critique steps, which covers every fraud case in this data. A separate agent was not needed for an MVP. | A fraud agent with its own prompt, tools, and labeled set, so it can be evaluated and improved without touching the rest of the pipeline. |
+| Offline mode (fake model) | Not in the brief, and replay already runs every provided invoice with no key. The fake model stays as a test fixture. | None. |
 | Memory from human reviews | Each run starts fresh. A reviewer's decision and note are recorded, but the agents never read them. | When a reviewer resolves a hold with a justification, they choose whether the agents should remember it. A kept lesson, such as a confirmed vendor rename, goes into the context of later runs. |
 
 Duplicate detection almost made this list. At first I judged each invoice file on its own content and listed duplicates as a known limitation. Then I thought about what that means in practice: a system that pays every invoice it is shown pays the same bill twice whenever a vendor resends it, sends it in another format, or sends a revised copy, and over time that loses real money. So I built a lasting payments ledger instead. Validation checks it on arrival for an exact duplicate, the same invoice in a different format, a revision, or a split, where invoices under $10,000 from one vendor within 30 days add up to more than that. Any match is a hold, not a second payment. The audit step can read the same ledger before payment, and a unique index on vendor and invoice number blocks a second payment even if both checks miss.
@@ -132,9 +133,9 @@ cp .env.example .env
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 ```
 
-The review screen is `streamlit run ui/app.py`. With no API key it starts in Replay mode, which answers from the recorded Grok run. Offline mode, which uses a fake model on the deterministic parse, also needs no key.
+The review screen is `streamlit run ui/app.py`. With no key it uses replay, which covers every provided invoice. A new invoice needs `XAI_API_KEY`.
 
-A reviewer releases a hold with `approve_and_pay`. This demo runs the offline pipeline on two files, then tries to release each. It uses a temporary ledger and does not call the model.
+A reviewer releases a hold with `approve_and_pay`. This demo replays two recorded invoices, then tries to release each. It uses a temporary ledger and does not call the model.
 
 ```bash
 python3 scripts/approve_hold_demo.py --demo

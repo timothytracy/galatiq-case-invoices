@@ -1,10 +1,10 @@
 {
   "record": "review_run",
-  "llm": "fake",
+  "llm": "replay",
   "invoices": [
     {
       "elapsed_seconds": 0.4,
-      "llm": "fake",
+      "llm": "replay",
       "result_line": {
         "record": "result",
         "file": "invoice_1042.txt",
