@@ -235,7 +235,7 @@ On a successful critique, the decision becomes a hold when the model sets `stric
 
 `pipeline/audit.py` asks Grok for `PASS`, `SEND_BACK`, or `ESCALATE`, plus feedback, notes, and `cited_codes`. Python will not loosen the result. The prompt still includes `verified_by_code`. Critique is not given tools.
 
-Pending approval. Audit tools are on by default. Unset, empty, or `1` leaves them on. `0`, `false`, `off`, and `no` turn them off. When they are on, audit may call three read-only tools before that verdict. They are bound to the current invoice and the stock snapshot audit already loaded. They do not open the database, and they do not decide or pay. Code still decides, and payment still needs an audit PASS.
+Pending approval. Audit tools are on by default. Unset, empty, `1`, `true`, `yes`, and `on` leave them on, decided on 2026-11-01. `0`, `false`, `off`, and `no` turn them off. When they are on, audit may call three read-only tools before that verdict. They are bound to the current invoice and the stock snapshot audit already loaded. They do not open the database, and they do not decide or pay. Code still decides, and payment still needs an audit PASS.
 
 - `lookup_item(item)` returns the item, the inventory spelling, available stock, the summed quantity this invoice requests, whether that quantity is covered, and the USD reference price from `policy.toml`. The name fold is the one the fact guard uses: case, spaces, and hyphens. An unknown item is an error, `unknown item: X`, and the item is not corrected.
 - `recompute_totals()` takes no arguments. It returns whether `math_reconciles` is true, the printed total, and the `TOTAL_MISMATCH` messages from `collect_findings`.

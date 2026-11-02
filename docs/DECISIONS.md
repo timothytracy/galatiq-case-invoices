@@ -45,7 +45,7 @@ There is no durable work list and no extra database table. When the attempts are
 
 When `XAI_TOOLS` is on, a hit on the audit's 3-round or 8-call cap does not hold immediately. The step gets one plain model call with no tools, using the tool results already gathered and the verified facts, and asks for the verdict. The cap has already spent the budget, so that reply is the last chance. An API error, or a schema failure after the normal repair, is a `SYSTEM_ERROR` hold and nothing is paid. That bound keeps cost and latency from growing. Approved on 2026-11-01.
 
-Pending approval. Audit tools are on by default. Unset, empty, and `1` leave them on. `0`, `false`, `off`, and `no` turn them off and restore the previous audit request. Critique does not get tools.
+Pending approval. Audit tools are on by default. Unset, empty, `1`, `true`, `yes`, and `on` leave them on, decided on 2026-11-01. `0`, `false`, `off`, and `no` turn them off and restore the previous audit request. Critique does not get tools.
 
 Pending approval. When the audit tools (XAI_TOOLS) are in use, audit may also call `check_payment_ledger`. Critique does not get tools.
 

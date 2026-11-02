@@ -5,8 +5,9 @@ errors, and JSON that is still invalid after the schema repair are retried.
 Other 4xx errors are not.
 
 XAI_TOOLS defaults on for audit. request() never sends tools. tool_request()
-sends them unless the value is 0, false, off, or no. Any other token raises
-ModeError at startup. Critique does not call tool_request.
+sends them for unset, empty, 1, true, yes, and on. 0, false, off, and no
+turn them off. Any other token raises ModeError at startup. Critique does
+not call tool_request.
 
 XAI_MODE is live (default), record, or replay. Live sends the same payload
 as before and does not open a recording. Record appends each reply after
@@ -46,7 +47,7 @@ TOOL_ROUND_CAP = 3
 TOOL_CALL_CAP = 8
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
 _TOOLS_OFF = frozenset({"0", "false", "off", "no"})
-_TOOLS_ON = frozenset({"", "1"})
+_TOOLS_ON = frozenset({"", "1", "true", "yes", "on"})
 
 _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
@@ -125,8 +126,8 @@ def read_max_attempts() -> int:
 def tools_enabled() -> bool:
     """Audit tools default on. 0, false, off, and no turn them off.
 
-    The value is stripped and case-folded. Unset, empty, and 1 are on.
-    Any other token raises ModeError. The tools-off request is unchanged.
+    The value is stripped and case-folded. Unset, empty, 1, true, yes, and
+    on are on. Any other token raises ModeError. The request bytes are unchanged.
     """
 
     raw = os.environ.get("XAI_TOOLS")
@@ -139,7 +140,7 @@ def tools_enabled() -> bool:
         return True
     raise ModeError(
         f"XAI_TOOLS={value!r} is not recognized. "
-        "Unset, empty, and 1 turn audit tools on. "
+        "Unset, empty, 1, true, yes, and on turn audit tools on. "
         "0, false, off, and no turn them off."
     )
 

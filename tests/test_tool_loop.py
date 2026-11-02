@@ -848,7 +848,7 @@ def test_off_values_match_the_plain_request(monkeypatch):
     for sent in captured[1:]:
         assert _canon(sent) == plain
     on = []
-    for value in (None, "", "   ", "1", " 1 "):
+    for value in (None, "", "   ", "1", " 1 ", "true", "yes", "on"):
         if value is None:
             monkeypatch.delenv("XAI_TOOLS", raising=False)
         else:
@@ -857,7 +857,8 @@ def test_off_values_match_the_plain_request(monkeypatch):
             [{"role": "user", "content": "Return a JSON object."}]
         )
         on.append(_canon(captured[-1]))
-    assert on[0] == on[1] == on[2] == on[3] == on[4]
+    assert len(on) == 8
+    assert len(set(on)) == 1
     assert captured[-1]["tools"] == example_registry().schemas()
     assert captured[-1]["tool_choice"] == "auto"
     assert on[0] != plain
@@ -880,7 +881,10 @@ def test_flag_off_sends_no_tools(value, monkeypatch):
     assert model.steps[0]["tool_calls"]
 
 
-@pytest.mark.parametrize("value", [None, "", "   ", "1", " 1 ", "1\n"])
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "   ", "1", " 1 ", "1\n", "true", "TRUE", " true ", "yes", "Yes", " yes ", "on", "ON", " on "],
+)
 def test_on_values_leave_tools_on(value, monkeypatch):
     if value is None:
         monkeypatch.delenv("XAI_TOOLS", raising=False)
@@ -896,7 +900,7 @@ def test_on_values_leave_tools_on(value, monkeypatch):
     assert model.tool_requests[0]["tools"] == example_registry().schemas()
 
 
-@pytest.mark.parametrize("value", ["true", "yes", "on", "TRUE", "2", "00", "0.0", "maybe"])
+@pytest.mark.parametrize("value", ["2", "00", "0.0", "maybe"])
 def test_unrecognized_xai_tools_is_an_error(value, monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", value)
     with pytest.raises(ModeError) as caught:
@@ -904,6 +908,7 @@ def test_unrecognized_xai_tools_is_an_error(value, monkeypatch):
     message = str(caught.value)
     assert value.strip().lower() in message
     assert "0, false, off, and no" in message
+    assert "true, yes, and on" in message
 
 
 def test_unrecognized_xai_tools_stops_before_any_invoice(tmp_path, monkeypatch, capsys):
@@ -921,7 +926,7 @@ def test_unrecognized_xai_tools_stops_before_any_invoice(tmp_path, monkeypatch, 
     assert "score" not in captured.out
 
 
-@pytest.mark.parametrize("value", ["1", " 1 "])
+@pytest.mark.parametrize("value", ["1", " 1 ", "true", "yes", "on"])
 def test_flag_on_sends_tools_on_the_wire(value, monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", value)
     captured = []
