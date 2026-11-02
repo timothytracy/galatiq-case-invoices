@@ -4,11 +4,10 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from decision.outcome import PAYABLE_HOLD_CODES, review_release_block
+from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
 from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
-from main import payment_status
 
 OUTCOMES = ("approve", "reject", "hold")
 TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")

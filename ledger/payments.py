@@ -27,7 +27,7 @@ from typing import NamedTuple
 
 from models import ExtractedInvoice, Finding, SourceInfo
 
-from decision.findings import _is_revised, parse_printed_date
+from decision.findings import is_revised, parse_printed_date
 from decision.invoice_fields import different, normalize_invoice_number, show_money
 from decision.policy import POLICY
 from timestamps import utc_stamp
@@ -377,7 +377,7 @@ def _duplicate_finding(
 def _same_key_message(invoice: ExtractedInvoice, raw_text: str, row: PaymentRow) -> str:
     """Same vendor and invoice number, different text. Say which case it is."""
 
-    revised = _is_revised(invoice, raw_text or "")
+    revised = is_revised(invoice, raw_text or "")
     totals_differ = invoice.total is None or different(invoice.total, Decimal(row.total))
     if revised or totals_differ:
         if revised and totals_differ:

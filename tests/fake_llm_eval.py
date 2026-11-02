@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from db import ensure_inventory_db
 from decision.findings import injection_phrase
 from graph import run_invoice
-from main import payment_status
+from decision.outcome import payment_status
 from parsers import SUFFIXES, parse_file
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 

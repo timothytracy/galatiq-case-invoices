@@ -145,7 +145,7 @@ def collect_findings(
     # Empty source text fails closed. Every reader supplies text; a missing one holds.
     # The line is not rewritten.
     for line in invoice.line_items:
-        if _name_in_source(line.item, raw_text):
+        if name_in_source(line.item, raw_text):
             continue
         findings.append(
             _finding(
@@ -158,7 +158,7 @@ def collect_findings(
     findings.extend(_math_findings(invoice))
     if currency not in POLICY.allowed_currencies:
         findings.append(_finding("NON_USD", non_usd_message(currency), item="currency"))
-    if _is_revised(invoice, raw_text):
+    if is_revised(invoice, raw_text):
         findings.append(_finding("REVISED_INVOICE", "This invoice is marked as a revision."))
 
     blob = _blob(raw_text, invoice.vendor, invoice.notes, invoice.payment_terms)
@@ -327,7 +327,7 @@ def evidence_lines(
     return lines
 
 
-def _name_in_source(name: str, raw_text: str | None) -> bool:
+def name_in_source(name: str, raw_text: str | None) -> bool:
     """True when the base item name appears in the source text.
 
     Both sides go through item_key, so case, spaces, and hyphens do not matter.
@@ -409,7 +409,7 @@ def _has_negative_amount(invoice: ExtractedInvoice) -> bool:
     )
 
 
-def _is_revised(invoice: ExtractedInvoice, raw_text: str) -> bool:
+def is_revised(invoice: ExtractedInvoice, raw_text: str) -> bool:
     if invoice.revision and invoice.revision.strip():
         return True
     blob = _blob(raw_text, invoice.notes)

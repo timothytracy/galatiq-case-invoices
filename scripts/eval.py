@@ -34,8 +34,7 @@ from llm_client import (  # noqa: E402
     begin_client,
     resolve_run_mode,
 )
-from main import payment_status, tool_calls_of  # noqa: E402
-from decision.outcome import result_codes  # noqa: E402
+from decision.outcome import payment_status, result_codes, tool_calls_of  # noqa: E402
 from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
 from parsers import SUFFIXES  # noqa: E402
 

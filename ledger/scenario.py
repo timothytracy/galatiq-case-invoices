@@ -5,7 +5,7 @@ from pathlib import Path
 
 from graph import run_invoice
 from ledger.payments import paid_rows
-from main import payment_status, tool_calls_of
+from decision.outcome import payment_status, tool_calls_of
 from decision.outcome import result_codes
 
 ROOT = Path(__file__).resolve().parents[1]

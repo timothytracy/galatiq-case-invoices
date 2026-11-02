@@ -1,5 +1,7 @@
 """Which finding wins. Reject over hold over approve."""
 
+from pathlib import Path
+
 from models import Finding, Outcome
 
 # Most fundamental data problem first: a bad quantity, then a missing field, then identity, stock, and math. Embedded instructions are a security reject and come first.
@@ -139,6 +141,57 @@ def result_codes(result: dict) -> list[str]:
     return finding_codes(result.get("findings") or [])
 
 
+def result_line(path: Path, result: dict) -> dict:
+    line = {
+        "record": "result",
+        "file": path.name,
+        "outcome": result.get("outcome"),
+        "reason_code": result.get("reason_code"),
+        "action": result.get("action"),
+        "payment_status": payment_status(result),
+        "codes": result_codes(result),
+    }
+    calls = tool_calls_of(result)
+    if calls:
+        line["tool_calls"] = calls
+    for row in reversed(result.get("logs") or []):
+        if not isinstance(row, dict) or row.get("stage") != "audit":
+            continue
+        body = row.get("result") or {}
+        if body.get("tool_cap_hit"):
+            line["tool_cap_hit"] = body["tool_cap_hit"]
+        if body.get("forced_final_turn"):
+            line["forced_final_turn"] = True
+        break
+    return line
+
+
+def tool_calls_of(result: dict) -> list:
+    """Tool calls recorded on stage results. Empty when a stage made none.
+
+    Audit stores them on logs[].result.tool_calls where stage is audit. The
+    result line copies that list. A missing key means the stage made no tool call.
+    """
+
+    calls = []
+    for row in result.get("logs") or []:
+        if not isinstance(row, dict):
+            continue
+        body = row.get("result")
+        if isinstance(body, dict) and body.get("tool_calls"):
+            calls.extend(body["tool_calls"])
+    return calls
+
+
+def payment_status(result: dict) -> str:
+    payment = result.get("payment")
+    if payment is None:
+        return "not_paid"
+    if isinstance(payment, dict):
+        return payment.get("status", "not_paid")
+    return payment.status
+
+
 def _capped(finding) -> bool:
     """The flag or the recorded cap sentence. Dropping the flag is not enough."""
 
@@ -153,7 +206,7 @@ def _capped(finding) -> bool:
     return marked or message == SEND_BACK_CAP_MESSAGE
 
 
-def _blocks_release(code: str, finding=None) -> bool:
+def blocks_release(code: str, finding=None) -> bool:
     """True when this code keeps a reviewer from paying."""
 
     if _capped(finding):
@@ -182,9 +235,9 @@ def review_release_block(
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
     for finding, code in zip(findings, codes):
-        if _blocks_release(code, finding):
+        if blocks_release(code, finding):
             return f"{code} is not a review hold and is never paid."
-    if reason_code and _blocks_release(reason_code):
+    if reason_code and blocks_release(reason_code):
         return f"{reason_code} is not a review hold and is never paid."
     if any(code in PAYABLE_HOLD_CODES for code in codes) or codes.count("FRAUD_SIGNAL") >= 2:
         return None

@@ -9,7 +9,7 @@ import pytest
 
 from db import create_database, load_stock
 from graph import route_after_audit, run_invoice
-from main import _result_line, tool_calls_of
+from decision.outcome import result_line, tool_calls_of
 from pipeline import audit
 from pipeline.audit import LEDGER_LINE, TOOLS_LINE
 from pipeline.payment import payment
@@ -135,7 +135,7 @@ def test_audit_pass_with_tools_pays(db_path, monkeypatch):
     assert route_after_audit(stopped) == "payment"
     paid = payment(stopped)
     assert paid["payment"].status == "paid"
-    line = _result_line(Path("x.txt"), out)
+    line = result_line(Path("x.txt"), out)
     assert line["tool_calls"] == tool_calls_of(out) == calls
     assert "tool_cap_hit" not in line
     assert "forced_final_turn" not in line

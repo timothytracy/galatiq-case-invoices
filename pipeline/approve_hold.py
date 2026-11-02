@@ -20,7 +20,7 @@ from db import ensure_inventory_db, inventory_db_path, log_dir, payments_db_path
 from models import ExtractedInvoice, Finding, PipelineState
 from pipeline.audit import amount_in_text, issue_authorization
 from pipeline.payment import payment
-from decision.findings import _name_in_source
+from decision.findings import name_in_source
 from decision.invoice_fields import non_usd_message
 from decision.outcome import review_release_block
 from decision.policy import POLICY
@@ -218,10 +218,10 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
 def _fresh_block_code(fresh) -> str | None:
     """The first recheck code that blocks a release. None when nothing new blocks."""
 
-    from decision.outcome import _blocks_release, finding_codes
+    from decision.outcome import blocks_release, finding_codes
 
     for finding, code in zip(fresh, finding_codes(fresh)):
-        if _blocks_release(code, finding):
+        if blocks_release(code, finding):
             return code
     return None
 
@@ -290,7 +290,7 @@ def _grounded(invoice: ExtractedInvoice, raw: str) -> bool:
     for line in invoice.line_items:
         shown = format(line.quantity, "f")
         qty = shown.rstrip("0").rstrip(".") if "." in shown else shown
-        if not _name_in_source(line.item, raw) or not re.search(rf"(?<!\d){re.escape(qty)}(?!\d)", raw):
+        if not name_in_source(line.item, raw) or not re.search(rf"(?<!\d){re.escape(qty)}(?!\d)", raw):
             return False
     return True
 

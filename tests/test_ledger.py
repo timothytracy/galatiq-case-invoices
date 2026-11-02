@@ -20,7 +20,8 @@ from db import create_database
 from graph import run_invoice
 from ledger import arrival_findings, paid_rows, record_payment, vendor_key
 from ledger.scenario import run_scenario
-from main import main, payment_status
+from decision.outcome import payment_status
+from main import main
 from models import (
     ApprovalDecision,
     ApprovalReasoning,

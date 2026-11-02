@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from db import create_database
 from graph import route_after_audit, run_invoice
-from main import _result_line
+from decision.outcome import result_line
 from llm_client import (
     TOOL_CALL_CAP,
     TOOL_ROUND_CAP,
@@ -435,7 +435,7 @@ def test_round_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     assert final["messages"][-1]["content"].startswith("The tool cap is reached.")
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
     assert len(model.requests) == 1
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
     stopped = _payable_state().model_copy(
@@ -476,7 +476,7 @@ def test_call_cap_then_a_bad_final_answer_holds_without_payment(db_path, monkeyp
     assert len(model.requests) == 2
     assert all("tools" not in sent and "tool_choice" not in sent for sent in model.requests)
     assert model.requests[1]["messages"][-1]["content"].startswith("The JSON failed validation:")
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "calls"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
@@ -500,7 +500,7 @@ def test_calls_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     stage = next(row for row in out["logs"] if row["stage"] == "audit")
     assert stage["result"]["tool_cap_hit"] == "calls"
     assert stage["result"]["forced_final_turn"] is True
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "calls"
     assert line["forced_final_turn"] is True
     stopped = _payable_state().model_copy(
@@ -527,7 +527,7 @@ def test_rounds_cap_then_a_bad_final_answer_holds_without_payment(db_path, monke
     stage = next(row for row in out["logs"] if row["stage"] == "audit")
     assert stage["result"]["tool_cap_hit"] == "rounds"
     assert stage["result"]["forced_final_turn"] is True
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
@@ -546,7 +546,7 @@ def test_api_error_on_the_final_turn_is_a_hold_without_retry(db_path, monkeypatc
     assert "tools" not in model.requests[0]
     assert "tool_choice" not in model.requests[0]
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
