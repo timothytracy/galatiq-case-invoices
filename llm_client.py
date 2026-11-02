@@ -5,7 +5,8 @@ errors, and JSON that is still invalid after the schema repair are retried.
 Other 4xx errors are not.
 
 XAI_TOOLS defaults off. request() never sends tools. tool_request() sends
-them only when that flag is on. No agent calls tool_request() yet.
+them only when that flag is on. Audit calls tool_request when the flag is on.
+Critique does not.
 """
 
 import json
@@ -153,12 +154,20 @@ def parse_json_object(text: str) -> dict:
 
 
 def structured_call(request, messages: list[dict], schema: type[BaseModel], check=None) -> BaseModel:
-    """One repair turn if the JSON does not validate. check may raise LLMError."""
+    """One repair turn if the JSON does not validate. check may raise LLMError.
+
+    A tool step's repair() is a plain completion: no tools, so it cannot spend
+    the tool budget. Any other request is called the same way on both turns.
+    """
 
     conversation = list(messages)
     error_text = "empty response"
-    for _ in range(SCHEMA_REPAIR_LIMIT):
-        text = request(conversation)
+    plain = getattr(request, "repair", None)
+    for turn in range(SCHEMA_REPAIR_LIMIT):
+        if turn and plain is not None:
+            text = plain(conversation)
+        else:
+            text = request(conversation)
         try:
             parsed = schema.model_validate(parse_json_object(text))
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
@@ -178,6 +187,16 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
         if check is not None:
             check(parsed)
         return parsed
+    # The cap already spent the tool budget, so this plain answer is the last
+    # chance. A schema failure after the one repair is a hold and is not
+    # retried. That keeps cost and latency bounded.
+    if getattr(request, "forced_final_turn", False):
+        raise LLMError(
+            "malformed_output",
+            False,
+            error_text,
+            log={"tool_calls": list(request.log)},
+        )
     raise LLMError("malformed_output", True, error_text)
 
 
@@ -285,27 +304,44 @@ class GrokClient:
 class ToolStep:
     """Caps and the tool log for one agent step.
 
-    The repair turn and every retry share the counts. A new tool_request()
-    starts at zero. Reusing this callable does too: call_with_retries calls
-    set_attempt(1) at the start of the next step.
+    Retries share the counts. set_attempt(1) starts a new step.
+    The schema repair goes through repair(), which sends no tools.
+    An audit cap takes one plain final turn instead of failing immediately.
     """
 
-    def __init__(self, llm, registry, tool_log: list | None = None) -> None:
+    def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
         self.llm = llm
         self.registry = registry
+        self.agent = agent
         self.log = [] if tool_log is None else tool_log
         self.rounds = 0
         self.calls = 0
         self.attempt = 1
+        self.cap_hit = None
+        self.forced_final_turn = False
 
     def set_attempt(self, attempt: int) -> None:
         """call_with_retries reports the attempt. 1 starts a step. A retry does not."""
 
-        if attempt == 1 and (self.rounds or self.calls):
-            self.rounds = 0
-            self.calls = 0
-            self.log.clear()
+        if attempt == 1:
+            self.cap_hit = None
+            self.forced_final_turn = False
+            if self.rounds or self.calls:
+                self.rounds = 0
+                self.calls = 0
+                self.log.clear()
         self.attempt = attempt
+
+    def repair(self, messages, timeout=60) -> str:
+        """Plain JSON fix. No tools, so this turn cannot hit the tool cap."""
+
+        try:
+            return self.llm.request(messages, timeout)
+        except LLMError as exc:
+            exc.log.setdefault("tool_calls", list(self.log))
+            if self.forced_final_turn:
+                exc.retryable = False
+            raise
 
     def __call__(self, messages, timeout=60) -> str:
         if not tools_enabled():
@@ -313,15 +349,15 @@ class ToolStep:
         return _tool_loop(self, messages, timeout)
 
 
-def tool_request(llm, registry, tool_log: list | None = None) -> ToolStep:
+def tool_request(llm, registry, tool_log: list | None = None, agent: str | None = None) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
     Flag off: llm.request, the same payload as today.
     Flag on: run tool calls until the model returns plain content, then return
-    that text. Parsing and the one repair turn stay in structured_call.
+    that text. The repair turn, if any, is repair() and sends no tools.
     """
 
-    return ToolStep(llm, registry, tool_log)
+    return ToolStep(llm, registry, tool_log, agent)
 
 
 def _tool_loop(step: ToolStep, messages, timeout) -> str:
@@ -342,9 +378,18 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
         if not calls:
             return reply.get("content") or ""
         next_round = step.rounds + 1
-        next_calls = step.calls + len(calls)
+        # An identical repeat does not count. The round still does.
+        fresh = _fresh_call_count(step, calls)
+        next_calls = step.calls + fresh
         if next_round > TOOL_ROUND_CAP or next_calls > TOOL_CALL_CAP:
             which = "rounds" if next_round > TOOL_ROUND_CAP else "calls"
+            for call in calls:
+                step.log.append(
+                    _record(step, call, next_round, None, "blocked: tool_cap", time.perf_counter())
+                )
+            step.cap_hit = which
+            if step.agent == "audit":
+                return _forced_final_turn(step, conversation, timeout)
             raise LLMError(
                 "tool_cap",
                 False,
@@ -355,6 +400,22 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
         step.calls = next_calls
         conversation.append(_assistant_tool_message(reply, calls))
         for call in calls:
+            prior = _prior_call(step, call)
+            if prior is not None:
+                record = _record(
+                    step,
+                    call,
+                    next_round,
+                    prior.get("result"),
+                    prior.get("error"),
+                    time.perf_counter(),
+                    repeat=True,
+                )
+                step.log.append(record)
+                conversation.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": _cached_body(prior)}
+                )
+                continue
             try:
                 record, tool_message = _run_call(step, call, next_round)
             except LLMError as exc:
@@ -362,6 +423,28 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
                 raise
             step.log.append(record)
             conversation.append(tool_message)
+
+
+def _forced_final_turn(step: ToolStep, conversation: list, timeout) -> str:
+    """One plain completion after the audit cap. The payload has no tools."""
+
+    step.forced_final_turn = True
+    messages = list(conversation) + [
+        {
+            "role": "user",
+            "content": (
+                "The tool cap is reached. Use the tool results and verified facts above. "
+                "Return the audit verdict JSON now."
+            ),
+        }
+    ]
+    try:
+        return step.llm.request(messages, timeout)
+    except LLMError as exc:
+        # An API error on that same last chance is a hold too, not another attempt.
+        exc.retryable = False
+        exc.log.setdefault("tool_calls", list(step.log))
+        raise
 
 
 def _normalize_call(call: dict, round_number: int, index: int) -> dict:
@@ -398,6 +481,48 @@ def _assistant_tool_message(reply: dict, calls: list[dict]) -> dict:
     }
 
 
+def _fresh_call_count(step: ToolStep, calls: list[dict]) -> int:
+    """Calls in this round that are not an identical repeat.
+
+    Same name and same arguments as a call already logged, or as an earlier
+    call in this round, does not count. Invalid JSON is never a repeat.
+    """
+
+    seen = []
+    fresh = 0
+    for call in calls:
+        parsed, error, _raw = parse_tool_arguments(call["arguments"])
+        if error is None and (
+            _prior_call(step, call) is not None or (call["name"], parsed) in seen
+        ):
+            continue
+        fresh += 1
+        if error is None:
+            seen.append((call["name"], parsed))
+    return fresh
+
+
+def _prior_call(step: ToolStep, call: dict) -> dict | None:
+    """The earlier run of this same name and arguments, if this step already has one."""
+
+    parsed, error, _raw = parse_tool_arguments(call["arguments"])
+    if error is not None:
+        return None
+    for row in step.log:
+        # A repeat is a copy of an earlier run. The run is the result to return.
+        if row.get("repeat"):
+            continue
+        if row.get("name") == call["name"] and row.get("arguments") == parsed:
+            return row
+    return None
+
+
+def _cached_body(row: dict) -> str:
+    if row.get("error"):
+        return json.dumps({"error": row["error"]})
+    return json.dumps(row.get("result"), default=str)
+
+
 def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict]:
     started = time.perf_counter()
     try:
@@ -406,10 +531,23 @@ def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict
         raise
     except Exception as exc:
         # A lookup miss is already {"error": ...}. Anything else is infrastructure.
-        raise LLMError("tool_error", False, str(exc)) from None
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    payload, body = _json_ready(payload)
+        # The call is logged before the hold, including its name, arguments, and error.
+        record = _record(step, call, round_number, None, str(exc), started)
+        step.log.append(record)
+        raise LLMError(
+            "tool_error",
+            False,
+            str(exc),
+            log={"tool_calls": list(step.log)},
+        ) from None
+    body = _json_ready(payload)
+    payload = json.loads(body)
     error = _error_text(payload)
+    record = _record(step, call, round_number, None if error else payload, error, started)
+    return record, {"role": "tool", "tool_call_id": call["id"], "content": body}
+
+
+def _record(step: ToolStep, call: dict, round_number: int, result, error, started: float, repeat: bool = False) -> dict:
     parsed, _parse_error, invalid_raw = parse_tool_arguments(call["arguments"])
     record = {
         "round": round_number,
@@ -417,13 +555,17 @@ def _run_call(step: ToolStep, call: dict, round_number: int) -> tuple[dict, dict
         "call_id": call["id"],
         "name": call["name"],
         "arguments": parsed,
-        "result": None if error else payload,
+        "result": result,
         "error": error,
-        "latency_ms": latency_ms,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
     }
+    if step.agent:
+        record = {"agent": step.agent, **record}
     if invalid_raw is not None:
         record["arguments_raw"] = invalid_raw
-    return record, {"role": "tool", "tool_call_id": call["id"], "content": body}
+    if repeat:
+        record["repeat"] = True
+    return record
 
 
 def parse_tool_arguments(raw: str) -> tuple[dict | None, str | None, str | None]:
@@ -444,18 +586,17 @@ def parse_tool_arguments(raw: str) -> tuple[dict | None, str | None, str | None]
     return value, None, None
 
 
-def _json_ready(payload: dict) -> tuple[dict, str]:
-    """JSON text for the model, and the same value stored on the log.
+def _json_ready(payload: dict) -> str:
+    """JSON text for the model. The caller parses it once for the log.
 
     Decimal and date become strings. A value that still will not serialize
     becomes an error result, so the node does not crash.
     """
 
     try:
-        text = json.dumps(payload, default=str)
+        return json.dumps(payload, default=str)
     except (TypeError, ValueError):
-        text = json.dumps({"error": "tool result is not JSON"})
-    return json.loads(text), text
+        return json.dumps({"error": "tool result is not JSON"})
 
 
 def _error_text(payload: dict) -> str | None:

@@ -1,5 +1,6 @@
-"""The tool loop. No network. No agent is given a registry."""
+"""The tool loop. No network. Audit is the only agent given a registry."""
 
+import importlib
 import json
 import socket
 from decimal import Decimal
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from db import create_database
 from graph import route_after_audit, run_invoice
+from main import _result_line
 from llm_client import (
     DEFAULT_MODEL,
     TOOL_CALL_CAP,
@@ -37,6 +39,7 @@ from tests.test_pipeline import extraction, scripted, write_invoice
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSWER = '{"echoed": "phase-1"}'
+AUDIT_PASS = json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
 _RECORD_FIELDS = {
     "round",
     "attempt",
@@ -163,6 +166,120 @@ def test_parallel_calls_all_run_and_each_counts(monkeypatch):
     assert tool_ids == ["c1", "c2"]
 
 
+def test_identical_repeat_does_not_count_or_rerun(monkeypatch):
+    runs = {"n": 0}
+
+    def echo(arguments):
+        runs["n"] += 1
+        return {"note": arguments["note"], "echo": arguments["note"]}
+
+    registry = ToolRegistry(
+        [
+            Tool(
+                name="echo_note",
+                description="Echo.",
+                parameters={
+                    "type": "object",
+                    "properties": {"note": {"type": "string"}},
+                    "required": ["note"],
+                },
+                function=echo,
+            )
+        ]
+    )
+    same = json.dumps({"note": "phase-1"})
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    model = ScriptedToolModel(
+        [
+            tool_step(("c1", "echo_note", same), ("c2", "echo_note", same)),
+            text_step(ANSWER),
+        ]
+    )
+    step = tool_request(model, registry)
+    parsed = call_with_retries(
+        step,
+        [{"role": "user", "content": "Answer with JSON."}],
+        Echoed,
+        max_attempts=3,
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+        attempt_log=[],
+    )
+    assert parsed.echoed == "phase-1"
+    assert runs["n"] == 1
+    assert step.calls == 1
+    assert step.rounds == 1
+    assert "repeat" not in step.log[0]
+    assert step.log[1]["repeat"] is True
+    assert step.log[1]["result"] == step.log[0]["result"]
+    assert step.log[1]["error"] is None
+    assert step.log[1]["call_id"] == "c2"
+    body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
+    assert body == step.log[0]["result"]
+
+
+def test_repeat_does_not_spend_the_call_cap_but_rounds_still_count(monkeypatch):
+    runs = {"n": 0}
+
+    def echo(arguments):
+        runs["n"] += 1
+        return {"note": arguments["note"], "echo": arguments["note"]}
+
+    registry = ToolRegistry(
+        [
+            Tool(
+                name="echo_note",
+                description="Echo.",
+                parameters={
+                    "type": "object",
+                    "properties": {"note": {"type": "string"}},
+                    "required": ["note"],
+                },
+                function=echo,
+            )
+        ]
+    )
+    eight = [
+        (f"c{index}", "echo_note", json.dumps({"note": str(index)}))
+        for index in range(TOOL_CALL_CAP)
+    ]
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    model = ScriptedToolModel(
+        [tool_step(*eight), _echo(note="0", call_id="again"), text_step(ANSWER)]
+    )
+    step = tool_request(model, registry)
+    parsed = call_with_retries(
+        step,
+        [{"role": "user", "content": "Answer with JSON."}],
+        Echoed,
+        max_attempts=3,
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+        attempt_log=[],
+    )
+    assert parsed.echoed == "phase-1"
+    assert runs["n"] == TOOL_CALL_CAP
+    assert step.calls == TOOL_CALL_CAP
+    assert step.rounds == 2
+    assert step.log[-1]["repeat"] is True
+    assert step.log[-1]["result"] == step.log[0]["result"]
+    assert step.log[-1]["name"] == "echo_note"
+
+    runs["n"] = 0
+    blocked = ScriptedToolModel(
+        [_echo(note="same", call_id=f"r{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    )
+    blocked_step = tool_request(blocked, registry)
+    with pytest.raises(LLMError) as caught:
+        blocked_step([{"role": "user", "content": "Answer with JSON."}])
+    assert caught.value.error_type == "tool_cap"
+    assert runs["n"] == 1
+    assert [row.get("repeat", False) for row in blocked_step.log] == [False, True, True, False]
+    assert blocked_step.log[-1]["error"] == "blocked: tool_cap"
+    assert blocked_step.log[-1]["result"] is None
+    assert blocked_step.calls == 1
+
+
 def test_unknown_tool_returns_an_error_and_continues(monkeypatch):
     parsed, log, model = _finish(
         [tool_step(("c1", "nope", "{}")), text_step(ANSWER)],
@@ -234,34 +351,33 @@ def _payable_state() -> PipelineState:
     return PipelineState(
         invoice_path="x",
         filename="x.txt",
-        raw_text="Total: 500.00\n",
+        raw_text="WidgetA\nTotal: 500.00\n",
         invoice=invoice,
         validation=ValidationReport(passed=True, findings=[]),
         decision=decision,
     )
 
 
-class _LoopLLM:
-    """audit() calls llm.request. The request here is the tool loop."""
-
-    def __init__(self, request):
-        self.request = request
-
-
 def _cap_hold(steps, db_path, monkeypatch, registry=None):
+    """Drive audit() with a scripted model. The registry stands in for the audit tools."""
+
     monkeypatch.setenv("XAI_TOOLS", "1")
+    chosen = registry or example_registry()
+    # pipeline/__init__.py binds the name audit to the function. Load the module by name.
+    audit_module = importlib.import_module("pipeline.audit")
+    monkeypatch.setattr(audit_module, "audit_registry", lambda invoice, stock, raw_text: chosen)
     model = ScriptedToolModel(steps)
-    log = []
     clock = FakeClock()
     out = audit(
         _payable_state(),
-        _LoopLLM(tool_request(model, registry or example_registry(), log)),
+        model,
         db_path,
         clock,
         ZeroRandom(),
         5,
     )
-    return out, clock, log, model
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    return out, clock, list(stage["result"].get("tool_calls") or []), model
 
 
 def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
@@ -294,75 +410,185 @@ def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
     assert paid["payment"].mock_response is None
 
 
-def test_round_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monkeypatch):
+def test_round_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     assert TOOL_ROUND_CAP == 3
-    steps = [_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    steps.append(text_step(AUDIT_PASS))
     out, clock, log, model = _cap_hold(steps, db_path, monkeypatch)
-    _assert_system_error_hold(out, clock, executed=TOOL_ROUND_CAP)
-    assert out["attempts"][0]["cap"] == "rounds"
-    assert len(log) == TOOL_ROUND_CAP
-    assert [row["round"] for row in log] == [1, 2, 3]
-    assert [row["attempt"] for row in log] == [1, 1, 1]
+    assert out["outcome"] == "approve"
+    assert out["audit_verdict"] == "PASS"
+    assert out["authorization"] is not None
+    assert clock.slept == []
+    assert [row["round"] for row in log] == [1, 2, 3, 4]
+    assert [row["error"] for row in log] == [None, None, None, "blocked: tool_cap"]
+    assert log[-1]["result"] is None
+    assert log[-1]["name"] == "echo_note"
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "rounds"
+    assert stage["result"]["forced_final_turn"] is True
+    assert stage["result"]["tool_calls"][-1]["error"] == "blocked: tool_cap"
+    final = model.requests[-1]
+    assert "tools" not in final
+    assert "tool_choice" not in final
+    assert any(message.get("role") == "tool" for message in final["messages"])
+    assert "verified_by_code" in final["messages"][1]["content"]
+    assert final["messages"][-1]["content"].startswith("The tool cap is reached.")
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
-    assert model.requests == []
+    assert len(model.requests) == 1
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "rounds"
+    assert line["forced_final_turn"] is True
+    stopped = _payable_state().model_copy(
+        update={
+            "outcome": out["outcome"],
+            "audit_verdict": out["audit_verdict"],
+            "authorization": out["authorization"],
+            "logs": out["logs"],
+        }
+    )
+    assert route_after_audit(stopped) == "payment"
+    assert payment(stopped)["payment"].status == "paid"
 
 
-def test_call_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monkeypatch):
+def test_call_cap_then_a_bad_final_answer_holds_without_payment(db_path, monkeypatch):
     assert TOOL_CALL_CAP == 8
     eight = [
         (f"c{index}", "echo_note", json.dumps({"note": str(index)}))
         for index in range(TOOL_CALL_CAP)
     ]
-    steps = [tool_step(*eight), _echo(call_id="over")]
+    steps = [tool_step(*eight), _echo(call_id="over"), text_step("not-json"), text_step("nope")]
     out, clock, log, model = _cap_hold(steps, db_path, monkeypatch)
-    _assert_system_error_hold(out, clock, executed=TOOL_CALL_CAP)
-    assert out["attempts"][0]["cap"] == "calls"
-    assert len(log) == TOOL_CALL_CAP
-    assert {row["round"] for row in log} == {1}
-    assert {row["attempt"] for row in log} == {1}
+    _assert_system_error_hold(out, clock, executed=TOOL_CALL_CAP + 1, error_type="malformed_output")
+    assert log[-1]["error"] == "blocked: tool_cap"
+    assert log[-1]["result"] is None
+    assert log[-1]["call_id"] == "over"
+    assert log[-1]["round"] == 2
+    assert {row["round"] for row in log[:-1]} == {1}
+    assert all(row["error"] is None for row in log[:-1])
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "calls"
+    assert stage["result"]["forced_final_turn"] is True
+    assert [row["call_id"] for row in stage["result"]["tool_calls"]] == [
+        *(f"c{index}" for index in range(TOOL_CALL_CAP)),
+        "over",
+    ]
     assert len(model.tool_requests) == 2
-    assert model.requests == []
+    assert len(model.requests) == 2
+    assert all("tools" not in sent and "tool_choice" not in sent for sent in model.requests)
+    assert model.requests[1]["messages"][-1]["content"].startswith("The JSON failed validation:")
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "calls"
+    assert line["forced_final_turn"] is True
+    assert line["payment_status"] == "not_paid"
 
 
-def test_repair_turn_shares_the_round_cap(monkeypatch):
-    monkeypatch.setenv("XAI_TOOLS", "1")
-    steps = [_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
-    steps.append(text_step("not-json"))
-    steps.append(_echo(call_id="again"))
-    model = ScriptedToolModel(steps)
-    log = []
-    clock = FakeClock()
-    attempts = []
-    with pytest.raises(AgentStepFailed) as caught:
-        call_with_retries(
-            tool_request(model, example_registry(), log),
-            [{"role": "user", "content": "Answer with JSON."}],
-            Echoed,
-            max_attempts=5,
-            clock=clock,
-            rng=ZeroRandom(),
-            attempt_log=attempts,
-        )
-    assert caught.value.attempts == 1
-    assert caught.value.error_type == "tool_cap"
+def test_calls_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
+    eight = [
+        (f"c{index}", "echo_note", json.dumps({"note": str(index)}))
+        for index in range(TOOL_CALL_CAP)
+    ]
+    steps = [tool_step(*eight), _echo(call_id="over"), text_step(AUDIT_PASS)]
+    out, clock, _log, model = _cap_hold(steps, db_path, monkeypatch)
+    assert out["outcome"] == "approve"
+    assert out["audit_verdict"] == "PASS"
+    assert out["authorization"] is not None
     assert clock.slept == []
-    assert attempts[0]["cap"] == "rounds"
-    assert attempts[0]["retryable"] is False
-    assert len(log) == TOOL_ROUND_CAP
-    assert {row["attempt"] for row in log} == {1}
-    repair = model.tool_requests[-1]["messages"]
-    assert any(
-        (message.get("content") or "").startswith("The JSON failed validation:")
-        for message in repair
+    assert len(model.requests) == 1
+    final = model.requests[0]
+    assert "tools" not in final
+    assert "tool_choice" not in final
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "calls"
+    assert stage["result"]["forced_final_turn"] is True
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "calls"
+    assert line["forced_final_turn"] is True
+    stopped = _payable_state().model_copy(
+        update={
+            "outcome": out["outcome"],
+            "audit_verdict": out["audit_verdict"],
+            "authorization": out["authorization"],
+            "logs": out["logs"],
+        }
     )
+    assert route_after_audit(stopped) == "payment"
+    assert payment(stopped)["payment"].status == "paid"
+
+
+def test_rounds_cap_then_a_bad_final_answer_holds_without_payment(db_path, monkeypatch):
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    steps.extend([text_step("not-json"), text_step("nope")])
+    out, clock, _log, model = _cap_hold(steps, db_path, monkeypatch)
+    _assert_system_error_hold(out, clock, executed=TOOL_ROUND_CAP + 1, error_type="malformed_output")
+    assert len(out["attempts"]) == 1
+    assert clock.slept == []
+    assert len(model.requests) == 2
+    assert all("tools" not in sent and "tool_choice" not in sent for sent in model.requests)
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "rounds"
+    assert stage["result"]["forced_final_turn"] is True
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "rounds"
+    assert line["forced_final_turn"] is True
+    assert line["payment_status"] == "not_paid"
+
+
+def test_api_error_on_the_final_turn_is_a_hold_without_retry(db_path, monkeypatch):
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    steps.append(LLMError("http_429", True, "busy"))
+    out, clock, _log, model = _cap_hold(steps, db_path, monkeypatch)
+    _assert_system_error_hold(out, clock, executed=TOOL_ROUND_CAP + 1, error_type="http_429")
+    assert len(out["attempts"]) == 1
+    assert out["attempts"][0]["retryable"] is False
+    assert out["attempts"][0]["backoff_seconds"] is None
+    assert clock.slept == []
+    assert len(model.requests) == 1
+    assert "tools" not in model.requests[0]
+    assert "tool_choice" not in model.requests[0]
+    assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "rounds"
+    assert line["forced_final_turn"] is True
+    assert line["payment_status"] == "not_paid"
+
+
+def test_repair_turn_sends_no_tools(monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", "1")
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
+    steps.append(text_step("not-json"))
+    steps.append(text_step(ANSWER))
+    model = ScriptedToolModel(steps)
+    step = tool_request(model, example_registry())
+    clock = FakeClock()
+    parsed = call_with_retries(
+        step,
+        [{"role": "user", "content": "Answer with JSON."}],
+        Echoed,
+        max_attempts=5,
+        clock=clock,
+        rng=ZeroRandom(),
+        attempt_log=[],
+    )
+    assert parsed.echoed == "phase-1"
+    assert clock.slept == []
+    assert len(step.log) == TOOL_ROUND_CAP
+    assert step.calls == TOOL_ROUND_CAP
+    assert len(model.requests) == 1
+    repair = model.requests[0]["messages"]
+    assert repair[-1]["content"].startswith("The JSON failed validation:")
     assert all(message.get("role") != "tool" for message in repair)
+    assert all(
+        "The JSON failed validation:" not in (message.get("content") or "")
+        for sent in model.tool_requests
+        for message in sent["messages"]
+    )
 
 
 def test_retry_keeps_counting_toward_the_cap(monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", "1")
-    steps = [_echo(call_id=f"c{index}") for index in range(2)]
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(2)]
     steps.append(LLMError("http_429", True, "busy"))
-    steps.append(_echo(call_id="after"))
+    steps.append(_echo(note="after", call_id="after"))
     steps.append(text_step(ANSWER))
     model = ScriptedToolModel(steps)
     log = []
@@ -386,11 +612,34 @@ def test_retry_keeps_counting_toward_the_cap(monkeypatch):
     assert [row["attempt"] for row in log] == [1, 1, 2]
 
 
+def test_retry_then_cap_logs_each_call_once(db_path, monkeypatch):
+    steps = [
+        _echo(note="a", call_id="a"),
+        _echo(note="b", call_id="b"),
+        LLMError("http_429", True, "busy"),
+        _echo(note="c", call_id="c"),
+        _echo(note="d", call_id="d"),
+        text_step(AUDIT_PASS),
+    ]
+    out, clock, log, _model = _cap_hold(steps, db_path, monkeypatch)
+    assert clock.slept == [1.0]
+    assert out["outcome"] == "approve"
+    assert [row["error_type"] for row in out["attempts"]] == ["http_429"]
+    assert [row["call_id"] for row in out["attempts"][0]["tool_calls"]] == ["a", "b"]
+    logged = out["logs"][-1]["result"]["tool_calls"]
+    assert [row["call_id"] for row in logged] == ["a", "b", "c", "d"]
+    assert logged[-1]["error"] == "blocked: tool_cap"
+    assert logged[-1]["result"] is None
+    assert [row["call_id"] for row in log] == ["a", "b", "c", "d"]
+    assert out["logs"][-1]["result"]["tool_cap_hit"] == "rounds"
+    assert out["logs"][-1]["result"]["forced_final_turn"] is True
+
+
 def test_retry_does_not_reset_the_round_cap(monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", "1")
-    steps = [_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
+    steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(LLMError("http_429", True, "busy"))
-    steps.append(_echo(call_id="over"))
+    steps.append(_echo(note="over", call_id="over"))
     model = ScriptedToolModel(steps)
     log = []
     clock = FakeClock()
@@ -411,15 +660,17 @@ def test_retry_does_not_reset_the_round_cap(monkeypatch):
     assert attempts[1]["retryable"] is False
     assert attempts[1]["cap"] == "rounds"
     assert clock.slept == [1.0]
-    assert len(log) == TOOL_ROUND_CAP
-    assert [row["attempt"] for row in log] == [1, 1, 1]
+    assert [row["error"] for row in log] == [None, None, None, "blocked: tool_cap"]
+    assert [row["attempt"] for row in log[:-1]] == [1, 1, 1]
+    assert log[-1]["attempt"] == 2
+    assert log[-1]["result"] is None
 
 
 def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", "1")
-    steps = [_echo(call_id=f"a{index}") for index in range(TOOL_ROUND_CAP)]
+    steps = [_echo(note=f"a{index}", call_id=f"a{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(text_step(ANSWER))
-    steps.append(_echo(call_id="b1"))
+    steps.append(_echo(note="b1", call_id="b1"))
     steps.append(text_step(ANSWER))
     model = ScriptedToolModel(steps)
     log = []
@@ -456,14 +707,16 @@ def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
 
 def test_a_new_tool_step_starts_fresh(monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", "1")
-    spent = ScriptedToolModel([_echo(call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)])
+    spent = ScriptedToolModel(
+        [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    )
     spent_log = []
     with pytest.raises(LLMError) as caught:
         tool_request(spent, example_registry(), spent_log)(
             [{"role": "user", "content": "Answer with JSON."}]
         )
     assert caught.value.error_type == "tool_cap"
-    assert len(spent_log) == TOOL_ROUND_CAP
+    assert [row["error"] for row in spent_log] == [None, None, None, "blocked: tool_cap"]
 
     fresh = ScriptedToolModel([_echo(call_id="fresh"), text_step(ANSWER)])
     fresh_log = []
@@ -517,8 +770,13 @@ def test_infrastructure_error_is_a_system_error_hold(db_path, monkeypatch):
         monkeypatch,
         registry=_registry("broken", broken),
     )
-    _assert_system_error_hold(out, clock, executed=0, error_type="tool_error")
-    assert log == []
+    _assert_system_error_hold(out, clock, executed=1, error_type="tool_error")
+    assert log[0]["name"] == "broken"
+    assert log[0]["arguments"] == {}
+    assert log[0]["error"] == "database is locked"
+    assert log[0]["result"] is None
+    audit_log = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert audit_log["result"]["tool_calls"][0]["error"] == "database is locked"
     assert len(model.tool_requests) == 1
     assert model.steps[0]["content"] == ANSWER
 
@@ -619,10 +877,15 @@ def test_flag_on_sends_tools_on_the_wire(value, monkeypatch):
     assert captured[0]["model"] == client.model
 
 
-def test_agents_do_not_call_the_tool_loop():
+def test_only_audit_is_wired_to_the_tool_loop():
+    audit_text = (ROOT / "pipeline/audit.py").read_text(encoding="utf-8")
+    assert "tool_request" in audit_text
+    critique = (ROOT / "pipeline/critique.py").read_text(encoding="utf-8")
+    assert "tool_request" not in critique
+    assert "request_tools" not in critique
+    assert "XAI_TOOLS" not in critique
+    assert "audit_registry" not in critique
     for relative in (
-        "pipeline/critique.py",
-        "pipeline/audit.py",
         "pipeline/approval.py",
         "pipeline/ingestion.py",
         "graph.py",
@@ -633,10 +896,10 @@ def test_agents_do_not_call_the_tool_loop():
         assert "XAI_TOOLS" not in text
 
 
-def test_flag_does_not_change_agent_prompts(tmp_path, db_path, monkeypatch):
+def test_flag_off_agent_prompts_are_byte_identical(tmp_path, db_path, monkeypatch):
     path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     seen = []
-    for value in (None, "0", "1"):
+    for value in (None, "0"):
         _USED_KEYS.clear()
         if value is None:
             monkeypatch.delenv("XAI_TOOLS", raising=False)
@@ -654,9 +917,9 @@ def test_flag_does_not_change_agent_prompts(tmp_path, db_path, monkeypatch):
         )
         assert result["outcome"] == "approve"
         seen.append(fake.calls)
-    assert seen[0] == seen[1] == seen[2]
+    assert seen[0] == seen[1]
     encoded = [
         json.dumps(calls, sort_keys=True, separators=(",", ":")).encode("utf-8")
         for calls in seen
     ]
-    assert encoded[0] == encoded[1] == encoded[2]
+    assert encoded[0] == encoded[1]
