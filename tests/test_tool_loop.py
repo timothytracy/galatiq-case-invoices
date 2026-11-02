@@ -365,7 +365,11 @@ def _cap_hold(steps, db_path, monkeypatch, registry=None):
     chosen = registry or example_registry()
     # pipeline/__init__.py binds the name audit to the function. Load the module by name.
     audit_module = importlib.import_module("pipeline.audit")
-    monkeypatch.setattr(audit_module, "audit_registry", lambda invoice, stock, raw_text: chosen)
+    monkeypatch.setattr(
+        audit_module,
+        "audit_registry",
+        lambda invoice, stock, raw_text, ledger_path=None: chosen,
+    )
     model = ScriptedToolModel(steps)
     clock = FakeClock()
     out = audit(

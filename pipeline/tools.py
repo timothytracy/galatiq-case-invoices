@@ -10,10 +10,17 @@ from decimal import Decimal
 from functools import partial
 
 from decision.findings import collect_findings, math_reconciles
-from decision.invoice_fields import canonical_item, show_money, show_qty, summed_quantities
+from decision.invoice_fields import (
+    canonical_item,
+    normalize_invoice_number,
+    show_money,
+    show_qty,
+    summed_quantities,
+)
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
 from decision.wording import ACTION, RULE_TEXT
+from ledger import paid_rows, split_window, vendor_key
 from llm_client import parse_tool_arguments
 
 
@@ -174,11 +181,12 @@ _CODE = {
 }
 
 
-def audit_registry(invoice, stock: dict[str, int], raw_text: str) -> ToolRegistry:
-    """lookup_item, recompute_totals, and get_policy_rule for this invoice.
+def audit_registry(invoice, stock: dict[str, int], raw_text: str, ledger_path=None) -> ToolRegistry:
+    """lookup_item, recompute_totals, get_policy_rule, and check_payment_ledger.
 
     stock is the snapshot audit already loaded. The functions do not open
-    inventory.db. An unknown item raises ToolInputError and is not corrected.
+    inventory.db. The ledger tool reads only this invoice's vendor and number.
+    An unknown item raises ToolInputError and is not corrected.
     """
 
     return ToolRegistry(
@@ -212,6 +220,21 @@ def audit_registry(invoice, stock: dict[str, int], raw_text: str) -> ToolRegistr
                 ),
                 parameters=_CODE,
                 function=get_policy_rule,
+            ),
+            # Pending approval. No vendor argument: the model cannot widen the lookup.
+            Tool(
+                name="check_payment_ledger",
+                description=(
+                    "Read-only. Prior payments for this invoice's vendor and invoice "
+                    "number only. Reports whether that pair was already paid, and the "
+                    "same vendor's paid total inside the split window against the "
+                    "approval threshold. No arguments. Extra arguments are ignored. "
+                    "It cannot look up another vendor or another invoice number."
+                ),
+                parameters={"type": "object", "properties": {}},
+                function=partial(
+                    check_payment_ledger, invoice=invoice, ledger_path=ledger_path
+                ),
             ),
         ]
     )
@@ -247,6 +270,39 @@ def recompute_totals(_arguments: dict, invoice, raw_text: str, stock: dict[str, 
         "reconciles": math_reconciles(invoice),
         "printed_total": None if total is None else show_money(total),
         "mismatches": [item.message for item in findings if item.code == "TOTAL_MISMATCH"],
+    }
+
+
+def check_payment_ledger(_arguments: dict, invoice, ledger_path) -> dict:
+    """This vendor and invoice number only. The argument object is ignored.
+
+    No ledger path, or a missing or empty file, means no prior payments.
+    sqlite3.Error is not caught. A locked or corrupt ledger leaves this
+    function, and the tool loop turns it into a system-error hold.
+    """
+
+    rows = [] if ledger_path is None else paid_rows(ledger_path)
+    key = vendor_key(invoice.vendor)
+    number = normalize_invoice_number(invoice.invoice_number)
+    match = None
+    if key and number:
+        match = next(
+            (row for row in rows if row.vendor_key == key and row.invoice_number == number),
+            None,
+        )
+    paid, over = split_window(invoice, rows)
+    total = invoice.total
+    combined = None if total is None else paid + total
+    return {
+        "already_paid": match is not None,
+        "match_date": None if match is None else match.invoice_date,
+        "match_total": None if match is None else match.total,
+        "same_vendor_paid_in_window": show_money(paid),
+        "this_total": None if total is None else show_money(total),
+        "combined": None if combined is None else show_money(combined),
+        "split_window_days": POLICY.split_window_days,
+        "scrutiny_threshold": show_money(POLICY.scrutiny_threshold),
+        "over_split_threshold": over,
     }
 
 

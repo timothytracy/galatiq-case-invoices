@@ -29,9 +29,23 @@ TOOLS_LINE = (
     "The tools are read-only. Their results do not change during this step. "
     "Call each lookup at most once."
 )
+# Pending approval. Only when XAI_TOOLS is on, so the flag-off prompt stays as it was.
+LEDGER_LINE = (
+    "check_payment_ledger reports prior payments for this vendor and invoice "
+    "number. A prior payment means you must not pass."
+)
 
 
-def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+def audit(
+    state: PipelineState,
+    llm,
+    db_path,
+    clock,
+    rng,
+    max_attempts: int,
+    as_of=None,
+    ledger_path=None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     invoice = state.invoice
     decision = state.decision
@@ -55,7 +69,9 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
     step = None
     if tools_on:
         step = tool_request(
-            llm, audit_registry(invoice, stock, state.raw_text or ""), agent="audit"
+            llm,
+            audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
+            agent="audit",
         )
         request = step
     try:
@@ -90,12 +106,19 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
     if ignored is not None:
         verdict = "PASS"
         feedback = []
-    guarded = _guard_audit(state, decision, fresh.findings, verdict, feedback)
+    # A tool hit can only add a hold. A miss adds nothing.
+    ledger_holds = _ledger_holds(step)
+    guarded = _guard_audit(
+        state, decision, list(fresh.findings) + ledger_holds, verdict, feedback
+    )
     new_decision = decision
     if guarded["verdict"] != "SEND_BACK" and guarded["outcome"] not in (None, decision.decision):
         new_decision = _tighten(decision, guarded["outcome"], guarded["conclusion"], guarded["evidence"])
 
     findings = list(state.findings) or list(fresh.findings)
+    for extra in ledger_holds:
+        if not any(item.code == extra.code for item in findings):
+            findings.append(extra)
     note_text = None
     if ignored is not None:
         note_text = f"Audit note, not an escalation: {ignored}"
@@ -233,7 +256,7 @@ def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> l
                 "Put every code you rely on in cited_codes. Leave cited_codes empty when the "
                 "concern is not one of those codes. "
                 "A printed date on or before today is not in the future. "
-                + (f"{TOOLS_LINE} " if tools_on else "")
+                + (f"{TOOLS_LINE} {LEDGER_LINE} " if tools_on else "")
                 + "Return JSON only."
             ),
         },
@@ -321,6 +344,66 @@ def _box(verdict, outcome, conclusion, feedback=None, evidence=None) -> dict:
         "conclusion": conclusion,
         "evidence": [] if evidence is None else evidence,
     }
+
+
+def _ledger_holds(step) -> list[Finding]:
+    """Hold findings from a ledger-tool hit. One code, one finding.
+
+    A miss adds nothing, so the result cannot loosen the decision. Validation
+    already holds a duplicate or a split before audit in this process.
+    """
+
+    found: list[Finding] = []
+    seen: set[str] = set()
+    for finding in _findings_from_ledger_tool(step):
+        if finding.code in seen:
+            continue
+        seen.add(finding.code)
+        found.append(finding)
+    return found
+
+
+def _findings_from_ledger_tool(step) -> list[Finding]:
+    """Turn one ledger-tool hit into hold findings. Repeats are the same hit."""
+
+    result = None
+    if step is not None:
+        for row in step.log:
+            if row.get("name") != "check_payment_ledger" or row.get("repeat"):
+                continue
+            body = row.get("result")
+            if isinstance(body, dict):
+                result = body
+    if not result:
+        return []
+    found = []
+    if result.get("already_paid") is True:
+        found.append(
+            Finding(
+                code="DUPLICATE_INVOICE",
+                message=(
+                    "This vendor and invoice number were already paid "
+                    f"on {result.get('match_date')} for {result.get('match_total')}."
+                ),
+                severity="warning",
+                item="invoice_number",
+            )
+        )
+    if result.get("over_split_threshold") is True:
+        found.append(
+            Finding(
+                code="SPLIT_INVOICE",
+                message=(
+                    f"This {result.get('this_total')} plus "
+                    f"{result.get('same_vendor_paid_in_window')} already paid to this vendor "
+                    f"within {result.get('split_window_days')} days is {result.get('combined')}, "
+                    f"over the {result.get('scrutiny_threshold')} threshold."
+                ),
+                severity="warning",
+                item="total",
+            )
+        )
+    return found
 
 
 def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:

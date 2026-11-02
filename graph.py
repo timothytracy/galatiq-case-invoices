@@ -47,7 +47,12 @@ def build_graph(
         "critique",
         lambda state: critique(state, llm, db_path, clock, rng, attempts, as_of),
     )
-    graph.add_node("audit", lambda state: audit(state, llm, db_path, clock, rng, attempts, as_of))
+    graph.add_node(
+        "audit",
+        lambda state: audit(
+            state, llm, db_path, clock, rng, attempts, as_of, ledger_path=ledger_path
+        ),
+    )
     graph.add_node("payment", lambda state: payment(state, ledger_path))
     graph.add_node("reject_log", reject_log)
 

@@ -142,6 +142,8 @@ Hard rules are Python: stock (summed per item, equal to stock passes, the snapsh
 
 `XAI_TOOLS` defaults off. Set it to `1` and the audit step may call three read-only tools bound to the current invoice: `lookup_item`, `recompute_totals`, and `get_policy_rule`. Critique does not get tools. The tools do not decide and do not pay. With the flag off, the model request is unchanged. If audit hits the 3-round or 8-call cap, it gets one final reply with no tools. If that reply fails, the invoice is a `SYSTEM_ERROR` hold and nothing is paid. Approved on 2026-11-01. `scripts/eval.py` prints `tools=N` on each invoice and a `tools calls=N repeats=K` line for the run. Repeats are included in the call count.
 
+Pending approval. With `XAI_TOOLS` on, audit may also call `check_payment_ledger`. It takes no arguments and only reads this invoice's vendor and invoice number on the run's ledger. Its duplicate check matches that pair only. In a single process, validation already holds duplicates and splits before audit. The tool gives the model that evidence to cite and can only tighten the decision. If the model calls it, the tool can surface a payment another process wrote between validation and audit; the payment step's unique index already stops a second payment of the same vendor and invoice number, so the new case is a split under a concurrent writer. A missing ledger means no prior payments. A locked or corrupt ledger is a `SYSTEM_ERROR` hold and nothing is paid.
+
 Decisions are in `docs/DECISIONS.md`. The pipeline implements the policy approved on 2026-10-31 in [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md) and scores against [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md). Those two documents are the approved text.
 
 ## Known limitations / cut scope
