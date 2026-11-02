@@ -29,10 +29,9 @@ That is the routing in `graph.py`. Holds and rejects both end at `reject_log`. N
 
 ## 2. One invoice
 
-`data/invoices/invoice_1001.txt` is Widgets Inc., INV-1001. WidgetA quantity 10 at 250.00 and WidgetB quantity 5 at 500.00. The printed total is 5000.00. `setup_db.py` loads WidgetA 15, WidgetB 10, GadgetX 5, and FakeItem 0.
+`data/invoices/invoice_1001.txt` is Widgets Inc., INV-1001. WidgetA quantity 10 at 250.00 and WidgetB quantity 5 at 500.00. The printed total is 5000.00. The inventory seed is WidgetA 15, WidgetB 10, GadgetX 5, and FakeItem 0.
 
 ```bash
-python3 setup_db.py
 XAI_TOOLS=0 python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
 ```
 
@@ -102,7 +101,6 @@ The samples-with-tools replay called the ledger tool 7 times and repeated one `g
 Use the same code path with `--replay` and no key. Do not pass `--record` and `--replay` together.
 
 ```bash
-python3 setup_db.py
 python3 scripts/eval.py --replay recordings/samples_tools.jsonl
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
 python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl

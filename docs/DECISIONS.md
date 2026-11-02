@@ -2,7 +2,7 @@
 
 The brief is [REQUIREMENTS.md](../REQUIREMENTS.md). This file states the calls the prototype runs with.
 
-Audit tools are on unless `XAI_TOOLS` is `0`, `false`, `off`, or `no`. A hit on the 3-round or 8-call cap gets one final reply with no tools, and a failed reply is a `SYSTEM_ERROR` hold with nothing paid. `check_payment_ledger` is the audit's read of the payments ledger for this vendor and invoice number, for two workers or a payment made outside this run. Replay is the regression check and needs no API key. The token price is the rate in `recording.py`, with no separate cached-input rate. CI runs `setup_db.py`, the tests, and the six replays, and it does not set an API key. Duplicate and split invoices are holds. Invoice 1003 is a reject for the stock shortfall, and its fraud signals stay on the record. Invoice 1004 is an approve: a non-commercial address on a clean invoice the brief lists as passing is a warning. The revised file stays a hold because it is a revision.
+Audit tools are on unless `XAI_TOOLS` is `0`, `false`, `off`, or `no`. A hit on the 3-round or 8-call cap gets one final reply with no tools, and a failed reply is a `SYSTEM_ERROR` hold with nothing paid. `check_payment_ledger` is the audit's read of the payments ledger for this vendor and invoice number, for two workers or a payment made outside this run. Replay is the regression check and needs no API key. The token price is the rate in `recording.py`, with no separate cached-input rate. CI runs the tests and the six replays, checks that `setup_db.py` still builds a database, and does not set an API key. Duplicate and split invoices are holds. Invoice 1003 is a reject for the stock shortfall, and its fraud signals stay on the record. Invoice 1004 is an approve: a non-commercial address on a clean invoice the brief lists as passing is a warning. The revised file stays a hold because it is a revision.
 
 ## Why LangGraph
 
@@ -17,13 +17,12 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
 # set XAI_API_KEY in .env
-python3 setup_db.py
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 python3 scripts/eval.py
 python3 scripts/export_graph.py
 ```
 
-`python3 main.py --invoice_path=<file>` processes one file. It prints one JSON object per stage and writes the same records to `logs/<filename>.json`. A missing `XAI_API_KEY` stops the process with a non-zero exit before any invoice is read. `main.py` calls `setup_db.py`'s creator only when `inventory.db` is missing. The run opens the file with `sqlite3.connect("file:inventory.db?mode=ro", uri=True)`. Replay, with no key, is [Record and replay](#record-and-replay).
+`python3 main.py --invoice_path=<file>` processes one file. It prints one JSON object per stage and writes the same records to `logs/<filename>.json`. A missing `XAI_API_KEY` stops the process with a non-zero exit before any invoice is read. `main.py` creates `inventory.db` from the seed when the file is missing. The run opens the file with `sqlite3.connect("file:inventory.db?mode=ro", uri=True)`. Replay, with no key, is [Record and replay](#record-and-replay).
 
 `scripts/eval.py` starts a new graph for each of the 20 sample files and scores the outcome and primary reason code against `data/answer_key.json`. Warning matches are printed and do not change the exit code.
 
@@ -69,7 +68,7 @@ The recording starts with a header line that stores `as_of`, the date the prompt
 
 `scripts/eval.py` on record or replay prints `tokens total=N cost_usd=X` from the usage objects stored on each request line. The price is in `recording.py`: the published short-context rate for `grok-4.20-0309-non-reasoning` when `prompt_tokens` is under 200,000, and the long-context rate at or above that. Prompt tokens are not split into a cached-input rate. 
 
-Audit tools are on by default. CI (`.github/workflows/ci.yml`) runs `setup_db.py`, the tests, and the six replays. It does not set an API key. `samples_tools.jsonl`, `unseen_tools.jsonl`, and `ordered_tools.jsonl` match `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. The tools change the audit prompt, so the fingerprints do not cross. The commands are in [recordings/README.md](../recordings/README.md).
+Audit tools are on by default. CI (`.github/workflows/ci.yml`) runs the tests and the six replays, and checks that `setup_db.py` still builds a database. It does not set an API key. `samples_tools.jsonl`, `unseen_tools.jsonl`, and `ordered_tools.jsonl` match `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. The tools change the audit prompt, so the fingerprints do not cross. The commands are in [recordings/README.md](../recordings/README.md).
 
 ## What is Python and what is the model
 

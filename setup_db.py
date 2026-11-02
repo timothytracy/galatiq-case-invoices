@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from db import SEED, ensure_inventory_db, load_stock
+from db import SEED, load_stock, reset_inventory_db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -11,7 +11,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", default="inventory.db")
     args = parser.parse_args(argv)
 
-    db_path = ensure_inventory_db(args.path)
+    db_path = reset_inventory_db(args.path)
     rows = load_stock(db_path)
 
     print(f"database\t{Path(db_path)}")

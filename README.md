@@ -45,7 +45,7 @@ XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 
 Each of those six exits 0 when the score is perfect. CI runs the same six after the tests. A run creates `inventory.db` from the seed when the file is missing.
 
-`--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`. `--reset` does both. They do not change `recordings/`, `data/`, or `logs/`.
+`--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`, including the release records stored there, so a held invoice must be rerun before it can be approved. `--reset` does both. `scripts/eval.py --reset` and `--reset-db` rebuild inventory only; eval does not use `payments.db`. They do not change `recordings/`, `data/`, or `logs/`.
 
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 

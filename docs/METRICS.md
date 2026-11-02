@@ -2,7 +2,7 @@
 
 Every number in the replay table is from a replay of a committed recording, run on 2026-11-01 PT with no API key. The score, token, cost, call, and repeat lines are the stdout of `scripts/eval.py`. The tool names, the `check_payment_ledger` counts, and the cap fields are from a second pass over the same recordings on the same day. That pass counted `tool_calls` on the graph result. Its call totals and repeat totals match the eval lines. The live API runs are in [Live runs](#live-runs).
 
-`python3 setup_db.py` was run first. Each command exited 0.
+Each command exited 0. A replay creates `inventory.db` from the seed when the file is missing.
 
 | Run | Command | Score | Tokens | Cost USD | Calls | Repeats | `check_payment_ledger` | Cap or forced turn |
 |---|---|---|---|---|---|---|---|---|

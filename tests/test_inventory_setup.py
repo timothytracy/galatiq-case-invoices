@@ -40,10 +40,27 @@ def test_setup_script_still_creates_the_seed(tmp_path):
     first = subprocess.run(command, capture_output=True, text=True, check=False)
     assert first.returncode == 0, first.stderr
     assert "4 rows" in first.stdout
-    body = path.read_bytes()
+    assert load_stock(path) == SEEDED
     second = subprocess.run(command, capture_output=True, text=True, check=False)
     assert second.returncode == 0, second.stderr
-    assert path.read_bytes() == body
+    assert load_stock(path) == SEEDED
+
+
+def test_setup_script_rebuilds_an_empty_database(tmp_path):
+    path = tmp_path / "empty.db"
+    path.write_bytes(b"")
+    command = [sys.executable, str(ROOT / "setup_db.py"), str(path)]
+    rebuilt = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert rebuilt.returncode == 0, rebuilt.stderr
+    assert "Traceback" not in rebuilt.stderr
+    assert load_stock(path) == SEEDED
+
+    connection = sqlite3.connect(path)
+    connection.execute("DELETE FROM inventory")
+    connection.commit()
+    connection.close()
+    again = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert again.returncode == 0, again.stderr
     assert load_stock(path) == SEEDED
 
 
@@ -121,12 +138,15 @@ def test_main_creates_a_missing_inventory_file(tmp_path, monkeypatch):
     invoice.write_text("Vendor: Widgets Inc.\n", encoding="utf-8")
     monkeypatch.setattr("llm_client.GrokClient", lambda *_args, **_kwargs: object())
     monkeypatch.setattr("main.run_invoice", _fake_result)
+    root_db = ROOT / "inventory.db"
+    before = root_db.read_bytes() if root_db.is_file() else None
     assert main(["--invoice_path", str(invoice)]) == 0
     assert load_stock(tmp_path / "inventory.db") == SEEDED
-    assert not (ROOT / "inventory.db").exists()
+    after = root_db.read_bytes() if root_db.is_file() else None
+    assert after == before
 
 
-def test_eval_reset_db_rebuilds_without_a_setup_step(tmp_path, monkeypatch, inventory_db):
+def test_eval_reset_db_rebuilds_without_a_setup_step(tmp_path, monkeypatch, inventory_db, capsys):
     from scripts.eval import main as eval_main
 
     monkeypatch.chdir(tmp_path)
@@ -155,7 +175,20 @@ def test_eval_reset_db_rebuilds_without_a_setup_step(tmp_path, monkeypatch, inve
     connection.close()
     assert eval_main(["--invoices", str(empty), "--replay", recording, "--reset"]) == 1
     assert load_stock(inventory_db) == SEEDED
-    assert not ledger.exists()
+    assert ledger.read_bytes() == b"keep"
+
+    edited = inventory_db.read_bytes()
+    missing = eval_main([
+        "--invoices", str(tmp_path / "no-such-folder"),
+        "--replay", recording,
+        "--reset",
+    ])
+    captured = capsys.readouterr()
+    assert missing == 2
+    assert "Traceback" not in captured.err
+    assert "Invoice directory not found" in captured.err
+    assert inventory_db.read_bytes() == edited
+    assert ledger.read_bytes() == b"keep"
 
 
 def test_create_database_still_seeds_an_empty_table(tmp_path):

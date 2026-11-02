@@ -187,27 +187,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Date the agents are told is today. Record stores it. Replay reads the file",
     )
     parser.add_argument(
-        "--reset-ledger",
-        action="store_true",
-        help=(
-            "Delete payments.db in the working directory before this run. "
-            "Does not change inventory.db, recordings/, data/, or logs/."
-        ),
-    )
-    parser.add_argument(
         "--reset-db",
         action="store_true",
         help=(
             "Delete the repository inventory.db and rebuild it from the seed before this run. "
-            "Does not change payments.db, recordings/, data/, or logs/."
+            "Eval does not use payments.db. "
+            "Does not change recordings/, data/, or logs/."
         ),
     )
     parser.add_argument(
         "--reset",
         action="store_true",
         help=(
-            "Delete payments.db in the working directory and the repository inventory.db, "
-            "then rebuild inventory.db from the seed. "
+            "Rebuild the repository inventory.db from the seed before this run. "
+            "Same as --reset-db. Eval does not use payments.db. "
             "Does not change recordings/, data/, or logs/."
         ),
     )
@@ -221,6 +214,17 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "replay" and not Path(recording).is_file():
         print(f"replay recording not found: {recording}", file=sys.stderr)
         return 1
+    invoices = Path(args.invoices)
+    if args.ordered:
+        if not Path(args.ordered).is_file():
+            print(f"Scenario file not found: {args.ordered}", file=sys.stderr)
+            return 2
+    elif not invoices.is_dir():
+        print(f"Invoice directory not found: {invoices}", file=sys.stderr)
+        return 2
+    elif not Path(args.answer_key).is_file():
+        print(f"Answer key not found: {args.answer_key}", file=sys.stderr)
+        return 2
     try:
         client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:
@@ -230,14 +234,11 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    invoices = Path(args.invoices)
     db_path = inventory_db_path(ROOT / "inventory.db")
     if args.reset or args.reset_db:
         reset_inventory_db(db_path)
     else:
         ensure_inventory_db(db_path)
-    if args.reset or args.reset_ledger:
-        Path("payments.db").unlink(missing_ok=True)
 
     with _release_dir():
         if args.ordered:

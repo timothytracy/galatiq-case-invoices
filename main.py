@@ -24,8 +24,9 @@ def main(argv: list[str] | None = None) -> int:
         "--reset-ledger",
         action="store_true",
         help=(
-            "Delete payments.db in the working directory before this run. "
-            "Does not change inventory.db, recordings/, data/, or logs/."
+            "Delete payments.db in the working directory before this run, including the "
+            "release records stored in it. A held invoice must be rerun before it can be "
+            "approved. Does not change inventory.db, recordings/, data/, or logs/."
         ),
     )
     parser.add_argument(
@@ -41,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "Delete payments.db and inventory.db in the working directory, then rebuild "
-            "inventory.db from the seed. Does not change recordings/, data/, or logs/."
+            "inventory.db from the seed. Deleting payments.db drops its release records, "
+            "so a held invoice must be rerun before it can be approved. "
+            "Does not change recordings/, data/, or logs/."
         ),
     )
     mode_flags = parser.add_mutually_exclusive_group()

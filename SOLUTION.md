@@ -338,7 +338,6 @@ python3 -m venv .venv
 cp .env.example .env
 # set XAI_API_KEY in .env
 source .venv/bin/activate
-python3 setup_db.py
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 python3 scripts/eval.py
 ```
@@ -367,7 +366,7 @@ streamlit run ui/app.py
 
 **Non-USD invoices are never paid.** `allowed_currencies` is USD. Any other currency is a `NON_USD` hold at validation, so the graph stops at `reject_log`. Nothing is converted. Reference prices are not compared. Payment also refuses a currency outside the allowed list if one ever reached it.
 
-**Inventory is read-only.** `setup_db.py` is the writer, and `main.py` calls the same creator only when `inventory.db` is missing. The workflow opens `file:inventory.db?mode=ro`. The table is the four README rows and has no price columns. Approving an invoice does not decrease stock. Quantities are summed per item. A quantity equal to stock passes. A quantity over stock is `STOCK_SHORTFALL`.
+**Inventory is read-only.** A run creates `inventory.db` from the seed when the file is missing and does not change an existing file. `setup_db.py` rebuilds that file from the seed. The workflow opens `file:inventory.db?mode=ro`. The table is the four README rows and has no price columns. Approving an invoice does not decrease stock. Quantities are summed per item. A quantity equal to stock passes. A quantity over stock is `STOCK_SHORTFALL`.
 
 ## Next steps
 
