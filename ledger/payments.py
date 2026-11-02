@@ -20,7 +20,6 @@ outside the window. Another vendor does not count.
 
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
@@ -30,6 +29,7 @@ from models import ExtractedInvoice, Finding, SourceInfo
 from decision.findings import _is_revised, parse_printed_date
 from decision.invoice_fields import different, normalize_invoice_number, show_money
 from decision.policy import POLICY
+from timestamps import utc_stamp
 
 _CREATE = """\
 CREATE TABLE IF NOT EXISTS payments (
@@ -223,7 +223,7 @@ def record_payment(
         (invoice_date or "").strip() or None,
         source_file,
         raw_sha256(raw_text),
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        utc_stamp(),
         status,
         authorization_key,
     )

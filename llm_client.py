@@ -49,6 +49,7 @@ BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
+REPAIR_PREFIX = "The JSON failed validation: "
 
 _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
@@ -240,7 +241,7 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
                 {
                     "role": "user",
                     "content": (
-                        "The JSON failed validation: "
+                        REPAIR_PREFIX
                         + error_text
                         + ". Return only a JSON object that matches the schema."
                     ),

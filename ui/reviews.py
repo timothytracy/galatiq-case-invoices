@@ -1,8 +1,9 @@
 """Local hold-queue notes. This file does not import the pipeline or payment."""
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
+
+from timestamps import utc_stamp
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEW_PATH = ROOT / "output" / "reviews" / "hold_reviews.json"
@@ -35,7 +36,7 @@ def record_review(
         "file": file, "pipeline_outcome": pipeline_outcome,
         "pipeline_reason_code": pipeline_reason_code, "pipeline_action": pipeline_action,
         "reviewer_outcome": reviewer_outcome, "note": text,
-        "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "recorded_at": utc_stamp(),
     }
     reviews.append(entry)
     reviews.sort(key=lambda row: row.get("file") or "")

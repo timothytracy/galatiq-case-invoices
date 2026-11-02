@@ -17,12 +17,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db import create_database  # noqa: E402
+from db import ensure_inventory_db  # noqa: E402
 from graph import run_invoice  # noqa: E402
-from llm_client import begin_client  # noqa: E402
-from scripts.eval import SUFFIXES, _release_dir  # noqa: E402
-
-REPAIR_PREFIX = "The JSON failed validation"
+from llm_client import REPAIR_PREFIX, begin_client  # noqa: E402
+from parsers import SUFFIXES  # noqa: E402
+from scripts.eval import _release_dir  # noqa: E402
 
 
 class CountingClient:
@@ -117,9 +116,7 @@ def main(argv=None) -> int:
 
     inner, as_of = begin_client("replay", args.replay, None)
     client = CountingClient(inner)
-    db_path = ROOT / "inventory.db"
-    if not db_path.exists():
-        create_database(db_path)
+    db_path = ensure_inventory_db(ROOT / "inventory.db")
 
     results = []
     with _release_dir(), contextlib.redirect_stdout(io.StringIO()):

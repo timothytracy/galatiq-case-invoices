@@ -12,7 +12,6 @@ import re
 import sqlite3
 import tempfile
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -25,6 +24,7 @@ from decision.findings import _name_in_source
 from decision.invoice_fields import non_usd_message
 from decision.outcome import review_release_block
 from decision.policy import POLICY
+from timestamps import utc_stamp
 
 ROOT = Path(__file__).resolve().parents[1]
 _FILLERS = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u180e\u3164\uffa0\u115f\u1160\u00ad\u200e\u200f"))
@@ -455,10 +455,7 @@ def _money(value):
 
 
 def _timestamp(now) -> str:
-    moment = now() if now is not None else datetime.now(timezone.utc)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utc_stamp(now() if now is not None else None)
 
 
 def _scratch(prefix, suffix) -> Path:

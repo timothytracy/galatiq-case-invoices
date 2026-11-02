@@ -1,18 +1,17 @@
 """One JSON object per stage, printed and returned."""
 
 import json
-from datetime import datetime, timezone
-
 from models import Finding, StageRecord
 from decision.outcome import finding_codes
 from decision.wording import explain
+from timestamps import utc_stamp
 
 
 def stage_log(filename: str, stage: str, result: dict, *, echo: bool = True) -> dict:
     record = StageRecord(
         stage=stage,
         invoice_file=filename,
-        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        timestamp=utc_stamp(),
         result=result,
     )
     payload = record.model_dump(mode="json")

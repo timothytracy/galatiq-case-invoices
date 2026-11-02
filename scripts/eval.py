@@ -37,11 +37,11 @@ from llm_client import (  # noqa: E402
 from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
 from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
+from parsers import SUFFIXES  # noqa: E402
 
 INVOICES = ROOT / "data" / "invoices"
 ANSWER_KEY = ROOT / "data" / "answer_key.json"
 ORDERED_SCENARIO = ROOT / "data" / "ordered_scenario.json"
-SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 
 
 def print_bad_reasoning(filename: str, attempts: list) -> None:

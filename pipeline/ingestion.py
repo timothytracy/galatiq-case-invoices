@@ -14,7 +14,13 @@ from models import (
 from parsers import read_raw
 from pipeline.stage_log import stopped, agent_finding, stage_log
 from recording import stable_invoice_path
-from decision.invoice_fields import normalize_invoice_number, normalize_item_name, resolve_currency
+from decision.invoice_fields import (
+    blank_to_none,
+    merge_notes,
+    normalize_invoice_number,
+    normalize_item_name,
+    resolve_currency,
+)
 from decision.wording import resolve_as_of, today_line
 
 
@@ -138,11 +144,7 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
     for line in data.line_items:
         label = (line.description or line.item or "").strip()
         code, note = normalize_item_name(line.item or label)
-        extra = _blank(line.note)
-        if note and extra:
-            extra = f"{note}; {extra}"
-        elif note:
-            extra = note
+        extra = merge_notes(note, blank_to_none(line.note))
         items.append(
             LineItem(
                 item=code or label or "UNKNOWN",
@@ -154,14 +156,14 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
             )
         )
     currency = resolve_currency(data.currency, raw)
-    raw_number = _blank(data.invoice_number)
+    raw_number = blank_to_none(data.invoice_number)
     return ExtractedInvoice(
-        vendor=_blank(data.vendor),
-        vendor_address=_blank(data.vendor_address),
+        vendor=blank_to_none(data.vendor),
+        vendor_address=blank_to_none(data.vendor_address),
         invoice_number=normalize_invoice_number(raw_number),
         invoice_number_raw=raw_number,
-        invoice_date=_blank(data.invoice_date),
-        due_date=_blank(data.due_date),
+        invoice_date=blank_to_none(data.invoice_date),
+        due_date=blank_to_none(data.due_date),
         currency=currency,
         line_items=items,
         subtotal=data.subtotal,
@@ -169,12 +171,12 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
         tax_amount=data.tax_amount,
         shipping=data.shipping,
         total=data.total,
-        payment_terms=_blank(data.payment_terms),
-        notes=_blank(data.notes),
-        revision=_blank(data.revision),
+        payment_terms=blank_to_none(data.payment_terms),
+        notes=blank_to_none(data.notes),
+        revision=blank_to_none(data.revision),
         embedded_instructions=bool(data.embedded_instructions),
         noncommercial_address=bool(data.noncommercial_address),
-        address_reason=_blank(data.address_reason),
+        address_reason=blank_to_none(data.address_reason),
         source=SourceInfo(
             path=str(path),
             filename=path.name,
@@ -183,10 +185,3 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
             raw_text=raw,
         ),
     )
-
-
-def _blank(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
