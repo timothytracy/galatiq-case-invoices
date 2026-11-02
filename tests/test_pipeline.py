@@ -767,9 +767,17 @@ def test_full_run_leaves_the_database_hash_unchanged(tmp_path, db_path, monkeypa
     assert db_path.read_bytes() == before
     assert hashlib.sha256(db_path.read_bytes()).hexdigest() == digest
     assert seen
+    inventory = str(db_path)
+    inventory_hits = []
     for args, kwargs in seen:
+        target = str(args[0]) if args else ""
+        if inventory not in target and "inventory.db" not in target:
+            # payments.db is the only database this run may write.
+            continue
+        inventory_hits.append(target)
         assert kwargs.get("uri") is True
-        assert "mode=ro" in args[0]
+        assert "mode=ro" in target
+    assert inventory_hits
     readonly = connect_readonly(db_path)
     try:
         with pytest.raises(sqlite3.OperationalError):

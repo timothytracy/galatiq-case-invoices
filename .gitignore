@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 inventory.db
+payments.db
 logs/
 output/
 __pycache__/

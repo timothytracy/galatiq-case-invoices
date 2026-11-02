@@ -1,0 +1,82 @@
+{
+  "note": "Real sample files on one shared ledger. Not an answer key. Outcomes are lowercase.",
+  "ledger_files": [
+    "invoice_1001.txt",
+    "invoice_1011.pdf",
+    "invoice_1004.json"
+  ],
+  "steps": [
+    {
+      "file": "data/invoices/invoice_1001.txt",
+      "outcome": "approve",
+      "reason_code": null,
+      "paid": true
+    },
+    {
+      "file": "data/invoices/invoice_1001.txt",
+      "outcome": "hold",
+      "reason_code": "DUPLICATE_INVOICE",
+      "paid": false
+    },
+    {
+      "file": "data/invoices/invoice_1011.pdf",
+      "outcome": "approve",
+      "reason_code": null,
+      "paid": true
+    },
+    {
+      "file": "data/invoices/invoice_1011.txt",
+      "outcome": "hold",
+      "reason_code": "DUPLICATE_INVOICE",
+      "paid": false
+    },
+    {
+      "file": "data/invoices/invoice_1004.json",
+      "outcome": "approve",
+      "reason_code": null,
+      "paid": true
+    },
+    {
+      "file": "data/invoices/invoice_1004_revised.json",
+      "outcome": "hold",
+      "reason_code": "DUPLICATE_INVOICE",
+      "paid": false,
+      "also_codes": ["REVISED_INVOICE"]
+    },
+    {
+      "file": "data/invoices/invoice_1012.pdf",
+      "outcome": "hold",
+      "reason_code": "VENDOR_RENAMED",
+      "paid": false,
+      "absent_codes": ["DUPLICATE_INVOICE"]
+    },
+    {
+      "file": "data/invoices/invoice_1012.txt",
+      "outcome": "hold",
+      "reason_code": "VENDOR_RENAMED",
+      "paid": false,
+      "absent_codes": ["DUPLICATE_INVOICE"]
+    },
+    {
+      "file": "data/invoices/invoice_1013.json",
+      "outcome": "reject",
+      "reason_code": "STOCK_SHORTFALL",
+      "paid": false,
+      "absent_codes": ["DUPLICATE_INVOICE"]
+    },
+    {
+      "file": "data/invoices/invoice_1013.pdf",
+      "outcome": "reject",
+      "reason_code": "STOCK_SHORTFALL",
+      "paid": false,
+      "absent_codes": ["DUPLICATE_INVOICE"]
+    },
+    {
+      "file": "data/extra_invoices/invoice_2111.json",
+      "outcome": "hold",
+      "reason_code": "REVISED_INVOICE",
+      "paid": false,
+      "absent_codes": ["DUPLICATE_INVOICE"]
+    }
+  ]
+}
