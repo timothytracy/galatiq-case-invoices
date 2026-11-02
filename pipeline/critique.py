@@ -12,7 +12,7 @@ from pipeline.fact_guard import (
     partition_concerns,
     verified_payload,
 )
-from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.stage_log import stopped, agent_finding, stage_log
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 
@@ -21,7 +21,7 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
     decision = state.decision
     if decision is None:
         reason = "Critique had no decision."
-        return _stopped(
+        return stopped(
             state,
             "reject",
             reason,
@@ -48,7 +48,7 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return _stopped(
+        return stopped(
             state,
             "hold",
             str(exc),

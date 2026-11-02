@@ -66,7 +66,7 @@ Item names are matched after normalizing case, spaces, and hyphens.
 ## Ground rules
 
 - Reject wins over hold. Hold wins over approve. When a reject also has fraud signals or a hold, those findings stay in the reason.
-- The model reads and flags. Code decides. The same findings always give the same outcome.
+- The model reads and flags. Code decides. The same findings always give the same outcome. This keeps every payment traceable to a rule, and it means text inside an invoice cannot loosen a decision. The reasoning is in the [README](../README.md#why-code-decides).
 - Each invoice is judged on its own facts plus the payments ledger. The ledger can only add a hold. Scored eval gives each invoice a fresh ledger, so a scored result does not depend on order.
 - An OCR number fix is kept only when the math reconciles. An O read as a 0 in an amount or a date is fixed only when the lines and totals add up afterwards.
 - No payment without an audit PASS.

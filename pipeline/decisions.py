@@ -5,7 +5,7 @@ from decision.invoice_fields import show_money
 from decision.wording import RULE_TEXT
 
 
-def _tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: list[str]) -> ApprovalDecision:
+def tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: list[str]) -> ApprovalDecision:
     reasoning = ApprovalReasoning(
         rules_applied=list(decision.reasoning.rules_applied) + ["Audit and critique can only make the decision stricter."],
         evidence=list(decision.reasoning.evidence) + (extra or ["The audit kept the stricter outcome."]),
@@ -21,7 +21,7 @@ def _tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: l
     )
 
 
-def _failure_decision(state: PipelineState, reason: str) -> ApprovalDecision:
+def failure_decision(state: PipelineState, reason: str) -> ApprovalDecision:
     invoice = state.invoice
     return ApprovalDecision(
         decision="hold",
@@ -36,7 +36,7 @@ def _failure_decision(state: PipelineState, reason: str) -> ApprovalDecision:
     )
 
 
-def _decision_from_validation(state: PipelineState, outcome: str) -> tuple[str, ApprovalDecision]:
+def decision_from_validation(state: PipelineState, outcome: str) -> tuple[str, ApprovalDecision]:
     findings = [] if state.validation is None else list(state.validation.findings)
     invoice = state.invoice
     fired = []

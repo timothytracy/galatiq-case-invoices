@@ -12,7 +12,7 @@ from models import (
     SourceInfo,
 )
 from parsers import read_raw
-from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.stage_log import stopped, agent_finding, stage_log
 from recording import stable_invoice_path
 from decision.invoice_fields import normalize_invoice_number, normalize_item_name, resolve_currency
 from decision.wording import resolve_as_of, today_line
@@ -25,7 +25,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
         raw = read_raw(path)
     except Exception as exc:
         reason = f"Could not read the invoice: {exc}"
-        return _stopped(
+        return stopped(
             state,
             "reject",
             reason,
@@ -47,7 +47,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return _stopped(
+        return stopped(
             state,
             "hold",
             str(exc),

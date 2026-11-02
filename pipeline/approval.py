@@ -6,7 +6,7 @@ import re
 from db import load_stock
 from llm_client import AgentStepFailed, LLMError, call_with_retries
 from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
-from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.stage_log import stopped, agent_finding, stage_log
 from decision.findings import evidence_lines
 from decision.policy import POLICY
 from decision.wording import PASSED_RULES, approval_conclusion, resolve_as_of, today_line
@@ -23,7 +23,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
     report = state.validation
     if invoice is None or report is None:
         reason = "Approval had no invoice."
-        return _stopped(
+        return stopped(
             state,
             "reject",
             reason,
@@ -64,7 +64,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
             check=reject_bad_wording,
         )
     except AgentStepFailed as exc:
-        return _stopped(
+        return stopped(
             state,
             "hold",
             str(exc),

@@ -20,7 +20,13 @@ The review screen shows ten sample invoices from that recorded run.
 
 ### Business impact
 
-The brief describes five-day processing delays. In the live runs on 2026-11-01 PT, an invoice took 2.85–3.90 s and cost $0.004923–$0.006428. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
+The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
+
+- **Speed.** In the live runs on 2026-11-01 PT, an invoice took 2.85–3.90 s, against five days by hand.
+- **Cost.** Grok cost $0.004923–$0.006428 per invoice. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
+- **Errors.** All 41 labeled outcomes were correct in replay and in three live runs of each set, and no reject or hold was paid. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
+- **People.** 31 of the 41 invoices, 76%, need no one at Acme. The 15 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 10, 24%, are holds. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
+- **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 76%. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
 ## How to run
 
@@ -36,7 +42,7 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. CI runs the same three after the tests and does not set an API key.
+Each of those three exits 0 when the score is perfect. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
 
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 
@@ -80,6 +86,12 @@ flowchart TD
 ```
 
 ## Key decisions
+
+### Why code decides
+
+Grok does the reading and the judging: it extracts the fields, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+
+### Rules
 
 - Code decides: reject wins over hold, hold wins over approve, and critique and audit can only tighten.
 - Audit has tools that read inventory, totals, policy, and the ledger, cap at 3 rounds and 8 calls, and cannot pay.

@@ -21,7 +21,7 @@ from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
 from decision.wording import ACTION, RULE_TEXT
 from ledger import paid_rows, split_window, vendor_key
-from llm_client import parse_tool_arguments
+from tool_loop import parse_tool_arguments
 
 
 class Tool:

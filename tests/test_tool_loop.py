@@ -829,9 +829,10 @@ def test_only_audit_is_wired_to_the_tool_loop():
     audit_text = (ROOT / "pipeline/audit.py").read_text(encoding="utf-8")
     assert "tool_request" in audit_text
     assert "final_turn_on_cap=True" in audit_text
-    client_text = (ROOT / "llm_client.py").read_text(encoding="utf-8")
-    assert '== "audit"' not in client_text
-    assert "== 'audit'" not in client_text
+    for relative in ("llm_client.py", "tool_loop.py"):
+        client_text = (ROOT / relative).read_text(encoding="utf-8")
+        assert '== "audit"' not in client_text
+        assert "== 'audit'" not in client_text
     critique = (ROOT / "pipeline/critique.py").read_text(encoding="utf-8")
     assert "tool_request" not in critique
     assert "request_tools" not in critique

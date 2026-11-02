@@ -18,3 +18,11 @@ def no_recording_env(monkeypatch):
 
     monkeypatch.delenv("XAI_MODE", raising=False)
     monkeypatch.delenv("XAI_RECORDING", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_dotenv(monkeypatch):
+    """A developer .env must not put a real key back into a test."""
+
+    monkeypatch.setattr("llm_client.load_dotenv", lambda path=None: None)
+    monkeypatch.setattr("ui.runner.load_dotenv", lambda path=None: None)
