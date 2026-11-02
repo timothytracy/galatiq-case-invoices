@@ -23,11 +23,12 @@ from ui.present import (
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
     DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
-    mode_label, parse_payload, resolve_path, run_one, save_run, temporary_ledger,
+    mode_label, parse_payload, recording_files, resolve_path, run_one, save_run, temporary_ledger,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
-MODES = ("Live (Grok)", "Offline (fake LLM)")
+MODES = ("Live (Grok)", "Offline (fake LLM)", "Replay (recorded Grok)")
+REPLAY_BANNER = "Replay of a recorded Grok run. This makes no live model calls."
 BADGE = {"approve": "green", "reject": "red", "hold": "orange", "blocking": "red", "warning": "orange", "info": "gray"}
 DOLLARS = {"approve": "Dollars approved", "reject": "Dollars rejected", "hold": "Dollars held"}
 
@@ -48,15 +49,18 @@ st.markdown(
 
 def main() -> None:
     st.title("Invoice review")
-    live = st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1).startswith("Live")
+    mode = _mode_name(st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1))
+    live = mode == "live"
     _offline_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
+    if mode == "replay":
+        st.info(REPLAY_BANNER)
     used = mode_label(st.session_state.get("entries") or [])
     if used:
         st.caption(f"This run used {used}.")
     entries = st.session_state.setdefault("entries", [])
     screens = {
-        "Run or load": lambda: screen_run(live),
+        "Run or load": lambda: screen_run(mode),
         "Results": lambda: screen_results(entries),
         "Invoice detail": lambda: screen_detail(entries),
         "Hold queue": lambda: screen_holds(entries, live),
@@ -83,10 +87,20 @@ def _offline_releases(live: bool) -> None:
         st.session_state["release_dir"] = str(path)
     os.environ["INVOICE_RELEASE_DIR"] = str(path)
 
-def _session_ledger(live: bool) -> Path:
-    """The ledger the pipeline run and the later pay must share.
+def _mode_name(choice: str) -> str:
+    if choice.startswith("Live"):
+        return "live"
+    if choice.startswith("Replay"):
+        return "replay"
+    return "offline"
 
-    Offline uses one temporary file for the session. Live uses payments.db.
+
+def _session_ledger(live: bool) -> Path:
+    """Fallback ledger for a loaded entry that has no ledger of its own.
+
+    A processed result carries the ledger its run wrote. Pay uses that path.
+    Offline keeps one temporary file here only for entries without one.
+    Live uses payments.db.
     """
     if live:
         return PAYMENTS_DB
@@ -97,8 +111,20 @@ def _session_ledger(live: bool) -> Path:
         st.session_state["offline_ledger"] = str(path)
     return path
 
-def screen_run(live: bool) -> None:
+
+def _recording_picker() -> Path | None:
+    files = recording_files()
+    if not files:
+        st.error("No committed recordings were found.")
+        return None
+    names = [path.name for path in files]
+    default = names.index("samples.jsonl") if "samples.jsonl" in names else 0
+    chosen = st.selectbox("Recording", names, index=default, key="recording")
+    return next(path for path in files if path.name == chosen)
+
+def screen_run(mode: str) -> None:
     st.header("Run or load")
+    replay = _recording_picker() if mode == "replay" else None
     left, right = st.columns(2)
     with left:
         st.subheader("Process")
@@ -106,16 +132,16 @@ def screen_run(live: bool) -> None:
         one, folder = st.columns(2)
         process_one = one.button("Process this invoice", type="primary")
         process_folder = folder.button("Process data/invoices")
-        st.caption("Payment will not run twice for the same invoice in this session.")
+        st.caption("Each offline or replay run keeps the temporary ledger that run wrote.")
     with right:
         st.subheader("Load")
         st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
         load_clicked = st.button("Load run file")
         uploaded = st.file_uploader("Upload a JSON run file", type=["json"])
     if process_one:
-        _process([resolve_path(st.session_state["invoice_path"])], live, single=True)
+        _process([resolve_path(st.session_state["invoice_path"])], mode, replay, single=True)
     if process_folder:
-        _process(invoice_files(), live, single=False)
+        _process(invoice_files(), mode, replay, single=False)
     if load_clicked:
         _load_path(st.session_state.get("run_path") or "")
     token = None if uploaded is None else getattr(uploaded, "file_id", uploaded.name)
@@ -373,15 +399,22 @@ def _trail_block(view: dict) -> None:
         with st.expander("Raw text"):
             st.text(view["raw_text"])
 
-def _process(paths: list[Path], live: bool, *, single: bool) -> None:
+def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool) -> None:
     if single and not paths[0].is_file():
         st.error("Invoice path must be one invoice file." if paths[0].is_dir() else f"Invoice file not found: {paths[0]}")
         return
+    if mode == "replay" and replay is None:
+        st.error("Choose a recording. Replay does not call the model.")
+        return
+    # One ledger for this click. A later click gets its own file, so a second
+    # run of the same invoice is not a duplicate of the first. Pay reads the
+    # path stored on that result.
+    ledger = PAYMENTS_DB if mode == "live" else temporary_ledger()
     rows, progress, status = [], st.progress(0.0), st.empty()
     try:
         for index, path in enumerate(paths, start=1):
             status.write(f"{path.name} ({index}/{len(paths)})")
-            rows.append(run_one(path, live=live, ledger_path=_session_ledger(live)))
+            rows.append(run_one(path, live=mode == "live", ledger_path=ledger, replay=replay))
             progress.progress(index / len(paths))
     except (MissingAPIKey, Exception) as exc:
         st.error(str(exc))
@@ -393,7 +426,8 @@ def _process(paths: list[Path], live: bool, *, single: bool) -> None:
         _replace_entry(rows[0])
     else:
         st.session_state["entries"] = rows
-    _notice(f"Processed {paths[0].name}." if single else f"Processed {len(rows)} invoices.")
+    notice = f"Processed {paths[0].name}." if single else f"Processed {len(rows)} invoices."
+    _notice(notice, error=_replay_errors(rows) if mode == "replay" else None)
 
 def _load_path(text: str) -> None:
     if not text.strip():
@@ -415,10 +449,23 @@ def _load_text(text: str, name: str) -> None:
         return
     _notice(f"Loaded {len(entries)} invoices from {name}.", entries)
 
-def _notice(notice: str, entries: list[dict] | None = None) -> None:
+def _replay_errors(rows: list[dict]) -> str | None:
+    """The pipeline's own words when a recording has no answer for an invoice."""
+    lines = []
+    for entry in rows:
+        view = invoice_view(entry)
+        reason = str(view.get("reason") or "")
+        if "replay miss" in reason.lower():
+            lines.append(f"{view['file']}: {reason}")
+    return "\n".join(lines) or None
+
+
+def _notice(notice: str, entries: list[dict] | None = None, error: str | None = None) -> None:
     if entries is not None:
         st.session_state["entries"] = entries
     st.session_state["notice"] = notice
+    if error:
+        st.session_state["error"] = error
     st.rerun()
 
 def _replace_entry(entry: dict) -> None:
@@ -482,8 +529,28 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
         ledger_path=ledger,
         demo=not live,
     )
+    _remember_payment(entry, result)
     st.session_state.setdefault("pay_results", {})[view["file"]] = result
     return True
+
+
+def _remember_payment(entry: dict, result: dict) -> None:
+    """Store a successful pay on the session record the screens render."""
+    if not isinstance(result, dict) or result.get("payment_status") != "paid":
+        return
+    state = entry.get("state")
+    if not isinstance(state, dict):
+        return
+    payment = dict(state.get("payment") or {})
+    incoming = result.get("payment") if isinstance(result.get("payment"), dict) else {}
+    payment.update({key: value for key, value in incoming.items() if value is not None})
+    payment["status"] = "paid"
+    invoice = state.get("invoice") if isinstance(state.get("invoice"), dict) else {}
+    if payment.get("amount") in (None, ""):
+        payment["amount"] = invoice.get("total")
+    if not payment.get("currency"):
+        payment["currency"] = invoice.get("currency")
+    state["payment"] = payment
 
 def _save_hold(view: dict, reviewer_outcome: str | None, note: str) -> None:
     if reviewer_outcome not in {"approve", "reject"}:
@@ -501,8 +568,11 @@ def _save_hold(view: dict, reviewer_outcome: str | None, note: str) -> None:
 
 def _flash() -> None:
     notice = st.session_state.pop("notice", None)
+    error = st.session_state.pop("error", None)
     if notice:
         st.success(notice)
+    if error:
+        st.error(error)
 
 def _badge(kind: str, text: str) -> str:
     return f"<span class='badge badge-{escape(kind)}'>{escape(text)}</span>"
