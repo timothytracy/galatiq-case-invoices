@@ -78,3 +78,41 @@ def stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=N
         "attempts": state.attempts + step_attempts,
         "logs": state.logs + [stage_log(state.filename, stage, result)],
     }
+
+
+def stop_with_finding(
+    state,
+    stage: str,
+    reason: str,
+    code: str,
+    *,
+    outcome: str = "reject",
+    severity: str = "blocking",
+    agent_error=None,
+) -> dict:
+    """Stop before any model call, with one finding that carries the reason."""
+
+    return stopped(
+        state,
+        outcome,
+        reason,
+        stage,
+        [],
+        agent_error=agent_error,
+        finding=Finding(code=code, message=reason, severity=severity),
+    )
+
+
+def agent_stop(state, stage: str, step_attempts, exc, note=None) -> dict:
+    """Hold after a model step failed for good."""
+
+    return stopped(
+        state,
+        "hold",
+        str(exc),
+        stage,
+        step_attempts,
+        agent_error=str(exc),
+        finding=agent_finding(exc),
+        note=note,
+    )

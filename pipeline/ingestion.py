@@ -6,13 +6,12 @@ from llm_client import AgentStepFailed, call_with_retries
 from models import (
     ExtractedInvoice,
     ExtractionSchema,
-    Finding,
     LineItem,
     PipelineState,
     SourceInfo,
 )
 from parsers import read_raw
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from recording import stable_invoice_path
 from decision.invoice_fields import (
     blank_to_none,
@@ -31,15 +30,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
         raw = read_raw(path)
     except Exception as exc:
         reason = f"Could not read the invoice: {exc}"
-        return stopped(
-            state,
-            "reject",
-            reason,
-            "ingestion",
-            [],
-            agent_error=None,
-            finding=Finding(code="UNREADABLE", message=reason, severity="blocking"),
-        )
+        return stop_with_finding(state, "ingestion", reason, "UNREADABLE")
 
     step_attempts: list[dict] = []
     try:
@@ -53,15 +44,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "ingestion",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-        )
+        return agent_stop(state, "ingestion", step_attempts, exc)
 
     invoice = invoice_from_extraction(extracted, _path_in_prompt(path, llm), raw)
     result = {

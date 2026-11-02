@@ -12,7 +12,7 @@ from pipeline.fact_guard import (
     partition_concerns,
     verified_payload,
 )
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 
@@ -21,15 +21,7 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
     decision = state.decision
     if decision is None:
         reason = "Critique had no decision."
-        return stopped(
-            state,
-            "reject",
-            reason,
-            "critique",
-            [],
-            agent_error=None,
-            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
-        )
+        return stop_with_finding(state, "critique", reason, "MISSING_FIELD")
     stock: dict[str, int] = {}
     facts = None
     if state.invoice is not None:
@@ -48,15 +40,7 @@ def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, 
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "critique",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-        )
+        return agent_stop(state, "critique", step_attempts, exc)
 
     # Being over $10,000 is not a risk. A stricter flag that only says so is ignored.
     checkable = [item for item in draft.concerns if not threshold_only_concern(concern_text(item))]

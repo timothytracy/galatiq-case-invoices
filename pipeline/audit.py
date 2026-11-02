@@ -18,7 +18,7 @@ from pipeline.fact_guard import (
     partition_concerns,
     verified_payload,
 )
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
 from decision.outcome import (
@@ -68,14 +68,14 @@ def audit(
     decision = state.decision
     if invoice is None or decision is None:
         reason = "Audit had no decision."
-        return stopped(
+        return stop_with_finding(
             state,
-            "hold",
-            reason,
             "audit",
-            [],
+            reason,
+            "SYSTEM_ERROR",
+            outcome="hold",
+            severity="warning",
             agent_error=state.agent_error,
-            finding=Finding(code="SYSTEM_ERROR", message=reason, severity="warning"),
         )
 
     stock = dict(load_stock(db_path))
@@ -98,16 +98,7 @@ def audit(
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "audit",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-            note=_cap_note(step),
-        )
+        return agent_stop(state, "audit", step_attempts, exc, note=_cap_note(step))
 
     fresh = assess(invoice, state.raw_text, stock)
     # Stock and totals are not checked here: a note may be about the raw text.

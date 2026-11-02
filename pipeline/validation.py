@@ -4,7 +4,7 @@ import sqlite3
 
 from db import load_stock
 from models import Finding, PipelineState, ValidationReport
-from pipeline.stage_log import stopped, stage_log
+from pipeline.stage_log import stage_log, stop_with_finding
 from decision.findings import assess
 from decision.outcome import finding_codes
 from decision.wording import explain, resolve_as_of, today_line
@@ -16,15 +16,7 @@ def validate(state: PipelineState, db_path, as_of=None, ledger_path=None) -> dic
     invoice = state.invoice
     if invoice is None:
         reason = "No invoice was extracted."
-        return stopped(
-            state,
-            "reject",
-            reason,
-            "validation",
-            [],
-            agent_error=state.agent_error,
-            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
-        )
+        return stop_with_finding(state, "validation", reason, "MISSING_FIELD", agent_error=state.agent_error)
     stock = dict(load_stock(db_path))
     assessment = assess(invoice, state.raw_text, stock)
     if assessment.currency != invoice.currency:
