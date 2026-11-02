@@ -14,19 +14,30 @@ import tempfile
 from contextlib import redirect_stdout
 from decimal import Decimal
 from pathlib import Path
-from urllib.parse import quote
 
-from db import ensure_inventory_db, inventory_db_path, log_dir, payments_db_path
-from models import ExtractedInvoice, Finding, PipelineState
+from db import ensure_inventory_db, inventory_db_path, payments_db_path
+from ledger.payments import stored_release_sha
+from models import ExtractedInvoice, PipelineState
+from parsers.pdf_invoice import pdf_text
 from pipeline.audit import amount_in_text, issue_authorization
 from pipeline.payment import payment
+from pipeline.release_record import (
+    ROOT,
+    as_view,
+    finding_list,
+    invoice_of,
+    load_record,
+    record_path,
+    repo_key,
+    repo_path,
+)
+from pipeline.validation import validate
 from decision.findings import name_in_source
 from decision.invoice_fields import non_usd_message
-from decision.outcome import review_release_block
+from decision.outcome import blocks_release, finding_codes, review_release_block
 from decision.policy import POLICY
 from timestamps import utc_stamp
 
-ROOT = Path(__file__).resolve().parents[1]
 _FILLERS = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u180e\u3164\uffa0\u115f\u1160\u00ad\u200e\u200f"))
 _NOT_LATEST = "release record is not the latest"
 MISSING_REVIEWER = "MISSING_REVIEWER"
@@ -53,7 +64,7 @@ def approve_and_pay(
     The caller's result is not modified.
     """
 
-    result = _view(result)
+    result = as_view(result)
     temps = []
     if demo and log_path is None:
         log = _scratch("approve-", ".jsonl")
@@ -70,52 +81,10 @@ def approve_and_pay(
             path.unlink(missing_ok=True)
 
 
-def remember(result, ledger_path=None) -> bool | str:
-    """Write the release record after its sha row. False on a disk or database error."""
-
-    data = _view(result)
-    rel = _repo_path(_source_of(data))
-    if rel is None:
-        return True
-    try:
-        invoice = _invoice(data.get("invoice"))
-        if invoice is None:
-            return False
-        raw = data.get("raw_text") or invoice.source.raw_text or ""
-        findings = _finding_list(data.get("findings") or [])
-        record = {
-            "record": "release",
-            "file": rel.as_posix(),
-            "outcome": data.get("outcome"),
-            "codes": [item.code for item in findings],
-            "reason_code": data.get("reason_code"),
-            "critique_concerns": list(data.get("critique_concerns") or []),
-            "raw_text": raw,
-            "raw_sha256": hashlib.sha256(raw.encode()).hexdigest(),
-            "source": rel.as_posix(),
-            "invoice": invoice.model_dump(mode="json"),
-            "findings": [_finding_row(item) for item in findings],
-        }
-        text = json.dumps(record) + "\n"
-        payable = review_release_block(record["outcome"], findings, record["reason_code"]) is None
-        digest = hashlib.sha256(text.encode()).hexdigest() if payable else None
-        if ledger_path is not None:
-            from ledger.payments import save_release_sha
-            save_release_sha(ledger_path, rel.as_posix(), digest)
-        path = _record_path(rel)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    except sqlite3.Error as exc:
-        return f"payments ledger unreadable: {exc}"
-    except OSError:
-        return False
-    return True
-
-
 def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     name, text = _plain(reviewer), _plain(note)
     when = _timestamp(now)
-    filename = _repo_key(result) or "unknown"
+    filename = repo_key(result) or "unknown"
 
     def finish(decision, code, message, saved=None):
         invoice = None if saved is None else saved.get("invoice")
@@ -155,22 +124,21 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", MISSING_NOTE, "A note is required.")
     if ledger is None:
         return finish("held", NOT_PAYABLE, "A ledger is required.")
-    saved = _load(filename)
+    saved = load_record(filename)
     if saved is None:
         return finish("held", NOT_PAYABLE, "No pipeline record for this invoice.")
-    invoice = _invoice(saved.get("invoice"))
+    invoice = invoice_of(saved.get("invoice"))
     saved["invoice"] = invoice
     early = review_release_block(
         saved.get("outcome"), list(saved.get("findings") or []), saved.get("reason_code"),
     )
     if early:
         return finish("held", NOT_PAYABLE, early, saved)
-    on_disk = _record_path(_repo_path(filename))
+    on_disk = record_path(repo_path(filename))
     try:
         digest = hashlib.sha256(on_disk.read_bytes()).hexdigest()
     except OSError:
         digest = None
-    from ledger.payments import stored_release_sha
     if digest is None or digest != stored_release_sha(ledger, filename):
         return finish("held", "SYSTEM_ERROR", _NOT_LATEST, saved)
     mismatch = _differs(result, saved)
@@ -194,7 +162,7 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
             number = "" if invoice is None or not invoice.invoice_number else invoice.invoice_number
             blocked = f"Invoice {number} from this vendor is already paid."
         return finish("held", NOT_PAYABLE, blocked, saved)
-    if invoice is None or not _grounded(invoice, _file_text(ROOT / _repo_path(saved.get("source")))):
+    if invoice is None or not _grounded(invoice, _file_text(ROOT / repo_path(saved.get("source")))):
         return finish("held", NOT_PAYABLE, "The vendor, invoice number, or total is not in the source file.", saved)
     if invoice.total is None or invoice.total <= 0:
         return finish("held", NOT_PAYABLE, "The total must be greater than zero.", saved)
@@ -218,7 +186,6 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
 def _fresh_block_code(fresh) -> str | None:
     """The first recheck code that blocks a release. None when nothing new blocks."""
 
-    from decision.outcome import blocks_release, finding_codes
 
     for finding, code in zip(fresh, finding_codes(fresh)):
         if blocks_release(code, finding):
@@ -231,11 +198,11 @@ def _differs(result, saved) -> str | None:
 
     if "outcome" in result and result.get("outcome") != saved.get("outcome"):
         return "The request does not match the pipeline record."
-    if "findings" in result and [item.code for item in _finding_list(result.get("findings") or [])] != list(saved.get("codes") or []):
+    if "findings" in result and [item.code for item in finding_list(result.get("findings") or [])] != list(saved.get("codes") or []):
         return "The request does not match the pipeline record."
     if "invoice" not in result or result.get("invoice") is None:
         return None
-    claimed = _invoice(result.get("invoice"))
+    claimed = invoice_of(result.get("invoice"))
     recorded = saved.get("invoice")
     if claimed is None or recorded is None:
         return None if claimed is None else "The request does not match the pipeline record."
@@ -252,7 +219,7 @@ def _differs(result, saved) -> str | None:
 
 
 def _source_problem(saved) -> str | None:
-    rel = _repo_path(saved.get("source"))
+    rel = repo_path(saved.get("source"))
     if rel is None:
         return "The source file is outside the repository."
     path = ROOT / rel
@@ -300,7 +267,7 @@ def _recheck(saved, invoice, ledger):
 
     if invoice is None:
         return "The invoice result could not be read."
-    rel = _repo_path(saved.get("source"))
+    rel = repo_path(saved.get("source"))
     if rel is None:
         return "The source file is outside the repository."
     try:
@@ -309,7 +276,6 @@ def _recheck(saved, invoice, ledger):
         return "The source file could not be read."
     state = _pay_state(saved, invoice).model_copy(update={"raw_text": live})
     database = inventory_db_path()
-    from pipeline.validation import validate
     try:
         ensure_inventory_db(database)
         with redirect_stdout(io.StringIO()):
@@ -325,7 +291,6 @@ def _recheck(saved, invoice, ledger):
 
 def _file_text(path: Path) -> str:
     if path.suffix.lower() == ".pdf":
-        from parsers.pdf_invoice import pdf_text
         return pdf_text(path)
     return path.read_text(encoding="utf-8")
 
@@ -336,104 +301,10 @@ def _pay_state(saved, invoice: ExtractedInvoice) -> PipelineState:
         filename=Path(saved["file"]).name,
         raw_text=saved.get("raw_text") or "",
         invoice=invoice,
-        findings=_finding_list(saved.get("findings") or []),
+        findings=finding_list(saved.get("findings") or []),
         outcome="hold",
         critique_concerns=list(saved.get("critique_concerns") or []),
     )
-
-
-def _record_dir() -> Path:
-    raw = os.environ.get("INVOICE_RELEASE_DIR", "").strip()
-    return Path(raw) if raw else log_dir()
-
-
-def _record_path(rel: Path) -> Path:
-    return _record_dir() / (quote(rel.as_posix(), safe="") + ".release.json")
-
-
-def _repo_path(path) -> Path | None:
-    """Repo-relative path, or None when it is outside the repository."""
-
-    if not path:
-        return None
-    candidate = Path(str(path))
-    if not candidate.is_absolute():
-        candidate = ROOT / candidate
-    try:
-        return candidate.resolve().relative_to(ROOT.resolve())
-    except ValueError:
-        return None
-
-
-def _repo_key(result) -> str | None:
-    rel = _repo_path(_source_of(result))
-    return None if rel is None else rel.as_posix()
-
-
-def _source_of(result):
-    invoice = result.get("invoice")
-    if isinstance(invoice, ExtractedInvoice):
-        return invoice.source.path
-    if isinstance(invoice, dict):
-        return (invoice.get("source") or {}).get("path")
-    return result.get("invoice_path")
-
-
-def _load(filename: str):
-    rel = _repo_path(filename)
-    if rel is None:
-        return None
-    path = _record_path(rel)
-    if not path.is_file():
-        return None
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return record if isinstance(record, dict) and record.get("record") == "release" else None
-
-
-def _view(result) -> dict:
-    if isinstance(result, dict):
-        return result
-    return {
-        "invoice": result.invoice,
-        "invoice_path": result.invoice_path,
-        "raw_text": result.raw_text,
-        "findings": list(result.findings or []),
-        "outcome": result.outcome,
-        "reason_code": result.reason_code,
-        "critique_concerns": list(result.critique_concerns or []),
-    }
-
-
-def _invoice(value):
-    if value is None:
-        return None
-    if isinstance(value, ExtractedInvoice):
-        return value
-    if isinstance(value, dict):
-        return ExtractedInvoice.model_validate(value)
-    return None
-
-
-def _finding_list(value) -> list[Finding]:
-    found = []
-    for item in value or []:
-        if isinstance(item, Finding):
-            found.append(item)
-        elif isinstance(item, dict):
-            found.append(Finding.model_validate(item))
-    return found
-
-
-def _finding_row(item: Finding) -> dict:
-    row = {"code": item.code, "message": item.message, "severity": item.severity}
-    if item.item:
-        row["item"] = item.item
-    if item.send_back_cap:
-        row["send_back_cap"] = True
-    return row
 
 
 def _lines(invoice: ExtractedInvoice):

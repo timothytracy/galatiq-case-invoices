@@ -3,6 +3,7 @@
 from models import PipelineState
 from pipeline.decisions import decision_from_validation, failure_decision, tighten
 from pipeline.payment import not_paid_record
+from pipeline.release_record import remember
 from pipeline.stage_log import stage_log
 from decision.outcome import finding_codes
 from decision.wording import ACTION, explain
@@ -40,7 +41,6 @@ def reject_log(state: PipelineState, ledger_path=None) -> dict:
             update={"reasoning": decision.reasoning.model_copy(update={"conclusion": reason})}
         )
     decision = decision.model_copy(update={"decision": outcome, "reason_code": code, "action": action})
-    from pipeline.approve_hold import remember
     saved = state.model_copy(update={"outcome": outcome, "reason_code": code, "decision": decision})
     if remember(saved, ledger_path) is not True:
         outcome, code, action = "hold", "SYSTEM_ERROR", ACTION["SYSTEM_ERROR"]

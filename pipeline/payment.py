@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 from models import ExtractedInvoice, Finding, PaymentAuthorization, PaymentRecord, PipelineState
+from pipeline.release_record import remember
 from pipeline.stage_log import stage_log
 from decision.invoice_fields import non_usd_message
 from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_codes
@@ -40,7 +41,6 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
         # The release record is written before the ledger row. A failed write
         # pays nothing and does not raise.
         if not release:
-            from pipeline.approve_hold import remember
             noted = remember(state, ledger_path)
             if noted is not True:
                 return _hold_unreadable_ledger(
