@@ -276,7 +276,9 @@ def test_default_run_gives_each_invoice_a_fresh_ledger(db_path):
     assert "DUPLICATE_INVOICE" not in _codes(text)
 
     source = (ROOT / "scripts" / "eval.py").read_text(encoding="utf-8")
-    assert "run_invoice(path, db_path, GrokClient())" in source
+    scored = source.split("for path in files:", 1)[1].split("def format_tool_summary", 1)[0]
+    assert "run_invoice(path, db_path, client)" in scored
+    assert "ledger_path" not in scored
 
 
 def test_shared_ledger_holds_the_second_copy(db_path, tmp_path):
@@ -510,7 +512,7 @@ def test_reset_ledger_deletes_the_file_only_after_the_client_exists(tmp_path, mo
     invoice.write_text("Vendor: Widgets Inc.\n", encoding="utf-8")
     ledger = tmp_path / "payments.db"
     ledger.write_bytes(b"keep")
-    monkeypatch.setattr("main.GrokClient", lambda: object())
+    monkeypatch.setattr("llm_client.GrokClient", lambda *_args, **_kwargs: object())
     seen = {}
 
     def run(*_args, **kwargs):
@@ -531,14 +533,14 @@ def test_reset_ledger_deletes_the_file_only_after_the_client_exists(tmp_path, mo
 
     ledger.write_bytes(b"keep")
 
-    def boom():
+    def boom(*_args, **_kwargs):
         raise MissingAPIKey("no key")
 
-    monkeypatch.setattr("main.GrokClient", boom)
+    monkeypatch.setattr("llm_client.GrokClient", boom)
     assert main(["--invoice_path", str(invoice), "--reset-ledger"]) == 1
     assert ledger.read_bytes() == b"keep"
 
-    monkeypatch.setattr("main.GrokClient", lambda: object())
+    monkeypatch.setattr("llm_client.GrokClient", lambda *_args, **_kwargs: object())
 
     def run_again(*_args, **kwargs):
         seen["kept"] = ledger.exists()

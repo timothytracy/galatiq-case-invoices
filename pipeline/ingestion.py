@@ -13,6 +13,7 @@ from models import (
 )
 from parsers import read_raw
 from pipeline.stage_log import _stopped, agent_finding, stage_log
+from recording import stable_invoice_path
 from decision.invoice_fields import normalize_invoice_number, normalize_item_name, resolve_currency
 from decision.wording import resolve_as_of, today_line
 
@@ -56,7 +57,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
             finding=agent_finding(exc),
         )
 
-    invoice = invoice_from_extraction(extracted, path, raw)
+    invoice = invoice_from_extraction(extracted, _path_in_prompt(path, llm), raw)
     result = {
         "invoice": invoice.model_dump(mode="json"),
         "feedback_used": list(state.feedback),
@@ -69,6 +70,18 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
         "agent_error": None,
         "logs": state.logs + [stage_log(state.filename, "ingestion", result)],
     }
+
+
+def _path_in_prompt(path: Path, llm) -> Path:
+    """Live keeps the caller's path. Record and replay use a repo-relative one.
+
+    The audit prompt includes source.path. An absolute checkout path would
+    miss on another machine. The file is still read from the original path.
+    """
+
+    if getattr(llm, "mode", "live") in ("record", "replay"):
+        return stable_invoice_path(path)
+    return path
 
 
 def _extract_messages(raw: str, feedback: list[str], as_of) -> list[dict]:
