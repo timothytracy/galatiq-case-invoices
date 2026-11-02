@@ -123,4 +123,4 @@ A reviewer can pay a hold without the review screen. The command runs the offlin
 python3 scripts/approve_hold_demo.py --demo
 ```
 
-`invoice_1012.txt` is a `VENDOR_RENAMED` hold. The mock line is `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. The decision record says `paid` and `pipeline_outcome` stays `hold`. `invoice_1002.txt` is a stock shortfall. It stays unpaid, `decision` `held`, reason `release record is not the latest`, and `pipeline_outcome` stays `reject`. The review screen does not call `approve_and_pay` yet.
+`invoice_1012.txt` is a `VENDOR_RENAMED` hold. The mock line is `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. The decision record says `paid` and `pipeline_outcome` stays `hold`. `invoice_1002.txt` is a stock shortfall. It stays unpaid, `decision` `held`, reason `NOT_PAYABLE`, and `pipeline_outcome` stays `reject`. The review screen does not call `approve_and_pay` yet.

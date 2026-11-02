@@ -48,21 +48,21 @@ def approve_and_pay(
 ) -> dict:
     """Release one held invoice. `result` selects the pipeline record.
     reviewer and note need two letters. amount must equal the recorded total.
-    demo=True uses a temporary ledger and log. The caller's result is not modified.
+    demo=True keeps ledger_path and, when log_path is omitted, writes the
+    decision log to a temporary file. demo=True without a ledger is refused.
+    The caller's result is not modified.
     """
 
     result = _view(result)
     temps = []
-    if demo:
-        ledger = _scratch("payments-", ".db")
-        temps.append(ledger)
-    else:
-        ledger = Path(ledger_path) if ledger_path is not None else Path("payments.db")
     if demo and log_path is None:
         log = _scratch("approve-", ".jsonl")
         temps.append(log)
     else:
         log = Path(log_path) if log_path is not None else ROOT / "output" / "reviews" / "approve_pay.jsonl"
+    ledger = None if demo and ledger_path is None else (
+        Path(ledger_path) if ledger_path is not None else Path("payments.db")
+    )
     try:
         return _approve(result, reviewer, note, amount, ledger, log, now)
     finally:
@@ -70,7 +70,7 @@ def approve_and_pay(
             path.unlink(missing_ok=True)
 
 
-def remember(result, ledger_path=None) -> bool:
+def remember(result, ledger_path=None) -> bool | str:
     """Write the release record after its sha row. False on a disk or database error."""
 
     data = _view(result)
@@ -153,11 +153,18 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", MISSING_REVIEWER, "A reviewer name is required.")
     if sum(ch.isalpha() for ch in text) < 2:
         return finish("held", MISSING_NOTE, "A note is required.")
+    if ledger is None:
+        return finish("held", NOT_PAYABLE, "A ledger is required.")
     saved = _load(filename)
     if saved is None:
         return finish("held", NOT_PAYABLE, "No pipeline record for this invoice.")
     invoice = _invoice(saved.get("invoice"))
     saved["invoice"] = invoice
+    early = review_release_block(
+        saved.get("outcome"), list(saved.get("findings") or []), saved.get("reason_code"),
+    )
+    if early:
+        return finish("held", NOT_PAYABLE, early, saved)
     on_disk = _record_path(_repo_path(filename))
     try:
         digest = hashlib.sha256(on_disk.read_bytes()).hexdigest()

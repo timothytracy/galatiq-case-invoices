@@ -158,7 +158,7 @@ def test_unreadable_ledger_is_a_system_error(kind, tmp_path, monkeypatch):
 
 def test_non_usd_missing_note_unknown_outcome_and_bad_total(tmp_path):
     euro = _run(ROOT / "data/invoices/invoice_1014.xml", tmp_path)
-    assert _pay(euro, tmp_path)["reason"] == "release record is not the latest"
+    assert _pay(euro, tmp_path)["reason_code"] == "NOT_PAYABLE"
     hold = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
     assert _pay(hold, tmp_path, note="n")["reason_code"] == "MISSING_NOTE"
     unknown = _pay(_edit(hold, tmp_path, outcome="HOLD"), tmp_path, amount=hold["invoice"].total)
@@ -432,6 +432,39 @@ def test_approval_from_another_cwd_pays_the_same_hold(tmp_path):
     assert paid["result"] == "paid"
 
 
+def test_demo_with_the_run_ledger_pays_once(tmp_path, capsys):
+    result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
+    ledger = tmp_path / "payments.db"
+    first = approve_and_pay(
+        result, reviewer="Avery Chen", note="Confirmed with the vendor.",
+        amount=result["invoice"].total, ledger_path=ledger, demo=True, now=lambda: WHEN,
+    )
+    assert first["result"] == "paid", first["reason"]
+    again = approve_and_pay(
+        result, reviewer="Avery Chen", note="Confirmed with the vendor.",
+        amount=result["invoice"].total, ledger_path=ledger, demo=True, now=lambda: WHEN,
+    )
+    assert again["result"] == "held"
+    assert capsys.readouterr().out.count("Paid ") == 1
+    assert not (ROOT / "output" / "reviews" / "approve_pay.jsonl").exists()
+
+
+def test_demo_without_a_ledger_is_refused(tmp_path):
+    result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
+    refused = approve_and_pay(
+        result, reviewer="Avery Chen", note="Confirmed with the vendor.",
+        amount=result["invoice"].total, demo=True, now=lambda: WHEN,
+    )
+    assert refused["result"] == "held"
+    assert refused["reason"] == "A ledger is required."
+
+
+def test_a_reject_is_not_payable(tmp_path):
+    refused = _pay(_run(ROOT / "data/invoices/invoice_1002.txt", tmp_path), tmp_path)
+    assert refused["reason_code"] == "NOT_PAYABLE"
+    assert refused["reason"] == "A reject is never paid."
+
+
 def test_eval_replay_leaves_the_repo_logs_alone(monkeypatch):
     monkeypatch.delenv("INVOICE_RELEASE_DIR", raising=False)
     logs = ROOT / "logs"
@@ -451,6 +484,7 @@ def test_demo_pays_one_hold_and_refuses_one_reject(capsys):
     assert "Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)" in out
     records = [json.loads(line) for line in out.splitlines() if '"reviewer"' in line]
     assert [row["decision"] for row in records] == ["paid", "held"]
-    assert records[1]["reason"] == "release record is not the latest"
+    assert records[1]["reason_code"] == "NOT_PAYABLE"
+    assert records[1]["reason"] == "A reject is never paid."
     after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     assert after == before
