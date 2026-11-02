@@ -1,7 +1,9 @@
 """Invoice review screen. Launch: streamlit run ui/app.py"""
 
 import json
+import os
 import sys
+import tempfile
 from html import escape
 from pathlib import Path
 
@@ -47,6 +49,7 @@ st.markdown(
 def main() -> None:
     st.title("Invoice review")
     live = st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1).startswith("Live")
+    _offline_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
     used = mode_label(st.session_state.get("entries") or [])
     if used:
@@ -63,6 +66,22 @@ def main() -> None:
         st.info("Process an invoice or load a run file on Run or load.")
     else:
         screens[page]()
+
+def _offline_releases(live: bool) -> None:
+    """Offline runs keep the pipeline's release records out of logs/.
+
+    The pipeline writes the record itself. This only points INVOICE_RELEASE_DIR
+    at one temporary folder for the session. Live mode leaves the default logs/.
+    """
+    if live:
+        os.environ.pop("INVOICE_RELEASE_DIR", None)
+        return
+    folder = st.session_state.get("release_dir")
+    path = Path(folder) if folder else None
+    if path is None or not path.is_dir():
+        path = Path(tempfile.mkdtemp(prefix="review-releases-"))
+        st.session_state["release_dir"] = str(path)
+    os.environ["INVOICE_RELEASE_DIR"] = str(path)
 
 def screen_run(live: bool) -> None:
     st.header("Run or load")

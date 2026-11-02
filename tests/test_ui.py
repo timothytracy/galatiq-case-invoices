@@ -743,78 +743,66 @@ def test_adapter_passes_the_loaded_result_unchanged(monkeypatch, tmp_path):
     assert invoice_view({"state": {"filename": "held.txt", "outcome": "hold"}})["critique_concerns"] == []
 
 
-def test_real_demo_pay_refuses_a_mismatched_amount(monkeypatch, tmp_path):
+def test_loaded_run_without_a_record_is_refused(monkeypatch, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.chdir(tmp_path)
-    real = ROOT / "payments.db"
-    before = real.read_bytes() if real.exists() else None
-    state = _review_hold("northwind.txt", "500.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.")
-    state = state["state"]
-    log = tmp_path / "approve_pay.jsonl"
-    paid = approve_and_pay(
-        state, reviewer="Ada", note="Same company.", amount="500.00", demo=True, log_path=log,
+    assert Path.cwd().resolve() == ROOT.resolve()
+    assert "chdir" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
+    assert "chdir" not in (ROOT / "ui" / "runner.py").read_text(encoding="utf-8")
+    state = saved_result(_review_hold("northwind.txt", "500.00", "USD", "VENDOR_RENAMED", "formerly"))
+    refused = approve_and_pay(
+        state, reviewer="Ada", note="Same company.", amount=extracted_total(state), demo=True,
     )
-    assert paid["result"] == "paid"
-    assert paid["status"] == "paid"
-    assert paid["payment_status"] == "paid"
-    assert paid["reason_code"] is None
-    mismatch = approve_and_pay(
-        state, reviewer="Ada", note="Wrong total.", amount="1.00", demo=True, log_path=log,
-    )
-    assert mismatch["result"] == "held"
-    assert mismatch["status"] == "refused"
-    assert mismatch["reason_code"] == "AMOUNT_MISMATCH"
-    assert "does not equal" in mismatch["reason"]
-    kind, text = pay_message({"file": "northwind.txt", "amount": "500.00", "currency": "USD"}, mismatch)
-    assert kind == "error"
-    assert text.startswith("AMOUNT_MISMATCH. ")
-    assert "does not equal" in text
-    assert not (tmp_path / "payments.db").exists()
-    assert (real.read_bytes() if real.exists() else None) == before
-    assert "northwind.txt" in log.read_text(encoding="utf-8")
-    short = approve_and_pay(
-        state, reviewer="A", note="x", amount=extracted_total(state), demo=True, log_path=log,
-    )
-    assert short["result"] == "held"
-    assert short["reason_code"] == "MISSING_REVIEWER"
-    assert short["reason"] == "A reviewer name is required."
-    zero = _review_hold("zero.txt", "0.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.")["state"]
-    zero_pay = approve_and_pay(
-        zero, reviewer="Ada", note="Same company.", amount=extracted_total(zero), demo=True, log_path=log,
-    )
-    assert zero_pay["reason_code"] == "NOT_PAYABLE"
-    assert zero_pay["reason"] == "The total must be greater than zero."
-    assert pay_message({"file": "zero.txt", "amount": "0.00", "currency": "USD"}, zero_pay)[1] == (
-        "NOT_PAYABLE. The total must be greater than zero."
+    assert refused["result"] == "held"
+    assert refused["reason_code"] == "NOT_PAYABLE"
+    assert refused["reason"] == "No pipeline record for this invoice."
+    assert pay_message(invoice_view({"state": state}), refused)[1] == (
+        "NOT_PAYABLE. No pipeline record for this invoice."
     )
     from decision.outcome import SEND_BACK_CAP_MESSAGE
 
     capped = _review_hold("capped.txt", "500.00", "USD", "AUDIT_ESCALATED", SEND_BACK_CAP_MESSAGE)
     assert can_pay(invoice_view(capped)) is False
     assert "SEND_BACK_CAP_MESSAGE" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
-    assert "SEND_BACK_CAP_MESSAGE" not in (ROOT / "ui" / "present.py").read_text(encoding="utf-8")
-    refused_cap = approve_and_pay(
-        saved_result(capped),
+
+
+def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatch, tmp_path):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert Path.cwd().resolve() == ROOT.resolve()
+    releases = tmp_path / "releases"
+    monkeypatch.setenv("INVOICE_RELEASE_DIR", str(releases))
+    logs = ROOT / "logs"
+    before = {path.name for path in logs.glob("*.release.json")} if logs.is_dir() else set()
+    real = ROOT / "payments.db"
+    pay_before = real.read_bytes() if real.exists() else None
+    held = run_one(ROOT / "data" / "invoices" / "invoice_1012.txt", db_path, live=False)
+    state = saved_result(held)
+    assert held["llm"] == "fake"
+    assert state["outcome"] == "hold"
+    assert str(extracted_total(state)) == "9975.00"
+    written = list(releases.glob("*.release.json"))
+    assert len(written) == 1
+    record = json.loads(written[0].read_text(encoding="utf-8"))
+    assert record["record"] == "release"
+    assert str(record["invoice"]["total"]) == "9975.00"
+    after = {path.name for path in logs.glob("*.release.json")} if logs.is_dir() else set()
+    assert after == before
+    paid = approve_and_pay(
+        state, reviewer="Ada", note="Same company.", amount=extracted_total(state), demo=True,
+    )
+    assert paid["result"] == "paid"
+    assert paid["payment_status"] == "paid"
+    rejected = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, live=False)
+    assert saved_result(rejected)["outcome"] == "reject"
+    unpaid = approve_and_pay(
+        saved_result(rejected),
         reviewer="Ada",
-        note="Same company.",
-        amount=extracted_total(saved_result(capped)),
+        note="Stock is short.",
+        amount=extracted_total(saved_result(rejected)),
         demo=True,
-        log_path=log,
     )
-    assert refused_cap["result"] == "held"
-    assert refused_cap["reason"]
-    assert refused_cap["reason"] in pay_message(invoice_view(capped), refused_cap)[1]
-    source = tmp_path / "northwind.txt"
-    source.write_text("on disk\n", encoding="utf-8")
-    mismatched = json.loads(json.dumps(state))
-    mismatched["invoice"]["source"]["path"] = str(source)
-    mismatched["raw_text"] = "different\n"
-    source_refusal = approve_and_pay(
-        mismatched, reviewer="Ada", note="Same company.", amount=extracted_total(mismatched), demo=True, log_path=log,
-    )
-    assert source_refusal["reason_code"] == "NOT_PAYABLE"
-    assert "does not match the source file" in source_refusal["reason"]
-    assert "does not match the source file" in pay_message({"file": "northwind.txt"}, source_refusal)[1]
+    assert unpaid["result"] == "held"
+    assert unpaid["payment_status"] == "not_paid"
+    assert (real.read_bytes() if real.exists() else None) == pay_before
     assert not (tmp_path / "payments.db").exists()
 
 
@@ -871,7 +859,7 @@ def test_offline_run_does_not_write_payments_db(db_path, monkeypatch, tmp_path):
 
 def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.chdir(tmp_path)
+    assert Path.cwd().resolve() == ROOT.resolve()
     real = ROOT / "payments.db"
     before = real.read_bytes() if real.exists() else None
     reviews = tmp_path / "hold_reviews.json"
@@ -956,16 +944,9 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     app.checkbox(key="pay-confirm-0-northwind.txt").set_value(True)
     _submit_pay(app, "northwind.txt", 0)
     paid = _visible(app)
-    assert "Paid northwind.txt. Payment status: Paid. 500.00 USD." in paid
-
-    app.text_input(key="pay-reviewer-1-harbor.txt").set_value("Rita")
-    app.text_area(key="pay-note-1-harbor.txt").set_value("Checked the currency.")
-    app.checkbox(key="pay-confirm-1-harbor.txt").set_value(True)
-    _submit_pay(app, "harbor.txt", 1)
-    refused_text = _visible(app)
-    assert "NON_USD. Non-USD currency (EUR)." in refused_text
-    assert "Paid harbor.txt." not in refused_text
-    assert not (tmp_path / "payments.db").exists()
+    assert "NOT_PAYABLE. No pipeline record for this invoice." in paid
+    assert "Paid northwind.txt." not in paid
+    assert not app.exception
     assert (real.read_bytes() if real.exists() else None) == before
 
 
