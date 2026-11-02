@@ -87,27 +87,27 @@ Replay costs use the same division on the usage stored in the committed recordin
 - Ordered, tools on: $0.047920 / 11 = $0.004356 per step
 - Ordered, tools off: $0.026695 / 11 = $0.002427 per step
 
-Per-invoice time is wall seconds divided by the invoice count. The ordered row is 11 steps, so that quotient is per step. Each non-terminating quotient is half up to six decimal places.
+Per-invoice time is wall seconds divided by the invoice count. The ordered row is 11 steps, so that quotient is per step. The quotients below are rounded to two decimal places.
 
 Live, tools on, samples (20 invoices):
 
-- 62 / 20 = 3.1 s
-- 58 / 20 = 2.9 s
+- 62 / 20 = 3.10 s
+- 58 / 20 = 2.90 s
 - 57 / 20 = 2.85 s
 
-That range is 2.85 s to 3.1 s per invoice.
+That range is 2.85 s to 3.10 s per invoice.
 
 Live, tools on, unseen (21 invoices):
 
-- 82 / 21 = 3.904762 s
-- 63 / 21 = 3 s
-- 62 / 21 = 2.952381 s
+- 82 / 21 = 3.90 s
+- 63 / 21 = 3.00 s
+- 62 / 21 = 2.95 s
 
-That range is 2.952381 s to 3.904762 s per invoice.
+That range is 2.95 s to 3.90 s per invoice.
 
 Live, tools off:
 
-- Samples: 48 / 20 = 2.4 s per invoice
-- Unseen: 54 / 21 = 2.571429 s per invoice
+- Samples: 48 / 20 = 2.40 s per invoice
+- Unseen: 54 / 21 = 2.57 s per invoice
 
-Ordered, tools on: 28 / 11 = 2.545455 s per step.
+Ordered, tools on: 28 / 11 = 2.55 s per step.

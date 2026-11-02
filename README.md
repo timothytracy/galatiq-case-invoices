@@ -15,17 +15,17 @@ Replay of the six committed recordings, with no API key, on 2026-11-01 PT:
 | 21 unseen | off | 21/21 |
 | Ordered ledger | off | 11 steps ok, ledger matches |
 
-Live runs on 2026-11-01 PT matched the keys every time (samples 20/20 x3, unseen 21/21 x3, ordered ok). Measured cost was $0.004923 to $0.006428 per invoice with audit tools and $0.002571 to $0.002821 without (run cost divided by invoice count; details in [docs/METRICS.md](docs/METRICS.md)).
+Live runs on 2026-11-01 PT matched the keys every time (samples 20/20 x3, unseen 21/21 x3, ordered ok).
 
-![Replay of the recorded Grok run of the 20 sample invoices](docs/review_screen.png)
+![Replay of the recorded Grok run, ten sample invoices](docs/review_screen.png)
 
-The screenshot is a replay of the recorded Grok run of the 20 sample invoices, 2026-11-01 PT.
+The screenshot is a replay of the recorded Grok run of the sample invoices, 2026-11-01 PT, cropped to ten rows whose reasons fit: 1001, 1002, 1003, 1006, 1008, 1011 (pdf and text), 1012 (pdf and text), and 1014.
 
 ### Business impact
 
-The brief's delay is five days ([REQUIREMENTS.md](REQUIREMENTS.md): $2M a year, a 30% error rate, five-day delays). The live runs on 2026-11-01 PT finished the whole CLI command, one invoice after another. With audit tools, the 20 samples took 57, 58, and 62 seconds, which is 57/20 = 2.85 s, 58/20 = 2.9 s, and 62/20 = 3.1 s per invoice. The 21 unseen invoices took 62, 63, and 82 seconds, which is 62/21 = 2.952381 s, 63/21 = 3 s, and 82/21 = 3.904762 s per invoice (half up to six decimal places). With tools off, samples took 48 s (48/20 = 2.4 s per invoice) and unseen took 54 s (54/21 = 2.571429 s per invoice). On those same runs, cost was $0.004923 to $0.006428 per invoice with audit tools and $0.002571 to $0.002821 without (run cost divided by invoice count).
+The brief describes five-day payment delays. In the live runs on 2026-11-01 PT, each invoice took about 3 to 4 seconds with audit tools (2.85–3.90 s) and about 2.5 seconds without (2.40–2.57 s), at $0.0049–$0.0064 and $0.0026–$0.0028 per invoice. Times are whole-run wall time divided by invoice count, invoices run one after another; costs are run cost divided by invoice count; details in [docs/METRICS.md](docs/METRICS.md).
 
-Of the 41 labeled invoices, 31 are decided automatically and 10 are held. No invoice the answer keys mark as bad is paid.
+Of the 41 labeled invoices, 31 are decided automatically and 10 are held for a person. No invoice the answer keys mark as bad is paid.
 
 ## Quick start
 
