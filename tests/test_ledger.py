@@ -368,7 +368,7 @@ def test_default_run_gives_each_invoice_a_fresh_ledger(db_path):
 
     source = (ROOT / "scripts" / "eval.py").read_text(encoding="utf-8")
     scored = source.split("for path in files:", 1)[1].split("def format_tool_summary", 1)[0]
-    assert "run_invoice(path, db_path, client)" in scored
+    assert "run_invoice(path, db_path, client" in scored
     assert "ledger_path" not in scored
 
 

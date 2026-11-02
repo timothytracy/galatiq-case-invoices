@@ -18,6 +18,7 @@ difference of the printed invoice dates. A date that does not parse is
 outside the window. Another vendor does not count.
 """
 
+import contextlib
 import hashlib
 import sqlite3
 from decimal import Decimal
@@ -280,10 +281,7 @@ def record_payment(
         return False
     except sqlite3.Error as exc:
         if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
+            _rollback_quietly(connection)
         return f"payments ledger unreadable: {exc}"
     finally:
         if connection is not None:
@@ -314,10 +312,7 @@ def settle_payment(path: str | Path, authorization_key: str, status: str) -> boo
         return True
     except sqlite3.Error:
         if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
+            _rollback_quietly(connection)
         return False
     finally:
         if connection is not None:
@@ -453,6 +448,13 @@ def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding
     )
 
 
+def _rollback_quietly(connection: sqlite3.Connection) -> None:
+    """Roll back after an error. A failed rollback must not hide the first error."""
+
+    with contextlib.suppress(sqlite3.Error):
+        connection.execute("ROLLBACK")
+
+
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     name = path.resolve().as_posix()
     return sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=5)
@@ -476,10 +478,7 @@ def save_release_sha(ledger, path: str, digest: str | None) -> None:
         )
         connection.execute("COMMIT")
     except sqlite3.Error:
-        try:
-            connection.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
+        _rollback_quietly(connection)
         raise
     finally:
         connection.close()

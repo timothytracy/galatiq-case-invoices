@@ -108,10 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.reset or args.reset_ledger:
         ledger.unlink(missing_ok=True)
 
-    if mode == "live" and as_of is None:
-        result = run_invoice(path, db_path, client, ledger_path=ledger)
-    else:
-        result = run_invoice(path, db_path, client, as_of=as_of, ledger_path=ledger)
+    result = run_invoice(path, db_path, client, as_of=as_of, ledger_path=ledger)
     _write_log(path, result)
     print(json.dumps(_result_line(path, result)), flush=True)
     return 0

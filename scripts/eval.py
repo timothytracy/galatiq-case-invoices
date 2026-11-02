@@ -257,54 +257,57 @@ def main(argv: list[str] | None = None) -> int:
     with _release_dir():
         if args.ordered:
             return _ordered_main(Path(args.ordered), db_path, client, mode, as_of, args.verbose)
+        return _scored_main(invoices, Path(args.answer_key), db_path, client, mode, as_of, args.verbose)
 
-        key = load_answer_key(Path(args.answer_key))
-        files = sorted(
-            path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
-        )
-        correct = 0
-        tool_calls = 0
-        repeats = 0
-        for path in files:
-            # One client for the run, so record mode writes a single file.
-            # Live passes no as_of: the graph still uses the wall clock.
-            with stage_output(args.verbose):
-                if mode == "live" and as_of is None:
-                    result = run_invoice(path, db_path, client)
-                else:
-                    result = run_invoice(path, db_path, client, as_of=as_of)
-            print_bad_reasoning(path.name, result.get("attempts") or [])
-            calls = tool_calls_of(result)
-            tool_calls += len(calls)
-            repeats += sum(1 for row in calls if row.get("repeat"))
-            lookup = invoice_lookup(path)
-            expected = key.get(lookup)
-            if expected is None:
-                print(
-                    f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\t"
-                    f"tools={len(calls)}\tMISS",
-                    flush=True,
-                )
-                continue
-            row = grade(result, expected)
-            ok = row["outcome_ok"] and row["reason_ok"]
-            correct += int(ok)
+
+def _scored_main(
+    invoices: Path, answer_key: Path, db_path: Path, client, mode: str, as_of, verbose: bool
+) -> int:
+    """Each invoice on its own graph, graded against the answer key."""
+
+    key = load_answer_key(answer_key)
+    files = sorted(
+        path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
+    )
+    correct = 0
+    tool_calls = 0
+    repeats = 0
+    for path in files:
+        # One client for the run, so record mode writes a single file.
+        # Live has no as_of: the graph still uses the wall clock.
+        with stage_output(verbose):
+            result = run_invoice(path, db_path, client, as_of=as_of)
+        print_bad_reasoning(path.name, result.get("attempts") or [])
+        calls = tool_calls_of(result)
+        tool_calls, repeats = _tally(calls, tool_calls, repeats)
+        lookup = invoice_lookup(path)
+        expected = key.get(lookup)
+        if expected is None:
             print(
-                f"{path.name}\toutcome={row['actual_outcome']}\texpected={row['expected_outcome']}\t"
-                f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
-                f"payment={payment_status(result)}\t"
-                f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
-                f"tools={len(calls)}\t"
-                f"{'ok' if ok else 'MISS'}",
+                f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\t"
+                f"tools={len(calls)}\tMISS",
                 flush=True,
             )
-            if not ok and result.get("agent_error"):
-                print(f"{path.name}\terror={result['agent_error']}", flush=True)
-        print(format_tool_summary(tool_calls, repeats), flush=True)
-        print(f"score {correct}/{len(files)}", flush=True)
-        if mode != "live":
-            print(client.usage_line(), flush=True)
-        return 0 if correct == len(files) and correct == len(key) else 1
+            continue
+        row = grade(result, expected)
+        ok = row["outcome_ok"] and row["reason_ok"]
+        correct += int(ok)
+        print(
+            f"{path.name}\toutcome={row['actual_outcome']}\texpected={row['expected_outcome']}\t"
+            f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
+            f"payment={payment_status(result)}\t"
+            f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
+            f"tools={len(calls)}\t"
+            f"{_mark(ok)}",
+            flush=True,
+        )
+        if not ok and result.get("agent_error"):
+            print(f"{path.name}\terror={result['agent_error']}", flush=True)
+    print(format_tool_summary(tool_calls, repeats), flush=True)
+    print(f"score {correct}/{len(files)}", flush=True)
+    if mode != "live":
+        print(client.usage_line(), flush=True)
+    return 0 if correct == len(files) and correct == len(key) else 1
 
 
 @contextlib.contextmanager
@@ -321,6 +324,16 @@ def _release_dir():
     finally:
         os.environ.pop("INVOICE_RELEASE_DIR", None)
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def _tally(calls: list[dict], tool_calls: int, repeats: int) -> tuple[int, int]:
+    """Running totals of tool calls and repeated calls."""
+
+    return tool_calls + len(calls), repeats + sum(1 for row in calls if row.get("repeat"))
+
+
+def _mark(ok: bool) -> str:
+    return "ok" if ok else "MISS"
 
 
 def format_tool_summary(calls: int, repeats: int) -> str:
@@ -363,21 +376,20 @@ def _ordered_main(
     repeats = 0
     for step in report["steps"]:
         calls = step.get("tool_calls") or []
-        tool_calls += len(calls)
-        repeats += sum(1 for row in calls if row.get("repeat"))
+        tool_calls, repeats = _tally(calls, tool_calls, repeats)
         print(
             f"{step['file']}\toutcome={step['outcome']}\texpected={step['expected_outcome']}\t"
             f"reason={step['reason_code']}\texpected_reason={step['expected_reason']}\t"
             f"payment={'paid' if step['paid'] else 'not_paid'}\t"
             f"tools={len(calls)}\t"
-            f"{'ok' if step['ok'] else 'MISS'}",
+            f"{_mark(step['ok'])}",
             flush=True,
         )
     files = ", ".join(report["ledger_files"])
     print(
         f"ledger {len(report['ledger_files'])} rows: {files}\t"
         f"expected {', '.join(report['expected_ledger_files'])}\t"
-        f"{'ok' if report['ledger_ok'] else 'MISS'}",
+        f"{_mark(report['ledger_ok'])}",
         flush=True,
     )
     print(format_tool_summary(tool_calls, repeats), flush=True)
