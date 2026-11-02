@@ -568,6 +568,23 @@ def test_missing_replay_file_fails_and_a_present_file_can_fail(tmp_path, capsys,
     assert "payment=not_paid" in out
 
 
+def test_fingerprint_covers_the_ledger_tool_like_any_other_tool():
+    from pipeline.audit import LEDGER_LINE
+    from pipeline.tools import audit_registry
+    from tests.test_tool_loop import _payable_state
+
+    state = _payable_state()
+    schemas = audit_registry(state.invoice, {"WidgetA": 15}, state.raw_text or "").schemas()
+    names = [item["function"]["name"] for item in schemas]
+    assert "check_payment_ledger" in names
+    without = [item for item in schemas if item["function"]["name"] != "check_payment_ledger"]
+    with_sentence = [{"role": "system", "content": f"TASK audit\n{LEDGER_LINE}"}]
+    without_sentence = [{"role": "system", "content": "TASK audit"}]
+    full = _fp(with_sentence, tools=schemas, tool_choice="auto")
+    assert full != _fp(with_sentence, tools=without, tool_choice="auto")
+    assert full != _fp(without_sentence, tools=schemas, tool_choice="auto")
+
+
 def test_a_temp_ledger_path_does_not_change_the_fingerprint():
     root = Path(tempfile.gettempdir()).resolve().as_posix().rstrip("/")
     ordered = f"{root}/payments-ordered-aaaaaaaa.db"
