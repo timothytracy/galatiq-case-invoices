@@ -1,9 +1,11 @@
 """Read a serialized graph result and turn it into screen text."""
 
+import json
 from datetime import datetime
 from decimal import Decimal
 
 from decision.policy import APPROVAL_THRESHOLD_USD
+from llm_client import TOOL_CALL_CAP, TOOL_ROUND_CAP
 from main import payment_status
 
 OUTCOMES = ("approve", "reject", "hold")
@@ -39,6 +41,7 @@ def invoice_view(entry: dict) -> dict:
     decision = state.get("decision") if isinstance(state.get("decision"), dict) else {}
     payment = state.get("payment") if isinstance(state.get("payment"), dict) else None
     amount, currency = _first_amount(invoice, decision, payment)
+    logs = list(state.get("logs") or [])
     filename = state.get("filename") or (entry.get("result_line") or {}).get("file") or ""
     return {
         "file": filename, "invoice_number": invoice.get("invoice_number"),
@@ -46,8 +49,9 @@ def invoice_view(entry: dict) -> dict:
         "amount": amount, "currency": currency, "reason": _reason(state),
         "action": state.get("action"), "payment_status": _payment_status(entry),
         "payment": payment, "findings": _findings(state), "invoice": invoice or None,
-        "logs": list(state.get("logs") or []), "elapsed_seconds": _elapsed(entry),
+        "logs": logs, "elapsed_seconds": _elapsed(entry),
         "raw_text": state.get("raw_text") or "", "llm": entry.get("llm"),
+        "tool_calls": tool_call_view(logs, entry.get("result_line"), state.get("attempts")),
     }
 def _place(view: dict, key: str) -> str:
     if view.get("outcome") == "approve" and blank(view.get(key)):
@@ -197,3 +201,179 @@ def _yes(value):
     if isinstance(value, bool):
         return "yes" if value else "no"
     return None if blank(value) else value
+
+# Fields the tool-call record is known to carry. Anything else is shown as text,
+# so a new marker lands on screen without a name being chosen here.
+_CALL_KEYS = frozenset({
+    "agent", "round", "attempt", "call_id", "name", "arguments", "arguments_raw",
+    "result", "error", "latency_ms", "repeat",
+})
+_ATTEMPT_KEYS = frozenset({
+    "attempt", "error_type", "backoff_seconds", "retryable", "matched",
+    "conclusion", "risks_considered", "tool_calls", "cap",
+})
+_RESULT_KEYS = frozenset({
+    "invoice", "feedback_used", "attempts", "payment", "outcome", "codes", "reason",
+    "decision", "passed", "reason_code", "action", "currency", "as_of", "date_context",
+    "findings", "model_verdict", "verdict", "feedback", "notes", "cited_codes",
+    "audit_note", "dropped_concerns", "concerns", "stricter", "round", "tool_calls",
+    "record", "file", "payment_status", "critique_rounds",
+    "tool_cap_hit", "forced_final_turn",
+})
+_BLOCKED_ERROR = "blocked: tool_cap"
+
+def tool_call_view(logs, result_line=None, attempts=None) -> dict:
+    """Tool calls for one invoice, in log order. Empty lists and missing keys yield no rows."""
+    calls, seen, notes, noted = [], {}, [], set()
+    holders = []
+    for log in _list(logs):
+        if isinstance(log, dict):
+            holders.append((str(log.get("stage") or ""), log.get("result")))
+    if isinstance(result_line, dict):
+        holders.append(("", result_line))
+    for stage, result in holders:
+        if not isinstance(result, dict):
+            continue
+        _add_cap(notes, noted, result)
+        if "tool_calls" in result:
+            _add_note(notes, noted, stage, _unknown(result, _RESULT_KEYS))
+            _take_calls(calls, seen, result.get("tool_calls"), stage, False, None)
+        for attempt in _list(result.get("attempts")):
+            _read_attempt(calls, seen, notes, noted, stage, attempt)
+    for attempt in _list(attempts):
+        _read_attempt(calls, seen, notes, noted, "", attempt)
+    return {"calls": calls, "extras": notes}
+
+def _read_attempt(calls, seen, notes, noted, stage, attempt) -> None:
+    if not isinstance(attempt, dict):
+        return
+    number = attempt.get("attempt")
+    where = stage if blank(number) else f"{stage} attempt {number}".strip()
+    _add_note(notes, noted, where, _unknown(attempt, _ATTEMPT_KEYS))
+    _take_calls(calls, seen, attempt.get("tool_calls"), stage, True, number)
+
+def _take_calls(calls, seen, raw, stage, failed, attempt_number) -> None:
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        row = _call_row(item, stage, failed, attempt_number)
+        key = _call_key(item, attempt_number)
+        prior = None if key is None else seen.get(key)
+        if prior is None:
+            if key is not None:
+                seen[key] = len(calls)
+            calls.append(row)
+            continue
+        if failed:
+            calls[prior]["failed_attempt"] = True
+        if row["extra"] and not calls[prior]["extra"]:
+            calls[prior]["extra"] = row["extra"]
+
+def _call_row(call, stage, failed, attempt_number) -> dict:
+    attempt = call.get("attempt") if "attempt" in call else attempt_number
+    error_text = "" if blank(call.get("error")) else str(call.get("error"))
+    blocked = error_text == _BLOCKED_ERROR
+    plain_error = bool(error_text) and not blocked
+    if blocked:
+        detail = "Stopped by the tool cap"
+    elif plain_error:
+        detail = error_text
+    elif "result" in call:
+        detail = _brief(call.get("result"))
+    else:
+        detail = ""
+    who = call.get("agent")
+    if blank(who):
+        who = stage
+    return {
+        "who": "" if blank(who) else str(who),
+        "round": _num(call.get("round")) if "round" in call else "",
+        "attempt": _num(attempt),
+        "name": "" if blank(call.get("name")) else str(call.get("name")),
+        "arguments": _brief(call.get("arguments")) if "arguments" in call else "",
+        "arguments_raw": "" if blank(call.get("arguments_raw")) else str(call.get("arguments_raw")),
+        "detail": detail,
+        "latency": _latency(call.get("latency_ms")) if "latency_ms" in call else "",
+        "repeat": call.get("repeat") is True,
+        "blocked": blocked,
+        "error": plain_error,
+        "failed_attempt": bool(failed),
+        "extra": _brief(_unknown(call, _CALL_KEYS)),
+    }
+
+def _call_key(call, attempt_number):
+    attempt = call.get("attempt") if "attempt" in call else attempt_number
+    attempt_text = "" if blank(attempt) else str(attempt)
+    call_id = call.get("call_id")
+    if not blank(call_id):
+        agent = "" if blank(call.get("agent")) else str(call.get("agent"))
+        return ("id", agent, str(call_id), attempt_text)
+    try:
+        body = json.dumps(call, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+    return ("body", body, attempt_text)
+
+def _unknown(body, known) -> dict:
+    return {key: value for key, value in body.items() if key not in known and not blank(value)}
+
+def _add_cap(notes, noted, body) -> None:
+    """Say when this stage hit the tool cap, and when a no-tools answer was forced."""
+    hit = body.get("tool_cap_hit")
+    forced = body.get("forced_final_turn") is True
+    parts = []
+    if hit == "rounds":
+        parts.append(f"The tool cap was hit on rounds (limit {TOOL_ROUND_CAP}).")
+    elif hit == "calls":
+        parts.append(f"The tool cap was hit on calls (limit {TOOL_CALL_CAP}).")
+    elif not blank(hit):
+        parts.append(f"The tool cap was hit on {hit}.")
+    if forced:
+        parts.append("A final no-tools answer was forced.")
+    text = " ".join(parts)
+    if not text or text in noted:
+        return
+    noted.add(text)
+    notes.append(text)
+
+def _add_note(notes, noted, where, fields) -> None:
+    text = _brief(fields)
+    if not text or text in noted:
+        return
+    noted.add(text)
+    prefix = label(where) if where else "Result"
+    notes.append(f"{prefix}: {text}")
+
+def _brief(value) -> str:
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if blank(value):
+        return ""
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _brief(item)
+            if text:
+                parts.append(f"{label(str(key))} {text}")
+        return ", ".join(parts)
+    if isinstance(value, list):
+        return ", ".join(text for text in (_brief(item) for item in value) if text)
+    return str(value)
+
+def _latency(value) -> str:
+    if isinstance(value, bool) or blank(value):
+        return ""
+    if isinstance(value, (int, float)):
+        number = int(value) if float(value).is_integer() else value
+        return f"{number} ms"
+    return f"{value} ms"
+
+def _num(value) -> str:
+    if isinstance(value, bool) or blank(value):
+        return ""
+    return str(value)
+
+def _list(value):
+    return value if isinstance(value, list) else []

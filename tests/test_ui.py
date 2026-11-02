@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 
 from db import create_database
 from decision.policy import APPROVAL_THRESHOLD_USD
+from llm_client import TOOL_CALL_CAP, TOOL_ROUND_CAP
 from ui.present import (
     INVOICE_FIELDS,
     LINE_FIELDS,
@@ -23,6 +24,7 @@ from ui.present import (
     show_text,
     summarize,
     table_rows,
+    tool_call_view,
 )
 from ui.reviews import load_reviews, record_review
 from ui.runner import grok_key_set, load_run, run_one, save_run
@@ -295,6 +297,303 @@ def test_review_app_starts(monkeypatch):
             assert choice.value is None
 
 
+def test_tool_call_view_shapes_stage_attempts_and_gaps(tmp_path):
+    loaded = invoice_view(load_run(ROOT / "tests" / "fixtures" / "tool_calls_review.json")[0])
+    shaped = loaded["tool_calls"]
+    calls = shaped["calls"]
+    assert [row["name"] for row in calls] == [
+        "lookup_item",
+        "lookup_item",
+        "get_policy_rule",
+        "recompute_totals",
+        "lookup_item",
+        "recompute_totals",
+        "get_policy_rule",
+        "lookup_item",
+    ]
+    success, repeat, blocked, error, raw, sparse, extra, failed = calls
+    assert success["who"] == "audit"
+    assert success["round"] == "1"
+    assert success["attempt"] == "1"
+    assert success["arguments"] == "Item WidgetB"
+    assert success["detail"] == "Item WidgetB, Stock 4, Unit price 25.00"
+    assert success["latency"] == "12 ms"
+    assert success["repeat"] is False
+    assert success["blocked"] is False
+    assert success["error"] is False
+    assert success["failed_attempt"] is False
+    assert repeat["repeat"] is True
+    assert repeat["detail"] == success["detail"]
+    assert blocked["blocked"] is True
+    assert blocked["error"] is False
+    assert blocked["detail"] == "Stopped by the tool cap"
+    assert blocked["latency"] == "0 ms"
+    assert blocked["attempt"] == "2"
+    assert error["error"] is True
+    assert error["blocked"] is False
+    assert error["detail"] == "item not found"
+    assert error["arguments"] == "Invoice INV-1042"
+    assert error["arguments_raw"] == ""
+    assert raw["arguments"] == ""
+    assert raw["arguments_raw"] == "{item: WidgetB}"
+    assert raw["error"] is True
+    assert raw["detail"] == "arguments are not valid JSON"
+    assert success["arguments_raw"] == ""
+    assert sparse["who"] == "audit"
+    assert sparse["round"] == ""
+    assert sparse["attempt"] == ""
+    assert sparse["arguments"] == ""
+    assert sparse["detail"] == ""
+    assert sparse["latency"] == ""
+    assert sparse["extra"] == ""
+    assert sparse["error"] is False
+    assert extra["extra"] == "Batch id b-9"
+    assert failed["failed_attempt"] is True
+    assert failed["attempt"] == "1"
+    assert failed["arguments"] == "Item WidgetC"
+    assert failed["who"] == "audit"
+    cap = (
+        f"The tool cap was hit on rounds (limit {TOOL_ROUND_CAP}). "
+        "A final no-tools answer was forced."
+    )
+    assert shaped["extras"].count(cap) == 1
+    assert "Audit: Trace id t-1" in shaped["extras"]
+    assert "Audit attempt 1: Queue id q-1" in shaped["extras"]
+    rendered = json.dumps(shaped)
+    assert "null" not in rendered
+    assert "None" not in rendered
+    assert "[]" not in rendered
+
+    assert tool_call_view([{"stage": "audit", "result": {}}]) == {"calls": [], "extras": []}
+    assert tool_call_view([{"stage": "audit", "result": {"tool_calls": []}}]) == {"calls": [], "extras": []}
+    assert tool_call_view([{"stage": "audit", "result": {"tool_calls": None}}]) == {"calls": [], "extras": []}
+    assert tool_call_view(None)["calls"] == []
+    assert tool_call_view([{"stage": "audit", "result": {"tool_calls": [None, "skip", {}]}}])["calls"] == [
+        {
+            "who": "audit",
+            "round": "",
+            "attempt": "",
+            "name": "",
+            "arguments": "",
+            "arguments_raw": "",
+            "detail": "",
+            "latency": "",
+            "repeat": False,
+            "blocked": False,
+            "error": False,
+            "failed_attempt": False,
+            "extra": "",
+        }
+    ]
+    other = tool_call_view(
+        [
+            {
+                "stage": "critique",
+                "result": {
+                    "tool_calls": [
+                        {
+                            "agent": "clerk",
+                            "name": "lookup_item",
+                            "call_id": "c1",
+                            "round": 2,
+                            "attempt": 3,
+                            "latency_ms": 0,
+                            "result": {"ok": True},
+                            "error": None,
+                            "mystery_flag": True,
+                        }
+                    ],
+                    "another_flag": False,
+                },
+            }
+        ]
+    )
+    row = other["calls"][0]
+    assert row["who"] == "clerk"
+    assert row["round"] == "2"
+    assert row["attempt"] == "3"
+    assert row["latency"] == "0 ms"
+    assert row["detail"] == "Ok Yes"
+    assert row["extra"] == "Mystery flag Yes"
+    assert other["extras"] == ["Critique: Another flag No"]
+    almost = tool_call_view(
+        [
+            {
+                "stage": "audit",
+                "result": {
+                    "tool_calls": [
+                        {
+                            "name": "lookup_item",
+                            "call_id": "c2",
+                            "error": "blocked: tool_cap extra",
+                            "result": None,
+                        }
+                    ]
+                },
+            }
+        ]
+    )["calls"][0]
+    assert almost["blocked"] is False
+    assert almost["error"] is True
+    assert almost["detail"] == "blocked: tool_cap extra"
+    bare = tool_call_view(
+        [
+            {
+                "stage": "audit",
+                "result": {
+                    "tool_calls": [
+                        {
+                            "name": "lookup_item",
+                            "call_id": "bare",
+                            "arguments": None,
+                            "result": None,
+                            "error": None,
+                        }
+                    ]
+                },
+            }
+        ]
+    )["calls"][0]
+    assert bare["arguments"] == ""
+    assert bare["arguments_raw"] == ""
+    assert bare["detail"] == ""
+    assert "null" not in json.dumps(bare)
+    rounds_only = tool_call_view([{"stage": "audit", "result": {"tool_cap_hit": "rounds"}}])
+    assert rounds_only["calls"] == []
+    assert rounds_only["extras"] == [f"The tool cap was hit on rounds (limit {TOOL_ROUND_CAP})."]
+    calls_only = tool_call_view(
+        [{"stage": "critique", "result": {"tool_cap_hit": "calls", "forced_final_turn": True}}]
+    )
+    assert calls_only["extras"] == [
+        f"The tool cap was hit on calls (limit {TOOL_CALL_CAP}). A final no-tools answer was forced."
+    ]
+    forced_only = tool_call_view([{"stage": "audit", "result": {"forced_final_turn": True}}])
+    assert forced_only["extras"] == ["A final no-tools answer was forced."]
+    from_line = tool_call_view(
+        [{"stage": "audit", "result": {}}],
+        {"record": "result", "tool_cap_hit": "calls", "forced_final_turn": True},
+    )
+    assert from_line["calls"] == []
+    assert from_line["extras"] == calls_only["extras"]
+    shared = {
+        "agent": "audit",
+        "round": 1,
+        "attempt": 1,
+        "call_id": "same",
+        "name": "lookup_item",
+        "arguments": {"item": "WidgetB"},
+        "result": {"item": "WidgetB"},
+        "error": None,
+        "latency_ms": 1,
+    }
+    duplicate = tool_call_view(
+        [{"stage": "audit", "result": {"tool_calls": [shared], "attempts": []}}],
+        {"tool_calls": [shared]},
+        [{"attempt": 4, "tool_calls": [{"name": "lookup_item", "call_id": "only-attempt", "attempt": 4}]}],
+    )
+    assert [row["name"] for row in duplicate["calls"]] == ["lookup_item", "lookup_item"]
+    assert duplicate["calls"][0]["failed_attempt"] is False
+    assert duplicate["calls"][1]["failed_attempt"] is True
+    assert duplicate["calls"][1]["attempt"] == "4"
+
+    stage_call = {
+        "agent": "clerk",
+        "round": 1,
+        "attempt": 1,
+        "call_id": "call_1_1",
+        "name": "lookup_item",
+        "arguments": {"item": "Bolt"},
+        "result": {"item": "Bolt"},
+        "error": None,
+        "latency_ms": 4,
+    }
+    failed_call = {
+        "round": 1,
+        "attempt": 2,
+        "call_id": "call_2_1",
+        "name": "get_policy_rule",
+        "arguments": {"rule": "threshold"},
+        "result": None,
+        "error": "blocked: tool_cap",
+        "latency_ms": 0,
+    }
+    log_path = tmp_path / "note.txt.json"
+    log_path.write_text(
+        json.dumps(
+            [
+                {
+                    "record": "stage",
+                    "stage": "critique",
+                    "invoice_file": "note.txt",
+                    "timestamp": "2026-10-31T00:00:00Z",
+                    "result": {
+                        "tool_calls": [stage_call],
+                        "attempts": [
+                            {
+                                "attempt": 2,
+                                "error_type": "tool_cap",
+                                "retryable": False,
+                                "tool_calls": [failed_call],
+                            }
+                        ],
+                    },
+                },
+                {
+                    "record": "result",
+                    "file": "note.txt",
+                    "outcome": "hold",
+                    "reason_code": "SYSTEM_ERROR",
+                    "payment_status": "not_paid",
+                    "tool_calls": [stage_call],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    from_log = invoice_view(load_run(log_path)[0])
+    logged = from_log["tool_calls"]["calls"]
+    assert from_log["file"] == "note.txt"
+    assert [row["name"] for row in logged] == ["lookup_item", "get_policy_rule"]
+    assert logged[0]["who"] == "clerk"
+    assert logged[1]["who"] == "critique"
+    assert logged[1]["blocked"] is True
+    assert logged[1]["failed_attempt"] is True
+    assert logged[1]["attempt"] == "2"
+
+
+def test_tool_call_view_renders(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    assert not app.exception, app.exception
+    run_file = next(item for item in app.text_input if item.label == "Run file")
+    run_file.set_value("tests/fixtures/tool_calls_review.json").run()
+    next(button for button in app.button if button.label == "Load run file").click().run()
+    assert not app.exception, app.exception
+    _show(app, "Invoice detail")
+    chosen = next(item for item in app.selectbox if item.label == "Invoice")
+    assert chosen.value == "invoice_1042.txt"
+    detail = _visible(app)
+    assert "Tool calls" in detail
+    assert "lookup_item" in detail
+    assert "Repeat" in detail
+    assert "Blocked by cap" in detail
+    assert "Stopped by the tool cap" in detail
+    assert "Failed attempt" in detail
+    assert "item not found" in detail
+    assert "WidgetC" in detail
+    assert "Batch id b-9" in detail
+    assert "Trace id t-1" in detail
+    assert "Raw arguments: {item: WidgetB}" in detail
+    assert f"The tool cap was hit on rounds (limit {TOOL_ROUND_CAP})." in detail
+    assert "A final no-tools answer was forced." in detail
+    assert "does not count toward the cap" in detail
+    assert "No tool calls." not in detail
+    assert "null" not in detail.lower()
+    assert "None" not in detail
+    assert "[]" not in detail
+
+
 def _screen_text(entry: dict) -> str:
     view = invoice_view(entry)
     trail = agent_trail(view["logs"], view["amount"])
@@ -314,6 +613,16 @@ def _screen_text(entry: dict) -> str:
             parts.append(str(finding["item"]))
     if view.get("raw_text"):
         parts.append(view["raw_text"])
+    shown = view.get("tool_calls") or {}
+    parts.extend(shown.get("extras") or [])
+    for call in shown.get("calls") or []:
+        parts.extend(
+            str(call.get(name) or "")
+            for name in (
+                "who", "round", "attempt", "name", "arguments", "arguments_raw",
+                "detail", "extra", "latency",
+            )
+        )
     return "\n".join(parts)
 
 
