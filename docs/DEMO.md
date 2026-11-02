@@ -120,7 +120,7 @@ CI runs those six after the tests and does not set an API key. The scores from t
 A reviewer can pay a hold without the review screen. The command runs the offline pipeline on two real files, then calls `approve_and_pay`. The ledger and the decision log are temporary. It does not call the model.
 
 ```bash
-python3 -m pipeline.approve_hold --demo
+python3 scripts/approve_hold_demo.py --demo
 ```
 
 `invoice_1012.txt` is a `VENDOR_RENAMED` hold. The mock line is `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. The decision record says `paid` and `pipeline_outcome` stays `hold`. `invoice_1002.txt` is a stock shortfall. It stays unpaid, `decision` `held`, reason `NOT_PAYABLE`, and `pipeline_outcome` stays `reject`. The review screen does not call `approve_and_pay` yet.

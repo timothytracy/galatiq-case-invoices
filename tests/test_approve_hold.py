@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from models import Finding
-from pipeline.approve_hold import ROOT, approve_and_pay, remember
+from pipeline.approve_hold import ROOT, approve_and_pay
 
 WHEN = __import__("datetime").datetime(2026, 11, 2, 5, 30, tzinfo=__import__("datetime").timezone.utc)
 
@@ -173,15 +172,15 @@ def test_the_log_has_an_attempt_before_the_payment(tmp_path):
 
 
 def test_a_file_edited_after_the_run_is_refused(tmp_path):
-    probe = ROOT / "data" / "_probe_release.txt"
+    import tempfile
     source = (ROOT / "data/invoices/invoice_1012.txt").read_text(encoding="utf-8")
-    probe.write_text(source, encoding="utf-8")
-    try:
+    (ROOT / "output").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=ROOT / "output") as folder:
+        probe = Path(folder) / "invoice_1012.txt"
+        probe.write_text(source, encoding="utf-8")
         result = _run(probe)
         probe.write_text(source + "\nTAMPER\n", encoding="utf-8")
         refused = _pay(result, tmp_path)
-    finally:
-        probe.unlink(missing_ok=True)
     assert refused["result"] == "held"
     assert "does not match" in refused["reason"]
 
@@ -243,6 +242,11 @@ def test_a_source_outside_the_repo_is_refused(tmp_path):
     assert "outside the repository" in refused["reason"]
 
 
+def test_record_keys_do_not_collide():
+    from pipeline.approve_hold import _record_path
+    assert _record_path(Path("a__b/x.txt")) != _record_path(Path("a/b__x.txt"))
+
+
 def test_basename_collision_does_not_pay_the_other_file(tmp_path):
     result = _run(ROOT / "data/invoices/invoice_1012.txt")
     other = {"invoice_path": "data/extra_invoices/invoice_1012.txt", "filename": "invoice_1012.txt"}
@@ -262,7 +266,7 @@ def test_a_failed_record_write_does_not_pay_or_raise(tmp_path, monkeypatch):
 
 def test_stock_changed_after_the_run_is_refused(tmp_path):
     result = _run(ROOT / "data/invoices/invoice_1012.txt")
-    database = sqlite3.connect(ROOT / "inventory.db")
+    database = sqlite3.connect(Path("inventory.db"))
     before = database.execute("SELECT item, stock FROM inventory").fetchall()
     database.execute("UPDATE inventory SET stock = 0")
     database.commit()
@@ -276,12 +280,50 @@ def test_stock_changed_after_the_run_is_refused(tmp_path):
     assert "STOCK_SHORTFALL" in refused["reason"]
 
 
+def test_a_failed_rewrite_does_not_pay_the_old_hold(tmp_path):
+    result = _run(ROOT / "data/invoices/invoice_1012.txt")
+    path = Path(os_release(result))
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(
+        outcome="hold",
+        reason_code="CRITIQUE_HOLD",
+        codes=["CRITIQUE_HOLD"],
+        findings=[{"code": "CRITIQUE_HOLD", "message": "Review the concern.", "severity": "warning"}],
+    )
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    records = path.parent
+    path.chmod(0o444)
+    records.chmod(0o555)
+    try:
+        rerun = _run(ROOT / "data/invoices/invoice_1012.txt")
+    finally:
+        records.chmod(0o755)
+        if path.exists():
+            path.chmod(0o644)
+    assert rerun["outcome"] == "hold"
+    refused = _pay({"invoice_path": result["invoice"].source.path}, tmp_path, amount=result["invoice"].total)
+    assert refused["result"] == "held"
+
+
+def test_eval_replay_leaves_the_repo_logs_alone(monkeypatch):
+    monkeypatch.delenv("INVOICE_RELEASE_DIR", raising=False)
+    logs = ROOT / "logs"
+    before = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
+    from scripts.eval import main as eval_main
+    assert eval_main(["--replay", str(ROOT / "recordings" / "samples_tools.jsonl")]) == 0
+    after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
+    assert after == before
+
+
 def test_demo_pays_one_hold_and_refuses_one_reject(capsys):
-    from pipeline.approve_hold import main
+    from scripts.approve_hold_demo import main
+    logs = ROOT / "logs"
+    before = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     assert main(["--demo"]) == 0
     out = capsys.readouterr().out
     assert "Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)" in out
     records = [json.loads(line) for line in out.splitlines() if '"reviewer"' in line]
     assert [row["decision"] for row in records] == ["paid", "held"]
     assert records[1]["reason_code"] == "NOT_PAYABLE"
-    assert not list((ROOT / "logs").glob("*.release.json"))
+    after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
+    assert after == before
