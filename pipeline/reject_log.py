@@ -1,5 +1,7 @@
 """Reject log. The other exit. Nothing here is paid."""
 
+from pathlib import Path
+
 from models import PipelineState
 from pipeline.decisions import decision_from_validation, failure_decision, tighten
 from pipeline.payment import not_paid_record
@@ -15,7 +17,7 @@ def _stage_name(outcome: str) -> str:
     return "hold" if outcome == "hold" else "reject_log"
 
 
-def reject_log(state: PipelineState, ledger_path=None) -> dict:
+def reject_log(state: PipelineState, ledger_path: str | Path | None = None) -> dict:
     findings = list(state.findings)
     outcome, code, reason, action = explain(findings, state.invoice)
     if state.agent_error and code not in {"SYSTEM_ERROR", "BAD_REASONING"}:

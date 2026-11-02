@@ -15,7 +15,6 @@ network client. A replay miss is a non-retryable error, never a live call.
 
 import json
 import os
-import random
 import re
 import time
 from datetime import date
@@ -34,6 +33,7 @@ from recording import (
 from pydantic import BaseModel, ValidationError
 
 from decision.policy import POLICY
+from interfaces import Clock, Rng
 from llm_errors import LLMError
 from tool_loop import (  # noqa: F401  re-exported for callers that import them from here
     TOOL_CALL_CAP,
@@ -170,7 +170,7 @@ def begin_client(
     raise ModeError("mode must be live, record, or replay")
 
 
-def backoff_seconds(failed_attempt: int, rng: random.Random) -> float:
+def backoff_seconds(failed_attempt: int, rng: Rng) -> float:
     """1, 2, 4, 8, 16 seconds, plus up to 25% jitter."""
 
     index = min(failed_attempt - 1, len(BACKOFF_SECONDS) - 1)
@@ -268,8 +268,8 @@ def call_with_retries(
     schema: type[BaseModel],
     *,
     max_attempts: int,
-    clock,
-    rng: random.Random,
+    clock: Clock,
+    rng: Rng,
     attempt_log: list[dict],
     check=None,
 ) -> BaseModel:

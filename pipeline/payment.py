@@ -1,6 +1,7 @@
 """Payment. The mock gateway runs only with an unused PASS-audit authorization."""
 
 from decimal import Decimal
+from pathlib import Path
 
 from models import ExtractedInvoice, Finding, PaymentAuthorization, PaymentRecord, PipelineState
 from pipeline.release_record import remember
@@ -27,7 +28,7 @@ def clear_keys_without_ledger() -> None:
     _NO_LEDGER_KEYS.clear()
 
 
-def payment(state: PipelineState, ledger_path=None, *, release: bool = False) -> dict:
+def payment(state: PipelineState, ledger_path: str | Path | None = None, *, release: bool = False) -> dict:
     invoice = state.invoice
     blocked = "" if release else _payment_blocked(state)
     refusal = blocked or _authorization_refusal(state, ledger_path)

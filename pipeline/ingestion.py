@@ -1,7 +1,9 @@
 """Ingestion. Read the file, ask the model to extract it, then normalize names."""
 
+from datetime import date
 from pathlib import Path
 
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, call_with_retries
 from models import (
     ExtractedInvoice,
@@ -23,7 +25,14 @@ from decision.invoice_fields import (
 from decision.wording import resolve_as_of, today_line
 
 
-def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None) -> dict:
+def ingest(
+    state: PipelineState,
+    llm: LLM,
+    clock: Clock,
+    rng: Rng,
+    max_attempts: int,
+    as_of: date | None = None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     path = Path(state.invoice_path)
     try:

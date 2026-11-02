@@ -2,7 +2,11 @@
 
 import json
 
+from datetime import date
+from pathlib import Path
+
 from db import load_stock
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, call_with_retries
 from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
 from pipeline.fact_guard import (
@@ -16,7 +20,15 @@ from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 
-def critique(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+def critique(
+    state: PipelineState,
+    llm: LLM,
+    db_path: str | Path,
+    clock: Clock,
+    rng: Rng,
+    max_attempts: int,
+    as_of: date | None = None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     decision = state.decision
     if decision is None:

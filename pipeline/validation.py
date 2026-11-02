@@ -1,6 +1,8 @@
 """Validation. Python rules only. A blocking outcome skips approval."""
 
 import sqlite3
+from datetime import date
+from pathlib import Path
 
 from db import load_stock
 from models import Finding, PipelineState, ValidationReport
@@ -11,7 +13,12 @@ from decision.wording import explain, resolve_as_of, today_line
 from ledger import arrival_findings
 
 
-def validate(state: PipelineState, db_path, as_of=None, ledger_path=None) -> dict:
+def validate(
+    state: PipelineState,
+    db_path: str | Path,
+    as_of: date | None = None,
+    ledger_path: str | Path | None = None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     invoice = state.invoice
     if invoice is None:

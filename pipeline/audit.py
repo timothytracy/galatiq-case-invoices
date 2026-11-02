@@ -4,9 +4,12 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from db import load_stock
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, call_with_retries
 from tool_loop import tool_request
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
@@ -55,13 +58,13 @@ class AuditResult:
 
 def audit(
     state: PipelineState,
-    llm,
-    db_path,
-    clock,
-    rng,
+    llm: LLM,
+    db_path: str | Path,
+    clock: Clock,
+    rng: Rng,
     max_attempts: int,
-    as_of=None,
-    ledger_path=None,
+    as_of: date | None = None,
+    ledger_path: str | Path | None = None,
 ) -> dict:
     as_of = resolve_as_of(as_of)
     invoice = state.invoice

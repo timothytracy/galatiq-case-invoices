@@ -12,7 +12,7 @@ import re
 import sqlite3
 import tempfile
 from contextlib import redirect_stdout
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from db import ensure_inventory_db, inventory_db_path, payments_db_path
@@ -320,7 +320,7 @@ def _money(value):
         return None
     try:
         amount = value if isinstance(value, Decimal) else Decimal(str(value).strip())
-    except Exception:
+    except InvalidOperation:
         return None
     return amount if amount.is_finite() else None
 
