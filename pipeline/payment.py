@@ -37,48 +37,61 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
         if refusal and not blocked:
             findings.append(Finding(code=PAYMENT_REFUSED, message=refusal, severity="blocking"))
         record = not_paid_record(invoice, refusal or "payment blocked")
-    else:
-        # The release record is written before the ledger row. A failed write
-        # pays nothing and does not raise.
-        if not release:
-            noted = remember(state, ledger_path)
-            if noted is not True:
-                return _hold_unreadable_ledger(
-                    state, findings, noted or "release record could not be written", release
-                )
-        wrote = _write_ledger(state, ledger_path, auth.key)
-        if wrote is False:
-            return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
-        if wrote == "SPLIT_INVOICE":
-            return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
-        if wrote == "USED_AUTHORIZATION":
-            detail = "payment refused: authorization key was already used"
-            findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
-            return _log_payment(state, not_paid_record(invoice, detail), findings, release)
-        if wrote is not True:
-            return _hold_unreadable_ledger(state, findings, wrote, release)
-        # No ledger file: remember the key here. A file stored it in the same write.
-        if ledger_path is None:
-            _NO_LEDGER_KEYS.add(auth.key)
-        try:
-            response = mock_payment(invoice.vendor, invoice.total)
-        except Exception:
-            response = None
-        confirmed = isinstance(response, dict) and response.get("status") == "success"
-        if ledger_path is not None:
-            confirmed = confirmed and settle_payment(ledger_path, auth.key, "paid")
-            if not confirmed:
-                settle_payment(ledger_path, auth.key, "failed")
+        return _log_payment(state, record, findings, release)
+    return _pay(state, invoice, auth, findings, ledger_path, release)
+
+
+def _pay(
+    state: PipelineState,
+    invoice: ExtractedInvoice,
+    auth: PaymentAuthorization,
+    findings: list,
+    ledger_path,
+    release: bool,
+) -> dict:
+    """The steps after a valid authorization: release record, ledger row, mock gateway."""
+
+    # The release record is written before the ledger row. A failed write
+    # pays nothing and does not raise.
+    if not release:
+        noted = remember(state, ledger_path)
+        if noted is not True:
+            return _hold_unreadable_ledger(
+                state, findings, noted or "release record could not be written", release
+            )
+    wrote = _write_ledger(state, ledger_path, auth.key)
+    if wrote is False:
+        return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
+    if wrote == "SPLIT_INVOICE":
+        return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
+    if wrote == "USED_AUTHORIZATION":
+        detail = "payment refused: authorization key was already used"
+        findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
+        return _log_payment(state, not_paid_record(invoice, detail), findings, release)
+    if wrote is not True:
+        return _hold_unreadable_ledger(state, findings, wrote, release)
+    # No ledger file: remember the key here. A file stored it in the same write.
+    if ledger_path is None:
+        _NO_LEDGER_KEYS.add(auth.key)
+    try:
+        response = mock_payment(invoice.vendor, invoice.total)
+    except Exception:
+        response = None
+    confirmed = isinstance(response, dict) and response.get("status") == "success"
+    if ledger_path is not None:
+        confirmed = confirmed and settle_payment(ledger_path, auth.key, "paid")
         if not confirmed:
-            return _hold_unreadable_ledger(state, findings, PAYMENT_UNCONFIRMED, release)
-        record = PaymentRecord(
-            status="paid",
-            vendor=invoice.vendor,
-            amount=invoice.total,
-            currency=invoice.currency,
-            detail="mock payment accepted",
-            mock_response=response,
-        )
+            settle_payment(ledger_path, auth.key, "failed")
+    if not confirmed:
+        return _hold_unreadable_ledger(state, findings, PAYMENT_UNCONFIRMED, release)
+    record = PaymentRecord(
+        status="paid",
+        vendor=invoice.vendor,
+        amount=invoice.total,
+        currency=invoice.currency,
+        detail="mock payment accepted",
+        mock_response=response,
+    )
     return _log_payment(state, record, findings, release)
 
 
