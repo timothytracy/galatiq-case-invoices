@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import tempfile
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -58,12 +59,12 @@ def approve_and_pay(
         ledger = _scratch("payments-", ".db")
         temps.append(ledger)
     else:
-        ledger = Path(ledger_path) if ledger_path is not None else Path("payments.db")
+        ledger = Path(ledger_path) if ledger_path is not None else ROOT / "payments.db"
     if demo and log_path is None:
         log = _scratch("approve-", ".jsonl")
         temps.append(log)
     else:
-        log = Path(log_path) if log_path is not None else Path("output") / "reviews" / "approve_pay.jsonl"
+        log = Path(log_path) if log_path is not None else ROOT / "output" / "reviews" / "approve_pay.jsonl"
     try:
         return _approve(result, reviewer, note, amount, ledger, log, now)
     finally:
@@ -75,8 +76,8 @@ def remember(result) -> bool:
     """Write the release record. False on a disk error. Never raises.
 
     A source outside the repository is not a release record. Payment of that
-    file still proceeds. A failed write removes any previous record for that
-    invoice and pays nothing.
+    file still proceeds. A failed write removes the previous record. If the
+    old file cannot be removed, the path is blocked until a later write works.
     """
 
     data = _view(result)
@@ -109,6 +110,7 @@ def remember(result) -> bool:
         _drop(rel)
         return False
     _FAILED.discard(rel.as_posix())
+    _unblock(rel)
     return True
 
 
@@ -120,6 +122,8 @@ def _drop(rel: Path) -> None:
         _record_path(rel).unlink(missing_ok=True)
     except OSError:
         pass
+    if _record_path(rel).exists():
+        _block(rel)
 
 
 def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
@@ -163,6 +167,8 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", MISSING_REVIEWER, "A reviewer name is required.")
     if sum(ch.isalpha() for ch in text) < 2:
         return finish("held", MISSING_NOTE, "A note is required.")
+    if _is_blocked(filename):
+        return finish("held", "SYSTEM_ERROR", "The release record could not be replaced.")
     saved = _load(filename)
     if saved is None:
         return finish("held", NOT_PAYABLE, "No pipeline record for this invoice.")
@@ -288,8 +294,11 @@ def _recheck(saved, invoice, ledger):
         return "The source file could not be read."
     state = _pay_state(saved, invoice).model_copy(update={"raw_text": live})
     from pipeline.validation import validate
-    with redirect_stdout(io.StringIO()):
-        checked = validate(state, Path("inventory.db"), ledger_path=ledger)
+    try:
+        with redirect_stdout(io.StringIO()):
+            checked = validate(state, ROOT / "inventory.db", ledger_path=ledger)
+    except (OSError, sqlite3.Error) as exc:
+        return f"inventory database could not be opened: {exc}"
     fresh = list(checked.get("findings") or [])
     for finding in fresh:
         if finding.code == "SYSTEM_ERROR":
@@ -319,6 +328,69 @@ def _pay_state(saved, invoice: ExtractedInvoice) -> PipelineState:
 def _record_dir() -> Path:
     raw = os.environ.get("INVOICE_RELEASE_DIR", "").strip()
     return Path(raw) if raw else ROOT / "logs"
+
+
+def _block_file() -> Path:
+    """Beside the release folder, so a read-only folder cannot hide a failed rewrite."""
+
+    directory = _record_dir()
+    return directory.parent / f"{directory.name}.blocked"
+
+
+def _blocked_names() -> set[str] | None:
+    path = _block_file()
+    if not path.exists():
+        return set()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def _write_blocked(names: set[str]) -> None:
+    path = _block_file()
+    if not names:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text("\n".join(sorted(names)) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _block(rel: Path) -> None:
+    names = _blocked_names()
+    if names is None:
+        names = set()
+    names.add(rel.as_posix())
+    try:
+        _write_blocked(names)
+    except OSError:
+        pass
+
+
+def _unblock(rel: Path) -> None:
+    names = _blocked_names()
+    if not names:
+        return
+    names.discard(rel.as_posix())
+    try:
+        _write_blocked(names)
+    except OSError:
+        pass
+
+
+def _is_blocked(filename: str) -> bool:
+    rel = _repo_path(filename)
+    if rel is None:
+        return False
+    if rel.as_posix() in _FAILED:
+        return True
+    names = _blocked_names()
+    if names is None:
+        return True
+    return rel.as_posix() in names
 
 
 def _record_path(rel: Path) -> Path:

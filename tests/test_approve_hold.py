@@ -1,7 +1,11 @@
 """Release uses the pipeline record, then re-checks the live file and stock."""
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 
@@ -172,15 +176,16 @@ def test_the_log_has_an_attempt_before_the_payment(tmp_path):
 
 
 def test_a_file_edited_after_the_run_is_refused(tmp_path):
-    import tempfile
     source = (ROOT / "data/invoices/invoice_1012.txt").read_text(encoding="utf-8")
-    (ROOT / "output").mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=ROOT / "output") as folder:
+    with tempfile.TemporaryDirectory(dir=ROOT) as folder:
         probe = Path(folder) / "invoice_1012.txt"
         probe.write_text(source, encoding="utf-8")
         result = _run(probe)
         probe.write_text(source + "\nTAMPER\n", encoding="utf-8")
         refused = _pay(result, tmp_path)
+    output = ROOT / "output"
+    if output.is_dir() and not any(output.iterdir()):
+        output.rmdir()
     assert refused["result"] == "held"
     assert "does not match" in refused["reason"]
 
@@ -266,7 +271,7 @@ def test_a_failed_record_write_does_not_pay_or_raise(tmp_path, monkeypatch):
 
 def test_stock_changed_after_the_run_is_refused(tmp_path):
     result = _run(ROOT / "data/invoices/invoice_1012.txt")
-    database = sqlite3.connect(Path("inventory.db"))
+    database = sqlite3.connect(ROOT / "inventory.db")
     before = database.execute("SELECT item, stock FROM inventory").fetchall()
     database.execute("UPDATE inventory SET stock = 0")
     database.commit()
@@ -303,6 +308,71 @@ def test_a_failed_rewrite_does_not_pay_the_old_hold(tmp_path):
     assert rerun["outcome"] == "hold"
     refused = _pay({"invoice_path": result["invoice"].source.path}, tmp_path, amount=result["invoice"].total)
     assert refused["result"] == "held"
+
+
+def _approve_in_subprocess(cwd, release_dir, invoice_path, amount, ledger, log):
+    code = (
+        "import json, os, sys\n"
+        "os.environ['INVOICE_RELEASE_DIR'] = sys.argv[1]\n"
+        "from pipeline.approve_hold import approve_and_pay\n"
+        "out = approve_and_pay(\n"
+        "    {'invoice_path': sys.argv[2]},\n"
+        "    reviewer='Avery Chen', note='Confirmed with the vendor.',\n"
+        "    amount=sys.argv[3], ledger_path=sys.argv[4], log_path=sys.argv[5],\n"
+        ")\n"
+        "print(json.dumps({'result': out['result'], 'reason_code': out['reason_code']}))\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT)
+    env["INVOICE_RELEASE_DIR"] = str(release_dir)
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(release_dir), str(invoice_path), str(amount), str(ledger), str(log)],
+        cwd=cwd, env=env, capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_a_read_only_stale_record_does_not_pay_in_a_new_process(tmp_path):
+    result = _run(ROOT / "data/invoices/invoice_1001.txt")
+    path = Path(os_release(result))
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(
+        outcome="hold",
+        reason_code="CRITIQUE_HOLD",
+        codes=["CRITIQUE_HOLD"],
+        findings=[{"code": "CRITIQUE_HOLD", "message": "Review the concern.", "severity": "warning"}],
+    )
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    records = path.parent
+    path.chmod(0o444)
+    records.chmod(0o555)
+    from pipeline.payment import _USED_KEYS
+    _USED_KEYS.clear()
+    try:
+        rerun = _run(ROOT / "data/invoices/invoice_1001.txt")
+    finally:
+        records.chmod(0o755)
+        if path.exists():
+            path.chmod(0o644)
+    assert rerun["reason_code"] == "SYSTEM_ERROR"
+    assert path.is_file()
+    paid = _approve_in_subprocess(
+        ROOT, records, result["invoice"].source.path, record["invoice"]["total"],
+        tmp_path / "later.db", tmp_path / "later.jsonl",
+    )
+    assert paid["result"] == "held"
+
+
+def test_approval_from_another_cwd_pays_the_same_hold(tmp_path):
+    result = _run(ROOT / "data/invoices/invoice_1012.txt")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    paid = _approve_in_subprocess(
+        elsewhere, os.environ["INVOICE_RELEASE_DIR"], result["invoice"].source.path,
+        result["invoice"].total, tmp_path / "cwd.db", tmp_path / "cwd.jsonl",
+    )
+    assert paid["result"] == "paid"
 
 
 def test_eval_replay_leaves_the_repo_logs_alone(monkeypatch):
