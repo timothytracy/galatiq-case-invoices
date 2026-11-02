@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from db import create_database, inventory_db_path
 from graph import run_invoice
 from llm_client import GrokClient, load_dotenv
-from pipeline.payment import _USED_KEYS
 from tests.fake_llm_eval import AS_OF, handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom
 
@@ -120,7 +119,6 @@ def run_one(
         else:
             llm, extra = GrokClient(), {}
         extra["ledger_path"] = ledger
-        _forget_temp_keys(kind, ledger)
         started = time.perf_counter()
         with redirect_stdout(io.StringIO()):
             result = run_invoice(path, database, llm, **extra)
@@ -138,19 +136,6 @@ def run_one(
         "llm": kind,
         "ledger_path": str(ledger),
     }
-
-
-def _forget_temp_keys(kind: str, ledger: Path) -> None:
-    """Drop in-memory authorization keys for a demo run on a temporary ledger.
-
-    The guard lives for the whole process and is not stored in the ledger.
-    The same file always produces the same key, so a second offline or replay
-    run would be refused even on a ledger that has never seen the invoice.
-    Live runs and payments.db keep every key.
-    """
-    if kind == "grok" or is_real_payments_db(ledger):
-        return
-    _USED_KEYS.clear()
 
 
 def _replay_ledger(ledger_path: Path | None) -> Path:
