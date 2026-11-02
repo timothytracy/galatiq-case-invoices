@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import tempfile
 import time
 from contextlib import redirect_stdout
 from datetime import date, datetime
@@ -22,6 +23,7 @@ INVOICES = ROOT / "data" / "invoices"
 SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 DEFAULT_DB = ROOT / "inventory.db"
 DEFAULT_RUN = ROOT / "output" / "runs" / "review_run.json"
+PAYMENTS_DB = ROOT / "payments.db"
 def grok_key_set() -> bool:
     """True when the CLI's Grok client would start. It reads XAI_API_KEY."""
     load_dotenv()
@@ -53,17 +55,44 @@ def to_jsonable(value):
         return value.isoformat()
     return value
 
+def is_real_payments_db(path: Path | str) -> bool:
+    """True for the repo or working-directory payments.db, not a temp ledger."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    resolved = candidate.resolve()
+    return resolved in {PAYMENTS_DB.resolve(), (Path.cwd() / "payments.db").resolve()}
+def temporary_ledger() -> Path:
+    """An empty ledger file that is not payments.db."""
+    handle, name = tempfile.mkstemp(prefix="review-payments-", suffix=".db")
+    os.close(handle)
+    path = Path(name)
+    if is_real_payments_db(path):
+        path.unlink(missing_ok=True)
+        raise RuntimeError("temporary ledger must not be payments.db")
+    return path
 def run_one(path: Path, db_path: Path | None = None, *, live: bool = False) -> dict:
-    """One invoice. live=True uses GrokClient, the same client main.py constructs."""
+    """One invoice. live=True uses GrokClient, the same client main.py constructs.
+
+    Offline runs pass a temporary payments ledger and delete it afterward.
+    They do not write payments.db.
+    """
     database = ensure_db(db_path)
+    temporary = None
     if live:
         llm, extra = GrokClient(), {}
     else:
         llm = FakeLLM(handler_for(path))
         extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
+        temporary = temporary_ledger()
+        extra["ledger_path"] = temporary
     started = time.perf_counter()
-    with redirect_stdout(io.StringIO()):
-        result = run_invoice(path, database, llm, **extra)
+    try:
+        with redirect_stdout(io.StringIO()):
+            result = run_invoice(path, database, llm, **extra)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return {"elapsed_seconds": time.perf_counter() - started, "state": to_jsonable(result), "llm": "grok" if live else "fake"}
 def pack(entries: list[dict]) -> dict:
     modes = {entry.get("llm") for entry in entries if entry.get("llm")}
