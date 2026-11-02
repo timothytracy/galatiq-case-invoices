@@ -184,12 +184,9 @@ def main(argv: list[str] | None = None) -> int:
     except ModeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    # Pending approval: a missing replay file skips so CI is green before the
-    # recordings are committed. A file that is present still fails the run
-    # when the score is short of perfect.
     if mode == "replay" and not Path(recording).is_file():
-        print(f"skip: replay recording not found: {recording}", flush=True)
-        return 0
+        print(f"replay recording not found: {recording}", file=sys.stderr)
+        return 1
     try:
         client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:

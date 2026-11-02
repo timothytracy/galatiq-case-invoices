@@ -520,12 +520,13 @@ def test_record_prompt_path_is_repo_relative_and_replays_from_another_directory(
     assert replayed["payment"].status == "paid"
 
 
-def test_missing_replay_file_skips_and_a_present_file_can_fail(tmp_path, capsys, monkeypatch):
+def test_missing_replay_file_fails_and_a_present_file_can_fail(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     missing = eval_main(["--replay", str(tmp_path / "missing.jsonl")])
     skipped = capsys.readouterr()
-    assert missing == 0
-    assert skipped.out.startswith("skip: replay recording not found:")
+    assert missing == 1
+    assert "replay recording not found:" in skipped.err
+    assert "skip:" not in skipped.out
 
     with pytest.raises(SystemExit):
         eval_main(["--record", str(tmp_path / "a.jsonl"), "--replay", str(tmp_path / "b.jsonl")])
