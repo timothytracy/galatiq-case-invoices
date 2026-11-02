@@ -1,7 +1,9 @@
 """Invoice review screen. Launch: streamlit run ui/app.py"""
 
 import json
+import os
 import sys
+import tempfile
 from html import escape
 from pathlib import Path
 
@@ -12,15 +14,16 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 
 from llm_client import MissingAPIKey
+from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
-    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, detail_index,
-    format_amount, format_money, holds, invoice_view, label, payment_text, reason_code_text,
-    show_text, summarize, table_rows,
+    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
+    detail_index, format_amount, format_money, invoice_view, label, pay_block, pay_message,
+    payment_text, reason_code_text, show_text, summarize, table_rows, concern_text,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
-    DEFAULT_RUN, grok_key_set, invoice_files, load_run, mode_label, parse_payload, resolve_path,
-    run_one, save_run,
+    DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
+    mode_label, parse_payload, resolve_path, run_one, save_run, temporary_ledger,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
@@ -46,6 +49,7 @@ st.markdown(
 def main() -> None:
     st.title("Invoice review")
     live = st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1).startswith("Live")
+    _offline_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
     used = mode_label(st.session_state.get("entries") or [])
     if used:
@@ -55,13 +59,43 @@ def main() -> None:
         "Run or load": lambda: screen_run(live),
         "Results": lambda: screen_results(entries),
         "Invoice detail": lambda: screen_detail(entries),
-        "Hold queue": lambda: screen_holds(entries),
+        "Hold queue": lambda: screen_holds(entries, live),
         "Metrics": lambda: screen_metrics(entries),
     }
     if page != "Run or load" and not entries:
         st.info("Process an invoice or load a run file on Run or load.")
     else:
         screens[page]()
+
+def _offline_releases(live: bool) -> None:
+    """Offline runs keep the pipeline's release records out of logs/.
+
+    The pipeline writes the record itself. This only points INVOICE_RELEASE_DIR
+    at one temporary folder for the session. Live mode leaves the default logs/.
+    """
+    if live:
+        os.environ.pop("INVOICE_RELEASE_DIR", None)
+        return
+    folder = st.session_state.get("release_dir")
+    path = Path(folder) if folder else None
+    if path is None or not path.is_dir():
+        path = Path(tempfile.mkdtemp(prefix="review-releases-"))
+        st.session_state["release_dir"] = str(path)
+    os.environ["INVOICE_RELEASE_DIR"] = str(path)
+
+def _session_ledger(live: bool) -> Path:
+    """The ledger the pipeline run and the later pay must share.
+
+    Offline uses one temporary file for the session. Live uses payments.db.
+    """
+    if live:
+        return PAYMENTS_DB
+    current = st.session_state.get("offline_ledger")
+    path = Path(current) if current else None
+    if path is None or not path.is_file() or is_real_payments_db(path):
+        path = temporary_ledger()
+        st.session_state["offline_ledger"] = str(path)
+    return path
 
 def screen_run(live: bool) -> None:
     st.header("Run or load")
@@ -166,14 +200,19 @@ def screen_detail(entries: list[dict]) -> None:
         st.subheader(title)
         block()
 
-def screen_holds(entries: list[dict]) -> None:
+def screen_holds(entries: list[dict], live: bool) -> None:
     st.header("Hold queue")
     _flash()
     st.caption(
-        "A review is a local note. It does not call payment or change the pipeline outcome. "
-        f"Saved to {REVIEW_PATH.relative_to(ROOT)}."
+        "Save review is a local note. It does not pay or change the pipeline outcome. "
+        f"Saved to {_review_where()}. "
+        "Approve and pay is separate, and it asks before paying."
     )
-    queued = holds(entries)
+    queued = []
+    for entry in entries:
+        view = invoice_view(entry)
+        if view.get("outcome") == "hold":
+            queued.append((entry, view))
     if not queued:
         st.info("No held invoices in this run.")
         return
@@ -182,7 +221,7 @@ def screen_holds(entries: list[dict]) -> None:
     except (OSError, ValueError, TypeError) as exc:
         st.error(str(exc))
         saved = {}
-    for index, view in enumerate(queued):
+    for index, (entry, view) in enumerate(queued):
         st.subheader(view["file"])
         _facts(
             ("Reason code", "Amount", "Payment"),
@@ -191,12 +230,16 @@ def screen_holds(entries: list[dict]) -> None:
         if action_text(view):
             st.caption("Next action")
             st.write(action_text(view))
+        concerns = concern_text(view.get("critique_concerns"))
+        if concerns:
+            st.write(concerns)
         existing = saved.get(view["file"])
         if existing:
             st.info(
                 f"Recorded {existing.get('reviewer_outcome')}. "
                 f"Pipeline outcome is still {existing.get('pipeline_outcome')}. Note: {existing.get('note')}"
             )
+        _show_pay_result(view)
         with st.form(f"review-{index}-{view['file']}"):
             choice = st.radio(
                 "Reviewer choice", ["approve", "reject"], index=None, horizontal=True,
@@ -205,6 +248,10 @@ def screen_holds(entries: list[dict]) -> None:
             note = st.text_area("Note", key=f"note-{index}-{view['file']}")
             if st.form_submit_button("Save review"):
                 _save_hold(view, choice, note)
+        if can_pay(view):
+            _pay_form(index, entry, view, live)
+        else:
+            st.caption(pay_block(view) or "This hold cannot be paid.")
 
 def screen_metrics(entries: list[dict]) -> None:
     st.header("Metrics")
@@ -334,7 +381,7 @@ def _process(paths: list[Path], live: bool, *, single: bool) -> None:
     try:
         for index, path in enumerate(paths, start=1):
             status.write(f"{path.name} ({index}/{len(paths)})")
-            rows.append(run_one(path, live=live))
+            rows.append(run_one(path, live=live, ledger_path=_session_ledger(live)))
             progress.progress(index / len(paths))
     except (MissingAPIKey, Exception) as exc:
         st.error(str(exc))
@@ -380,6 +427,63 @@ def _replace_entry(entry: dict) -> None:
     kept.append(entry)
     kept.sort(key=lambda row: (row.get("state") or {}).get("filename") or "")
     st.session_state["entries"] = kept
+
+def _review_where() -> Path:
+    try:
+        return REVIEW_PATH.relative_to(ROOT)
+    except ValueError:
+        return REVIEW_PATH
+
+def _show_pay_result(view: dict) -> None:
+    stored = (st.session_state.get("pay_results") or {}).get(view["file"])
+    if not stored:
+        return
+    kind, text = pay_message(view, stored)
+    if kind == "success":
+        st.success(text)
+    else:
+        st.error(text)
+
+def _pay_form(index: int, entry: dict, view: dict, live: bool) -> None:
+    file = view["file"]
+    reviewer_key = f"pay-reviewer-{index}-{file}"
+    note_key = f"pay-note-{index}-{file}"
+    confirm_key = f"pay-confirm-{index}-{file}"
+    with st.form(f"pay-{index}-{file}"):
+        reviewer = st.text_input("Reviewer", key=reviewer_key)
+        note = st.text_area("Payment note", key=note_key)
+        confirmed = st.checkbox(confirm_label(view), key=confirm_key)
+        if st.form_submit_button("Approve and pay"):
+            if _pay_hold(entry, view, reviewer, note, confirmed, live):
+                st.rerun()
+
+def _two_letters(value: str) -> bool:
+    return sum(character.isalpha() for character in (value or "")) >= 2
+
+def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool, live: bool) -> bool:
+    missing = []
+    if not _two_letters(reviewer):
+        missing.append("A reviewer name is required.")
+    if not _two_letters(note):
+        missing.append("A note is required.")
+    if not confirmed:
+        missing.append(f"{confirm_label(view)} before paying.")
+    for message in missing:
+        st.error(message)
+    if missing:
+        return False
+    pipeline = saved_result(entry)
+    ledger = entry.get("ledger_path") or _session_ledger(live)
+    result = approve_and_pay(
+        pipeline,
+        reviewer=reviewer.strip(),
+        note=note.strip(),
+        amount=extracted_total(pipeline),
+        ledger_path=ledger,
+        demo=not live,
+    )
+    st.session_state.setdefault("pay_results", {})[view["file"]] = result
+    return True
 
 def _save_hold(view: dict, reviewer_outcome: str | None, note: str) -> None:
     if reviewer_outcome not in {"approve", "reject"}:

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml/badge.svg)](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml)
 
-The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. Rejects and holds are not paid.
+The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
 
 Replay of the three committed recordings, no API key, on 2026-11-01 PT:
 
@@ -53,6 +53,14 @@ python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 ```
 
 The review screen is `streamlit run ui/app.py`. Offline mode needs no API key.
+
+A reviewer releases a hold with `approve_and_pay`. This demo runs the offline pipeline on two files, then tries to release each. It uses a temporary ledger and does not call the model.
+
+```bash
+python3 scripts/approve_hold_demo.py --demo
+```
+
+`invoice_1012.txt` is a `VENDOR_RENAMED` hold, and it is paid: `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. `invoice_1002.txt` is a stock reject, and it stays unpaid with reason `NOT_PAYABLE`. Both keep their pipeline outcome.
 
 ## Agents
 
@@ -145,6 +153,8 @@ Payment runs only with an unused authorization whose vendor, amount, and currenc
 ### Reject log
 
 Reject log is the other exit. Rejects are logged as stage `reject_log`. Holds are logged as stage `hold`. The graph node is the same. The record includes the outcome, the reason code, the next action, and a `not_paid` payment row. A reject names what the vendor must resend. A hold names what a person does.
+
+Reject log also writes a release record. A reviewer can pay a hold from that record only when every finding is a releasable hold or a warning. The rules are in [docs/DESIGN.md](docs/DESIGN.md#releasing-a-hold).
 
 ### Tools, the ledger, and the fact guard
 

@@ -69,11 +69,23 @@ Item names are matched after normalizing case, spaces, and hyphens.
 - The model reads and flags. Code decides. The same findings always give the same outcome. This keeps every payment traceable to a rule, and it means text inside an invoice cannot loosen a decision. The reasoning is in the [README](../README.md#why-code-decides).
 - Each invoice is judged on its own facts plus the payments ledger. The ledger can only add a hold. Scored eval gives each invoice a fresh ledger, so a scored result does not depend on order.
 - An OCR number fix is kept only when the math reconciles. An O read as a 0 in an amount or a date is fixed only when the lines and totals add up afterwards.
-- No payment without an audit PASS.
+- No payment without an audit PASS, or a reviewer release of a payable hold.
 - Non-USD is never paid. Nothing is converted.
 - Critique and audit can only tighten. Critique sets aside a stock claim whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit sets aside that same future-date claim. Every other concern is kept, including a disagreement between the raw text and the extraction. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
 
 Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 approves. A non-commercial address on a clean invoice the brief lists as passing is a warning. The revised file stays a hold because it is a revision.
+
+## Releasing a hold
+
+`approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
+
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` lists the holds a person may release: `REVISED_INVOICE`, `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `PRICE_SPIKE`, `CRITIQUE_HOLD`, and `AUDIT_ESCALATED`. A hold is payable only when every saved finding and every fresh finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. `AUDIT_ESCALATED` is not payable when `send_back_cap` is set or the recorded message is the send-back cap sentence.
+
+A reject is never paid. Neither is a hold with a reject-class finding, or a closed hold: `ITEM_NOT_IN_SOURCE`, `NON_USD`, `CREDIT_NOTE`, `DUPLICATE_INVOICE`, `SPLIT_INVOICE`, `SYSTEM_ERROR`, or `BAD_REASONING`. The total must be greater than zero, the currency must be USD, and the amount must equal the recorded total. An OCR number such as `INV 1O12` stays held.
+
+A release re-checks the live source file and the live inventory without the model. Matching the vendor, invoice number, total, and each line's name and quantity is a sanity check. Text already in the file passes, so that check does not show the record is unchanged. Before the release file is written, the run stores its sha256 in `payments.db` when the outcome is a payable hold, or NULL otherwise. Approval pays only when the file's sha256 equals that row.
+
+The split and same-text checks run at validation, and the payment write checks them again inside the ledger lock. A second writer sees the first row, so two processes cannot each pay half of a split.
 
 ## Knobs
 
@@ -98,7 +110,8 @@ Reference prices live in `policy.toml`. The inventory table stays the four seed 
 
 - The fact guard trusts the category on the model's claim. A stock sentence labeled `other` is kept.
 - The ledger row is written just before the mock payment. A failure after that insert needs the row removed, or the write delayed until the gateway confirms.
-- Two processes can each pay half of a split. The invoice numbers differ, so the unique index does not stop them. The ledger tool does not close that gap.
+- One reviewer can release `FRAUD_CLUSTER` or `NEW_REMITTANCE`. A second approver for vendor-risk holds is the production next step.
+- `logs/` is trusted the same way `payments.db` is. Anyone who can edit those files can edit the ledger.
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.

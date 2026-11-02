@@ -25,7 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 
-from models import ExtractedInvoice, Finding
+from models import ExtractedInvoice, Finding, SourceInfo
 
 from decision.findings import _is_revised, parse_printed_date
 from decision.invoice_fields import different, normalize_invoice_number, show_money
@@ -126,10 +126,12 @@ def record_payment(
 ) -> bool | str:
     """Insert one paid row.
 
-    True means the row was inserted. False means the unique index refused a
-    repeat. A string means the file could not be written; nothing was inserted.
-    The caller writes this before the mock payment. Anything but True means
-    the mock must not run.
+    True means the row was inserted. False means this invoice was already
+    paid. "SPLIT_INVOICE" means the split rule fired. Any other string means
+    the file could not be written. Nothing was inserted in those cases.
+    The duplicate and split checks run inside the write lock, so two callers
+    cannot both pass the split rule. The caller writes this before the mock
+    payment. Anything but True means the mock must not run.
     """
 
     number = normalize_invoice_number(invoice_number)
@@ -152,6 +154,27 @@ def record_payment(
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(_CREATE)
         connection.execute(_UNIQUE)
+        rows = [
+            PaymentRow._make(item)
+            for item in connection.execute(
+                "SELECT " + ", ".join(_COLUMNS) + " FROM payments ORDER BY rowid"
+            )
+        ]
+        snapshot = ExtractedInvoice(
+            vendor=vendor,
+            invoice_number=invoice_number,
+            invoice_date=invoice_date,
+            currency=currency,
+            total=total,
+            source=SourceInfo(path=source_file, filename=source_file, format="txt"),
+        )
+        if _duplicate_finding(snapshot, raw_text, rows) is not None:
+            connection.execute("ROLLBACK")
+            return False
+        _paid, over = split_window(snapshot, rows)
+        if over:
+            connection.execute("ROLLBACK")
+            return "SPLIT_INVOICE"
         connection.execute(
             "INSERT INTO payments (" + ", ".join(_COLUMNS) + ") VALUES ("
             + ", ".join("?" for _ in _COLUMNS)
@@ -308,3 +331,47 @@ def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     name = path.resolve().as_posix()
     return sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=5)
+
+
+def save_release_sha(ledger, path: str, digest: str | None) -> None:
+    """Upsert the latest release sha. SQLite serializes concurrent writers."""
+
+    connection = sqlite3.connect(ledger, timeout=_LOCK_TIMEOUT, isolation_level=None)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(_CREATE)
+        connection.execute(_UNIQUE)
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS release_records (path TEXT PRIMARY KEY, record_sha TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO release_records (path, record_sha) VALUES (?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET record_sha = excluded.record_sha",
+            (path, digest),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.Error:
+        try:
+            connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        connection.close()
+
+
+def stored_release_sha(ledger, path: str) -> str | None:
+    """The stored sha, or None when the row is missing, NULL, or unreadable."""
+
+    try:
+        name = Path(ledger).resolve().as_posix()
+        connection = sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=_LOCK_TIMEOUT)
+        try:
+            row = connection.execute(
+                "SELECT record_sha FROM release_records WHERE path = ?", (path,)
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    return None if row is None else row[0]

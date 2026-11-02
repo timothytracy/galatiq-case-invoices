@@ -175,8 +175,20 @@ def test_paid_invoice_is_a_hit(db_path, tmp_path):
 
 def test_split_window_total_and_scope(db_path, tmp_path):
     ledger = tmp_path / "payments.db"
-    _pay(ledger, vendor="Other Co", invoice_number="INV-1001", total=Decimal("50000.00"))
-    _pay(ledger, invoice_number="INV-9002", total=Decimal("9600.00"), invoice_date="2026-01-10")
+    _pay(
+        ledger,
+        vendor="Other Co",
+        invoice_number="INV-1001",
+        total=Decimal("50000.00"),
+        raw_text="other vendor",
+    )
+    _pay(
+        ledger,
+        invoice_number="INV-9002",
+        total=Decimal("9600.00"),
+        invoice_date="2026-01-10",
+        raw_text="in the window",
+    )
     _pay(
         ledger,
         invoice_number="INV-9003",

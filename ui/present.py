@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
+from decision.outcome import PAYABLE_HOLD_CODES, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
 from main import payment_status
@@ -51,6 +52,7 @@ def invoice_view(entry: dict) -> dict:
         "payment": payment, "findings": _findings(state), "invoice": invoice or None,
         "logs": logs, "elapsed_seconds": _elapsed(entry),
         "raw_text": state.get("raw_text") or "", "llm": entry.get("llm"),
+        "critique_concerns": concern_list(state.get("critique_concerns")),
         "tool_calls": tool_call_view(logs, entry.get("result_line"), state.get("attempts")),
     }
 def _place(view: dict, key: str) -> str:
@@ -69,8 +71,69 @@ def payment_text(status: str | None) -> str:
 def table_rows(entries: list[dict], outcome: str | None = None) -> list[dict]:
     selected = None if outcome in (None, "", "all") else outcome
     return [view for view in map(invoice_view, entries) if not selected or view["outcome"] == selected]
+def pay_block(view: dict) -> str | None:
+    """Why this hold cannot be paid. None when every hold code is payable.
+
+    Payable codes are PAYABLE_HOLD_CODES. Warnings may sit beside them.
+    """
+    if view.get("outcome") != "hold":
+        return "Only a held invoice can be paid."
+    blocked = review_release_block(
+        view.get("outcome"), view.get("findings") or [], view.get("reason_code"),
+    )
+    if blocked:
+        return blocked
+    codes = [
+        item.get("code") for item in view.get("findings") or []
+        if isinstance(item, dict) and item.get("code")
+    ]
+    if any(code in PAYABLE_HOLD_CODES for code in codes) or codes.count("FRAUD_SIGNAL") >= 2:
+        return None
+    return "This hold is not a review hold and is never paid."
+def can_pay(view: dict) -> bool:
+    """True only for a hold whose codes are all review holds. Rejects are not payable."""
+    return view.get("outcome") == "hold" and pay_block(view) is None
 def holds(entries: list[dict]) -> list[dict]:
-    return [view for view in map(invoice_view, entries) if view["outcome"] == "hold"]
+    return [view for view in map(invoice_view, entries) if view.get("outcome") == "hold"]
+def confirm_label(view: dict) -> str:
+    amount = format_amount(view.get("amount"), view.get("currency"))
+    name = view.get("file") or "this invoice"
+    if amount:
+        return f"Confirm payment of {amount} for {name}"
+    return f"Confirm payment for {name}"
+def concern_list(value) -> list[str]:
+    """Critique concerns as plain text. A missing or empty value is no concerns."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if not blank(item) and str(item).strip()]
+def concern_text(value) -> str:
+    items = concern_list(value)
+    if not items:
+        return ""
+    return "Critique concerns: " + "; ".join(items)
+def pay_message(view: dict, result: dict) -> tuple[str, str]:
+    """("success", text) or ("error", text).
+
+    Paid names the payment status. A refusal shows the reason code and the reason.
+    Critique concerns are added when the result includes them.
+    """
+    concerns = concern_text(None if not isinstance(result, dict) else result.get("critique_concerns"))
+    if result.get("result") == "paid" or result.get("status") == "paid":
+        status = payment_text(result.get("payment_status") or "paid") or "Paid"
+        text = f"Paid {view.get('file') or 'invoice'}. Payment status: {status}."
+        amount = format_amount(view.get("amount"), view.get("currency"))
+        if amount:
+            text = f"{text} {amount}."
+        if concerns:
+            text = f"{text} {concerns}"
+        return "success", text
+    reason = result.get("reason")
+    reason = reason.strip() if isinstance(reason, str) and reason.strip() else "Payment refused."
+    code = result.get("reason_code")
+    text = f"{code.strip()}. {reason}" if isinstance(code, str) and code.strip() else reason
+    if concerns:
+        text = f"{text} {concerns}"
+    return "error", text
 
 def summarize(entries: list[dict]) -> dict:
     counts = {name: 0 for name in OUTCOMES}

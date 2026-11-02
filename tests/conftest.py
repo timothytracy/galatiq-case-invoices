@@ -26,3 +26,10 @@ def no_dotenv(monkeypatch):
 
     monkeypatch.setattr("llm_client.load_dotenv", lambda path=None: None)
     monkeypatch.setattr("ui.runner.load_dotenv", lambda path=None: None)
+
+
+@pytest.fixture(autouse=True)
+def release_records(tmp_path, monkeypatch):
+    """Pipeline release records stay out of the repo logs/ directory."""
+
+    monkeypatch.setenv("INVOICE_RELEASE_DIR", str(tmp_path / "releases"))

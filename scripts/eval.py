@@ -11,6 +11,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -215,56 +216,73 @@ def main(argv: list[str] | None = None) -> int:
     if not db_path.exists():
         create_database(db_path)
 
-    if args.ordered:
-        return _ordered_main(Path(args.ordered), db_path, client, mode, as_of, args.verbose)
+    with _release_dir():
+        if args.ordered:
+            return _ordered_main(Path(args.ordered), db_path, client, mode, as_of, args.verbose)
 
-    key = load_answer_key(Path(args.answer_key))
-    files = sorted(
-        path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
-    )
-    correct = 0
-    tool_calls = 0
-    repeats = 0
-    for path in files:
-        # One client for the run, so record mode writes a single file.
-        # Live passes no as_of: the graph still uses the wall clock.
-        with stage_output(args.verbose):
-            if mode == "live" and as_of is None:
-                result = run_invoice(path, db_path, client)
-            else:
-                result = run_invoice(path, db_path, client, as_of=as_of)
-        print_bad_reasoning(path.name, result.get("attempts") or [])
-        calls = tool_calls_of(result)
-        tool_calls += len(calls)
-        repeats += sum(1 for row in calls if row.get("repeat"))
-        lookup = invoice_lookup(path)
-        expected = key.get(lookup)
-        if expected is None:
+        key = load_answer_key(Path(args.answer_key))
+        files = sorted(
+            path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
+        )
+        correct = 0
+        tool_calls = 0
+        repeats = 0
+        for path in files:
+            # One client for the run, so record mode writes a single file.
+            # Live passes no as_of: the graph still uses the wall clock.
+            with stage_output(args.verbose):
+                if mode == "live" and as_of is None:
+                    result = run_invoice(path, db_path, client)
+                else:
+                    result = run_invoice(path, db_path, client, as_of=as_of)
+            print_bad_reasoning(path.name, result.get("attempts") or [])
+            calls = tool_calls_of(result)
+            tool_calls += len(calls)
+            repeats += sum(1 for row in calls if row.get("repeat"))
+            lookup = invoice_lookup(path)
+            expected = key.get(lookup)
+            if expected is None:
+                print(
+                    f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\t"
+                    f"tools={len(calls)}\tMISS",
+                    flush=True,
+                )
+                continue
+            row = grade(result, expected)
+            ok = row["outcome_ok"] and row["reason_ok"]
+            correct += int(ok)
             print(
-                f"{path.name}\toutcome={result.get('outcome')}\texpected=MISSING\t"
-                f"tools={len(calls)}\tMISS",
+                f"{path.name}\toutcome={row['actual_outcome']}\texpected={row['expected_outcome']}\t"
+                f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
+                f"payment={payment_status(result)}\t"
+                f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
+                f"tools={len(calls)}\t"
+                f"{'ok' if ok else 'MISS'}",
                 flush=True,
             )
-            continue
-        row = grade(result, expected)
-        ok = row["outcome_ok"] and row["reason_ok"]
-        correct += int(ok)
-        print(
-            f"{path.name}\toutcome={row['actual_outcome']}\texpected={row['expected_outcome']}\t"
-            f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
-            f"payment={payment_status(result)}\t"
-            f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
-            f"tools={len(calls)}\t"
-            f"{'ok' if ok else 'MISS'}",
-            flush=True,
-        )
-        if not ok and result.get("agent_error"):
-            print(f"{path.name}\terror={result['agent_error']}", flush=True)
-    print(format_tool_summary(tool_calls, repeats), flush=True)
-    print(f"score {correct}/{len(files)}", flush=True)
-    if mode != "live":
-        print(client.usage_line(), flush=True)
-    return 0 if correct == len(files) and correct == len(key) else 1
+            if not ok and result.get("agent_error"):
+                print(f"{path.name}\terror={result['agent_error']}", flush=True)
+        print(format_tool_summary(tool_calls, repeats), flush=True)
+        print(f"score {correct}/{len(files)}", flush=True)
+        if mode != "live":
+            print(client.usage_line(), flush=True)
+        return 0 if correct == len(files) and correct == len(key) else 1
+
+
+@contextlib.contextmanager
+def _release_dir():
+    """Replay records stay out of logs/ unless INVOICE_RELEASE_DIR is already set."""
+
+    if os.environ.get("INVOICE_RELEASE_DIR", "").strip():
+        yield
+        return
+    folder = tempfile.mkdtemp(prefix="releases-")
+    os.environ["INVOICE_RELEASE_DIR"] = folder
+    try:
+        yield
+    finally:
+        os.environ.pop("INVOICE_RELEASE_DIR", None)
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def format_tool_summary(calls: int, repeats: int) -> str:
