@@ -389,3 +389,25 @@ def test_critique_sends_no_tools_even_when_the_flag_is_on(tmp_path, db_path, mon
     assert "tool_calls" not in critique_log["result"]
     paid = result["payment"]
     assert (paid.status if not isinstance(paid, dict) else paid["status"]) == "paid"
+
+
+def test_critique_sends_no_tools_when_xai_tools_is_unset(db_path, monkeypatch):
+    from pipeline.critique import critique
+
+    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    seen = []
+
+    class Model:
+        def request(self, messages, timeout=60):
+            seen.append(messages)
+            assert task_of(messages) == "critique"
+            assert "lookup_item" not in messages[0]["content"]
+            return json.dumps({"concerns": [], "stricter": False})
+
+        def request_tools(self, messages, tools, timeout=60):
+            raise AssertionError("critique must not send tools")
+
+    out = critique(_payable_state(), Model(), db_path, FakeClock(), ZeroRandom(), 3)
+    assert len(seen) == 1
+    critique_log = next(row for row in out["logs"] if row["stage"] == "critique")
+    assert "tool_calls" not in critique_log["result"]

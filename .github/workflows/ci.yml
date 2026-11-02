@@ -1,8 +1,6 @@
-# Replay steps call scripts/eval.py directly. A missing tools-off file
-# fails the step. recordings/ordered_tools.jsonl is the tools-enabled
-# ordered recording. That step skips, with a note, until the file is
-# committed. A present file still exits 1 when the score is short of
-# perfect. No API key is used.
+# Replay steps call scripts/eval.py directly. A missing file fails the
+# step. A present file still exits 1 when the score is short of perfect.
+# No API key is used.
 
 name: CI
 
@@ -37,12 +35,7 @@ jobs:
         env:
           XAI_TOOLS: "0"
       - name: Replay the ordered ledger scenario
-        run: |
-          if [ ! -f recordings/ordered_tools.jsonl ]; then
-            echo "skip: recordings/ordered_tools.jsonl is not recorded yet. This step replays the ordered scenario with audit tools enabled. It runs once that file is committed."
-            exit 0
-          fi
-          python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
+        run: python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
       - name: Replay the ordered ledger scenario with tools off
         run: python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
         env:

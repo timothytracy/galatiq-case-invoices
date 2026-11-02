@@ -306,7 +306,7 @@ The bill is $11,500. WidgetA 15 at $250, WidgetB 8 at $500, and GadgetX 5 at $75
 
 Pending approval: the ordered replay uses a new temporary ledger file each run. That path is not part of the fingerprint, so the saved replies still match.
 
-Record stores one header line with the `as_of` date the prompts used, then one line per request. Replay reads that date back, so a later calendar day still hits. Live, with no flag, still uses the wall clock and does not open the file. The record commands are in [recordings/README.md](recordings/README.md). The five committed files are listed there. `recordings/ordered_tools.jsonl` is not committed yet. Pending approval. Replay with no flag uses the `_tools` files. `XAI_TOOLS=0` replays `recordings/samples.jsonl`, `recordings/unseen.jsonl`, and `recordings/ordered.jsonl`.
+Record stores one header line with the `as_of` date the prompts used, then one line per request. Replay reads that date back, so a later calendar day still hits. Live, with no flag, still uses the wall clock and does not open the file. The record commands are in [recordings/README.md](recordings/README.md). The six committed files are listed there, including `recordings/ordered_tools.jsonl`. Pending approval. Replay with no flag uses the `_tools` files. `XAI_TOOLS=0` replays `recordings/samples.jsonl`, `recordings/unseen.jsonl`, and `recordings/ordered.jsonl`.
 
 **Tests.** `python3 -m pytest` passed 129 tests.
 

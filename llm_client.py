@@ -465,7 +465,7 @@ class GrokClient:
         return self._exchange(messages, timeout, tools=None)
 
     def request_tools(self, messages: list[dict], tools: list[dict], timeout: float = 60) -> dict:
-        """One completion that may ask for tools. Used only when XAI_TOOLS is on.
+        """One completion that may ask for tools. Audit calls this unless tools are off.
 
         Returns {"content": str, "tool_calls": [{"id", "name", "arguments"}]}.
         arguments is the raw JSON string from the model.
