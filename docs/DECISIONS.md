@@ -102,7 +102,7 @@ The unique index on `(vendor_key, invoice_number)` refuses a second row, includi
 
 The in-memory authorization key still refuses a second use of the same audit key inside one process. Scored eval gives each invoice a fresh temporary ledger and deletes it when the call returns, so the answer keys stay as they are. `scripts/eval.py --ordered` runs `data/ordered_scenario.json` on one shared temporary ledger, not on `payments.db`. `python3 main.py --reset-ledger` deletes `payments.db` before that one file. A missing API key does not delete it, because the client is created first.
 
-The split and same-text checks run at validation and assume one process at a time. Two processes can each pay half of a split before either has written. The unique index does not stop that, because the invoice numbers differ.
+The split and same-text checks run at validation. The payment write checks them again inside the lock, so a second writer sees the first row. The unique index still refuses the same vendor and invoice number.
 
 A revision of a number that has not been paid is still only `REVISED_INVOICE`. On a fresh ledger, `invoice_1004_revised.json` is that case. Once `invoice_1004.json` has been paid, the revision is `DUPLICATE_INVOICE` and the revised-invoice finding stays. The ordered scenario is that second case: the step is a duplicate hold, and the scenario still requires `REVISED_INVOICE` on the finding list.
 
