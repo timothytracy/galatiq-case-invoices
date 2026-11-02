@@ -4,6 +4,8 @@ Every invoice ends in one outcome: approve, reject, or hold. Every outcome carri
 
 The numbers live in [policy.toml](../policy.toml). `decision/policy.py` loads that file at startup. A missing key, a wrong type, or a nonsense value stops the process and names the key.
 
+How each of Acme's manual steps is replaced, and who owns each kind of hold, is in the [README](../README.md#what-changes-for-acme).
+
 ## Approve
 
 Approve when all checks pass and there are no blocking findings.
@@ -105,6 +107,8 @@ The split and same-text checks run at validation, and the payment write checks t
 Retries back off 1, 2, 4, 8, then 16 seconds, plus up to 25% jitter. After those attempts, or on HTTP 400, 401, or 403, the invoice is a `SYSTEM_ERROR` hold and nothing is paid.
 
 Reference prices live in `policy.toml`. The inventory table stays the four seed rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. Approving an invoice does not decrease stock.
+
+Stock stays fixed so that each invoice is judged on its own facts, the same way the answer keys were written. If an approve drew stock down, an outcome would depend on which files ran first. After invoice 1001 (WidgetA 10) and invoice 1006 (WidgetA 5), WidgetA would be 0, and invoice 1010 (WidgetA 12) would turn from an approve into a stock reject. Replay, the live runs, and scored eval each expect one result per file, whatever ran before it. The payments ledger is the only state carried across files, and it can only add a hold.
 
 ## Limitations
 
