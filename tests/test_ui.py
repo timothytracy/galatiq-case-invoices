@@ -247,6 +247,37 @@ def test_live_mode_uses_the_cli_client_and_offline_does_not(monkeypatch, db_path
     assert entry["llm"] == "grok"
 
 
+def test_live_run_leaves_used_payment_keys_untouched(monkeypatch, db_path, tmp_path):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    from pipeline.payment import _USED_KEYS
+
+    class Stub:
+        def request(self, messages, timeout=60):
+            raise AssertionError("live mode must not call the network in this test")
+
+    def run(path, db, llm, **kwargs):
+        return {"filename": Path(path).name, "outcome": "hold", "logs": [], "findings": []}
+
+    monkeypatch.setattr("ui.runner.run_invoice", run)
+    monkeypatch.setattr("ui.runner.GrokClient", lambda: Stub())
+    _USED_KEYS.add("live-key")
+    before = set(_USED_KEYS)
+    entry = run_one(ROOT / "data" / "invoices" / "invoice_1001.txt", db_path, live=True)
+    assert entry["llm"] == "grok"
+    assert is_real_payments_db(entry["ledger_path"])
+    assert set(_USED_KEYS) == before
+    other = tmp_path / "scratch-ledger.db"
+    other.write_bytes(b"")
+    run_one(
+        ROOT / "data" / "invoices" / "invoice_1001.txt",
+        db_path,
+        live=True,
+        ledger_path=other,
+    )
+    assert set(_USED_KEYS) == before
+    assert "live-key" in _USED_KEYS
+
+
 def test_screens_do_not_render_empty_literals(db_path, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     entries = [
