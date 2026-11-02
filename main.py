@@ -62,6 +62,15 @@ def _result_line(path: Path, result: dict) -> dict:
     calls = tool_calls_of(result)
     if calls:
         line["tool_calls"] = calls
+    for row in reversed(result.get("logs") or []):
+        if not isinstance(row, dict) or row.get("stage") != "audit":
+            continue
+        body = row.get("result") or {}
+        if body.get("tool_cap_hit"):
+            line["tool_cap_hit"] = body["tool_cap_hit"]
+        if body.get("forced_final_turn"):
+            line["forced_final_turn"] = True
+        break
     return line
 
 

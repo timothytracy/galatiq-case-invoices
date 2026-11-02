@@ -141,6 +141,9 @@ def test_audit_pass_with_tools_pays(db_path, monkeypatch):
     assert paid["payment"].status == "paid"
     line = _result_line(Path("x.txt"), out)
     assert line["tool_calls"] == tool_calls_of(out) == calls
+    assert "tool_cap_hit" not in line
+    assert "forced_final_turn" not in line
+    assert "tool_cap_hit" not in _audit_log(out)["result"]
     assert "payment" not in [row["stage"] for row in out["logs"]]
 
 

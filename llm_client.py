@@ -187,6 +187,14 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
         if check is not None:
             check(parsed)
         return parsed
+    # A forced final turn already had its one repair. Do not start the tool loop again.
+    if getattr(request, "forced_final_turn", False):
+        raise LLMError(
+            "malformed_output",
+            False,
+            error_text,
+            log={"tool_calls": list(request.log)},
+        )
     raise LLMError("malformed_output", True, error_text)
 
 
@@ -296,6 +304,8 @@ class ToolStep:
 
     Retries share the counts. set_attempt(1) starts a new step.
     The schema repair goes through repair(), which sends no tools.
+    An audit cap takes one plain final turn instead of failing immediately.
+    Approved by the captain on 2026-11-01.
     """
 
     def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
@@ -306,14 +316,19 @@ class ToolStep:
         self.rounds = 0
         self.calls = 0
         self.attempt = 1
+        self.cap_hit = None
+        self.forced_final_turn = False
 
     def set_attempt(self, attempt: int) -> None:
         """call_with_retries reports the attempt. 1 starts a step. A retry does not."""
 
-        if attempt == 1 and (self.rounds or self.calls):
-            self.rounds = 0
-            self.calls = 0
-            self.log.clear()
+        if attempt == 1:
+            self.cap_hit = None
+            self.forced_final_turn = False
+            if self.rounds or self.calls:
+                self.rounds = 0
+                self.calls = 0
+                self.log.clear()
         self.attempt = attempt
 
     def repair(self, messages, timeout=60) -> str:
@@ -323,6 +338,8 @@ class ToolStep:
             return self.llm.request(messages, timeout)
         except LLMError as exc:
             exc.log.setdefault("tool_calls", list(self.log))
+            if self.forced_final_turn:
+                exc.retryable = False
             raise
 
     def __call__(self, messages, timeout=60) -> str:
@@ -369,6 +386,9 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
                 step.log.append(
                     _record(step, call, next_round, None, "blocked: tool_cap", time.perf_counter())
                 )
+            step.cap_hit = which
+            if step.agent == "audit":
+                return _forced_final_turn(step, conversation, timeout)
             raise LLMError(
                 "tool_cap",
                 False,
@@ -402,6 +422,27 @@ def _tool_loop(step: ToolStep, messages, timeout) -> str:
                 raise
             step.log.append(record)
             conversation.append(tool_message)
+
+
+def _forced_final_turn(step: ToolStep, conversation: list, timeout) -> str:
+    """One plain completion after the audit cap. The payload has no tools."""
+
+    step.forced_final_turn = True
+    messages = list(conversation) + [
+        {
+            "role": "user",
+            "content": (
+                "The tool cap is reached. Use the tool results and verified facts above. "
+                "Return the audit verdict JSON now."
+            ),
+        }
+    ]
+    try:
+        return step.llm.request(messages, timeout)
+    except LLMError as exc:
+        exc.retryable = False
+        exc.log.setdefault("tool_calls", list(step.log))
+        raise
 
 
 def _normalize_call(call: dict, round_number: int, index: int) -> dict:

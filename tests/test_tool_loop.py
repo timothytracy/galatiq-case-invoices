@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from db import create_database
 from graph import route_after_audit, run_invoice
+from main import _result_line
 from llm_client import (
     DEFAULT_MODEL,
     TOOL_CALL_CAP,
@@ -38,6 +39,7 @@ from tests.test_pipeline import extraction, scripted, write_invoice
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSWER = '{"echoed": "phase-1"}'
+AUDIT_PASS = json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
 _RECORD_FIELDS = {
     "round",
     "attempt",
@@ -408,46 +410,76 @@ def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
     assert paid["payment"].mock_response is None
 
 
-def test_round_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monkeypatch):
+def test_round_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     assert TOOL_ROUND_CAP == 3
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
+    steps.append(text_step(AUDIT_PASS))
     out, clock, log, model = _cap_hold(steps, db_path, monkeypatch)
-    _assert_system_error_hold(out, clock, executed=TOOL_ROUND_CAP + 1)
-    assert out["attempts"][0]["cap"] == "rounds"
+    assert out["outcome"] == "approve"
+    assert out["audit_verdict"] == "PASS"
+    assert out["authorization"] is not None
+    assert clock.slept == []
     assert [row["round"] for row in log] == [1, 2, 3, 4]
     assert [row["error"] for row in log] == [None, None, None, "blocked: tool_cap"]
     assert log[-1]["result"] is None
     assert log[-1]["name"] == "echo_note"
-    assert "repeat" not in log[-1]
-    audit_log = next(row for row in out["logs"] if row["stage"] == "audit")
-    assert audit_log["result"]["tool_calls"] == out["attempts"][0]["tool_calls"]
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "rounds"
+    assert stage["result"]["forced_final_turn"] is True
+    assert stage["result"]["tool_calls"][-1]["error"] == "blocked: tool_cap"
+    final = model.requests[-1]
+    assert "tools" not in final
+    assert "tool_choice" not in final
+    assert any(message.get("role") == "tool" for message in final["messages"])
+    assert "verified_by_code" in final["messages"][1]["content"]
+    assert final["messages"][-1]["content"].startswith("The tool cap is reached.")
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
-    assert model.requests == []
+    assert len(model.requests) == 1
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "rounds"
+    assert line["forced_final_turn"] is True
+    stopped = _payable_state().model_copy(
+        update={
+            "outcome": out["outcome"],
+            "audit_verdict": out["audit_verdict"],
+            "authorization": out["authorization"],
+            "logs": out["logs"],
+        }
+    )
+    assert route_after_audit(stopped) == "payment"
+    assert payment(stopped)["payment"].status == "paid"
 
 
-def test_call_cap_is_a_system_error_hold_without_retry_or_payment(db_path, monkeypatch):
+def test_call_cap_then_a_bad_final_answer_holds_without_payment(db_path, monkeypatch):
     assert TOOL_CALL_CAP == 8
     eight = [
         (f"c{index}", "echo_note", json.dumps({"note": str(index)}))
         for index in range(TOOL_CALL_CAP)
     ]
-    steps = [tool_step(*eight), _echo(call_id="over")]
+    steps = [tool_step(*eight), _echo(call_id="over"), text_step("not-json"), text_step("nope")]
     out, clock, log, model = _cap_hold(steps, db_path, monkeypatch)
-    _assert_system_error_hold(out, clock, executed=TOOL_CALL_CAP + 1)
-    assert out["attempts"][0]["cap"] == "calls"
+    _assert_system_error_hold(out, clock, executed=TOOL_CALL_CAP + 1, error_type="malformed_output")
     assert log[-1]["error"] == "blocked: tool_cap"
     assert log[-1]["result"] is None
     assert log[-1]["call_id"] == "over"
     assert log[-1]["round"] == 2
     assert {row["round"] for row in log[:-1]} == {1}
     assert all(row["error"] is None for row in log[:-1])
-    audit_log = next(row for row in out["logs"] if row["stage"] == "audit")
-    assert [row["call_id"] for row in audit_log["result"]["tool_calls"]] == [
+    stage = next(row for row in out["logs"] if row["stage"] == "audit")
+    assert stage["result"]["tool_cap_hit"] == "calls"
+    assert stage["result"]["forced_final_turn"] is True
+    assert [row["call_id"] for row in stage["result"]["tool_calls"]] == [
         *(f"c{index}" for index in range(TOOL_CALL_CAP)),
         "over",
     ]
     assert len(model.tool_requests) == 2
-    assert model.requests == []
+    assert len(model.requests) == 2
+    assert all("tools" not in sent and "tool_choice" not in sent for sent in model.requests)
+    assert model.requests[1]["messages"][-1]["content"].startswith("The JSON failed validation:")
+    line = _result_line(Path("cap.txt"), out)
+    assert line["tool_cap_hit"] == "calls"
+    assert line["forced_final_turn"] is True
+    assert line["payment_status"] == "not_paid"
 
 
 def test_repair_turn_sends_no_tools(monkeypatch):
@@ -517,16 +549,20 @@ def test_retry_then_cap_logs_each_call_once(db_path, monkeypatch):
         LLMError("http_429", True, "busy"),
         _echo(note="c", call_id="c"),
         _echo(note="d", call_id="d"),
+        text_step(AUDIT_PASS),
     ]
     out, clock, log, _model = _cap_hold(steps, db_path, monkeypatch)
     assert clock.slept == [1.0]
-    assert [row["error_type"] for row in out["attempts"]] == ["http_429", "tool_cap"]
+    assert out["outcome"] == "approve"
+    assert [row["error_type"] for row in out["attempts"]] == ["http_429"]
     assert [row["call_id"] for row in out["attempts"][0]["tool_calls"]] == ["a", "b"]
     logged = out["logs"][-1]["result"]["tool_calls"]
     assert [row["call_id"] for row in logged] == ["a", "b", "c", "d"]
     assert logged[-1]["error"] == "blocked: tool_cap"
     assert logged[-1]["result"] is None
     assert [row["call_id"] for row in log] == ["a", "b", "c", "d"]
+    assert out["logs"][-1]["result"]["tool_cap_hit"] == "rounds"
+    assert out["logs"][-1]["result"]["forced_final_turn"] is True
 
 
 def test_retry_does_not_reset_the_round_cap(monkeypatch):

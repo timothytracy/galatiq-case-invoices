@@ -76,6 +76,7 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
             step_attempts,
             agent_error=str(exc),
             finding=agent_finding(exc),
+            note=_cap_note(step),
         )
 
     fresh = assess(invoice, state.raw_text, stock)
@@ -124,6 +125,9 @@ def audit(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_
         "decision": new_decision.model_dump(mode="json"),
         "codes": finding_codes(findings),
     }
+    note = _cap_note(step)
+    if note:
+        result.update(note)
     if step is not None and step.log:
         result["tool_calls"] = list(step.log)
     update = {
@@ -234,6 +238,17 @@ def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
         },
         {"role": "user", "content": json.dumps(payload)},
     ]
+
+
+def _cap_note(step) -> dict | None:
+    """Cap fields for the audit stage. Absent when this step did not hit the cap."""
+
+    if step is None or not step.cap_hit:
+        return None
+    note = {"tool_cap_hit": step.cap_hit}
+    if step.forced_final_turn:
+        note["forced_final_turn"] = True
+    return note
 
 
 def concerns_addressed(concerns: list[str], decision: ApprovalDecision | None) -> bool:

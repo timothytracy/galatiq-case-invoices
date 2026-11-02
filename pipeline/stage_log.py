@@ -46,7 +46,7 @@ def agent_finding(exc) -> Finding:
     return Finding(code=code, message=str(exc), severity="warning")
 
 
-def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=None) -> dict:
+def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=None, note=None) -> dict:
     """Stop the graph. The finding list decides the outcome; outcome is the caller's hint."""
 
     findings = list(state.findings)
@@ -67,6 +67,8 @@ def _stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=
     calls = _last_tool_calls(step_attempts)
     if calls:
         result["tool_calls"] = calls
+    if note:
+        result.update(note)
     return {
         "outcome": decided,
         "reason_code": code,
