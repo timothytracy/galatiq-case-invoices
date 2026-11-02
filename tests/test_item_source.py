@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from db import SEED, create_database
+from db import SEED
 from decision.findings import assess
 from decision.invoice_fields import item_key, normalize_item_name
 from decision.wording import ACTION, KEY_REASON_TO_CODE
@@ -24,13 +24,6 @@ from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
 STOCK = dict(SEED)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def _invoice(item, source, *, note=None, description=None, items=None):

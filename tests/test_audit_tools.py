@@ -1,13 +1,11 @@
 """Audit's read-only tools. No network. The model is scripted."""
 
 import json
-import socket
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
 
-from db import create_database, load_stock
+from db import load_stock
 from graph import route_after_audit, run_invoice
 from decision.outcome import result_line, tool_calls_of
 from pipeline import audit
@@ -16,9 +14,20 @@ from pipeline.payment import payment
 from pipeline.tools import audit_registry
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.wording import ACTION, RULE_TEXT
-from tests.fakes import FakeClock, ScriptedToolModel, ZeroRandom, task_of
-from tests.test_pipeline import extraction, scripted, write_invoice
-from tests.test_tool_loop import _payable_state, text_step, tool_step
+from tests.fakes import (
+    FakeClock,
+    ScriptedToolModel,
+    ZeroRandom,
+    audit_verdict,
+    block_network,
+    extraction,
+    payable_state,
+    scripted,
+    task_of,
+    text_step,
+    tool_step,
+    write_invoice,
+)
 
 # Process codes, and any code with no rule text, stay out of the enum.
 _PROCESS = {
@@ -41,31 +50,10 @@ _RECORD = {
 }
 
 
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
-
-
-def _block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-def _verdict(verdict: str) -> str:
-    feedback = ["due_date is wrong"] if verdict == "SEND_BACK" else []
-    return json.dumps(
-        {"verdict": verdict, "feedback": feedback, "notes": verdict, "cited_codes": []}
-    )
-
-
 def _run(steps, db_path, monkeypatch):
-    _block_network(monkeypatch)
+    block_network(monkeypatch)
     model = ScriptedToolModel(steps)
-    out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 5)
+    out = audit(payable_state(), model, db_path, FakeClock(), ZeroRandom(), 5)
     return out, model
 
 
@@ -74,7 +62,7 @@ def _audit_log(out):
 
 
 def _registry(db_path):
-    state = _payable_state()
+    state = payable_state()
     return audit_registry(state.invoice, dict(load_stock(db_path)), state.raw_text), state
 
 
@@ -84,7 +72,7 @@ def test_audit_pass_with_tools_pays(db_path, monkeypatch):
             tool_step(("c1", "lookup_item", json.dumps({"item": "WidgetA"}))),
             tool_step(("c2", "recompute_totals", "{}")),
             tool_step(("c3", "get_policy_rule", json.dumps({"code": "STOCK_SHORTFALL"}))),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -123,7 +111,7 @@ def test_audit_pass_with_tools_pays(db_path, monkeypatch):
     assert model.tool_requests[0]["tools"] == audit_registry(
         state.invoice, dict(load_stock(db_path)), state.raw_text
     ).schemas()
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "authorization": out["authorization"],
@@ -147,7 +135,7 @@ def test_audit_send_back_with_tools_does_not_pay(db_path, monkeypatch):
     out, _model = _run(
         [
             tool_step(("c1", "lookup_item", json.dumps({"item": "WidgetA"}))),
-            text_step(_verdict("SEND_BACK")),
+            text_step(audit_verdict("SEND_BACK")),
         ],
         db_path,
         monkeypatch,
@@ -159,7 +147,7 @@ def test_audit_send_back_with_tools_does_not_pay(db_path, monkeypatch):
     calls = _audit_log(out)["result"]["tool_calls"]
     assert calls[0]["name"] == "lookup_item"
     assert calls[0]["result"]["covered"] is True
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "audit_verdict": out["audit_verdict"],
@@ -179,7 +167,7 @@ def test_audit_repeat_is_on_the_stage_log(db_path, monkeypatch):
                 ("c1", "lookup_item", json.dumps({"item": "WidgetA"})),
                 ("c2", "lookup_item", json.dumps({"item": "WidgetA"})),
             ),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -242,7 +230,7 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
     out, _model = _run(
         [
             tool_step(("bad", "get_policy_rule", json.dumps({"code": "NOT_A_CODE"}))),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -254,9 +242,9 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
 
 
 def test_audit_request_sends_tools(db_path, monkeypatch):
-    _block_network(monkeypatch)
-    model = ScriptedToolModel([text_step(_verdict("PASS"))])
-    out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
+    block_network(monkeypatch)
+    model = ScriptedToolModel([text_step(audit_verdict("PASS"))])
+    out = audit(payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
     assert out["outcome"] == "approve"
     assert model.requests == []
     assert len(model.tool_requests) == 1
@@ -274,7 +262,7 @@ def test_audit_request_sends_tools(db_path, monkeypatch):
 
 
 def test_critique_sends_no_tools(tmp_path, db_path, monkeypatch):
-    _block_network(monkeypatch)
+    block_network(monkeypatch)
     path = write_invoice(
         tmp_path, "big.txt", "WidgetA 15, WidgetB 10, GadgetX 5\nTotal: 12500.00\n"
     )

@@ -8,20 +8,11 @@ import json
 from datetime import date
 from pathlib import Path
 
-import pytest
 
-from db import create_database
 from tests.fake_llm_eval import run_samples
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "fake_llm_eval.json"
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def test_fake_llm_eval_matches_captured_output(db_path, monkeypatch):

@@ -6,6 +6,7 @@ import pytest
 
 from db import ensure_inventory_db
 from pipeline.payment import clear_keys_without_ledger
+from tests.fakes import block_network
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,6 +57,20 @@ def inventory_db(tmp_path):
     path = tmp_path / "inventory.db"
     ensure_inventory_db(path)
     return path
+
+
+@pytest.fixture
+def db_path(inventory_db):
+    """The seeded inventory file, under the name most pipeline tests use."""
+
+    return inventory_db
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Opt in with pytestmark. Any socket connection fails the test."""
+
+    block_network(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

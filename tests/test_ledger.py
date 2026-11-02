@@ -7,7 +7,6 @@ so the answer keys do not change.
 import hashlib
 import importlib
 import json
-import socket
 import sqlite3
 import threading
 from datetime import date, timedelta
@@ -16,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from db import create_database
 from graph import run_invoice
 from ledger import arrival_findings, paid_rows, record_payment, vendor_key
 from ledger.scenario import run_scenario
@@ -40,23 +38,10 @@ from llm_client import MissingAPIKey
 from tests.fake_llm_eval import AS_OF, handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom
 
+pytestmark = pytest.mark.usefixtures("no_network")
+
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-
-
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def _run(path, db_path, ledger_path=None):

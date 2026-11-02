@@ -2,14 +2,11 @@
 
 import importlib
 import json
-import socket
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
 
-from db import create_database
 from graph import route_after_audit, run_invoice
 from decision.outcome import result_line
 from llm_client import (
@@ -21,24 +18,29 @@ from llm_client import (
     call_with_retries,
     tool_request,
 )
-from models import (
-    ApprovalDecision,
-    ApprovalReasoning,
-    ExtractedInvoice,
-    LineItem,
-    PipelineState,
-    SourceInfo,
-    ValidationReport,
-)
 from pipeline import audit
 from pipeline.audit import LEDGER_LINE, TOOLS_LINE
 from pipeline.payment import payment
 from pipeline.tools import Tool, ToolInputError, ToolRegistry, example_registry
-from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom, task_of
-from tests.test_pipeline import extraction, scripted, write_invoice
+from tests.fakes import (
+    ANSWER,
+    Echoed,
+    FakeClock,
+    FakeLLM,
+    ScriptedToolModel,
+    ZeroRandom,
+    extraction,
+    payable_state,
+    scripted,
+    task_of,
+    text_step,
+    tool_step,
+    write_invoice,
+)
+
+pytestmark = pytest.mark.usefixtures("no_network")
 
 ROOT = Path(__file__).resolve().parents[1]
-ANSWER = '{"echoed": "phase-1"}'
 AUDIT_PASS = json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
 _RECORD_FIELDS = {
     "round",
@@ -50,40 +52,6 @@ _RECORD_FIELDS = {
     "error",
     "latency_ms",
 }
-
-
-class Echoed(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    echoed: str
-
-
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
-
-
-def tool_step(*calls, content=""):
-    return {
-        "content": content,
-        "tool_calls": [
-            {"id": call_id, "name": name, "arguments": arguments}
-            for call_id, name, arguments in calls
-        ],
-    }
-
-
-def text_step(content):
-    return {"content": content, "tool_calls": []}
 
 
 def _echo(note="phase-1", call_id="c1"):
@@ -314,47 +282,6 @@ def test_bad_args_return_an_error_and_the_loop_continues(monkeypatch):
         assert body == {"error": error}
 
 
-def _payable_state() -> PipelineState:
-    invoice = ExtractedInvoice(
-        vendor="Widgets Inc.",
-        currency="USD",
-        invoice_date="2026-01-01",
-        due_date="2026-02-01",
-        total=Decimal("500"),
-        subtotal=Decimal("500"),
-        tax_amount=Decimal("0"),
-        line_items=[
-            LineItem(
-                item="WidgetA",
-                description="WidgetA",
-                quantity=Decimal("2"),
-                unit_price=Decimal("250"),
-                amount=Decimal("500"),
-            )
-        ],
-        source=SourceInfo(path="x", filename="x.txt", format="txt", raw_text="Total: 500.00"),
-    )
-    decision = ApprovalDecision(
-        decision="approve",
-        reasoning=ApprovalReasoning(
-            rules_applied=["stock covered"],
-            evidence=["total 500.00 USD"],
-            risks_considered=["no extra risk"],
-            conclusion="The checks passed.",
-        ),
-        amount=Decimal("500"),
-        currency="USD",
-    )
-    return PipelineState(
-        invoice_path="x",
-        filename="x.txt",
-        raw_text="WidgetA\nTotal: 500.00\n",
-        invoice=invoice,
-        validation=ValidationReport(passed=True, findings=[]),
-        decision=decision,
-    )
-
-
 def _cap_hold(steps, db_path, monkeypatch, registry=None):
     """Drive audit() with a scripted model. The registry stands in for the audit tools."""
 
@@ -369,7 +296,7 @@ def _cap_hold(steps, db_path, monkeypatch, registry=None):
     model = ScriptedToolModel(steps)
     clock = FakeClock()
     out = audit(
-        _payable_state(),
+        payable_state(),
         model,
         db_path,
         clock,
@@ -392,7 +319,7 @@ def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
     assert len(out["attempts"][0]["tool_calls"]) == executed
     assert clock.slept == []
     assert "payment" not in [row["stage"] for row in out["logs"]]
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "reason_code": out["reason_code"],
@@ -438,7 +365,7 @@ def test_round_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "audit_verdict": out["audit_verdict"],
@@ -503,7 +430,7 @@ def test_calls_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "calls"
     assert line["forced_final_turn"] is True
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "audit_verdict": out["audit_verdict"],

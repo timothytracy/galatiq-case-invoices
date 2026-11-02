@@ -1,14 +1,12 @@
 """The guard drops three claims. Everything else stays."""
 
 import json
-import socket
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from db import create_database
 from graph import run_invoice
 from models import (
     ApprovalDecision,
@@ -24,23 +22,10 @@ from pipeline.critique import critique
 from pipeline.fact_guard import apply_concern_guard, partition_concerns
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
+pytestmark = pytest.mark.usefixtures("no_network")
+
 AS_OF = date(2026, 10, 31)
 STOCK = {"WidgetA": 15, "WidgetB": 10, "GadgetX": 5}
-
-
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 # Covered invoice: WidgetB 8 of 10, totals reconcile, dates on or before AS_OF.

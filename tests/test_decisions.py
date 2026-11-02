@@ -5,9 +5,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
 
-from db import SEED, create_database
+from db import SEED
 from decision.findings import assess, injection_phrase
 from decision.invoice_fields import show_money
 from decision.policy import POLICY
@@ -959,8 +958,3 @@ def test_sample_invoices_match_the_answer_key(db_path):
         assert row["outcome_ok"] and row["reason_ok"], (path.name, row)
 
 
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
