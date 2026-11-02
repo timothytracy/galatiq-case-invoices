@@ -1,6 +1,6 @@
 # Answer key: extra invoices
 
-Expected outcome for every file in `data/extra_invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). Precedence is **Reject over Hold over Approve**. The machine-readable copy is `data/extra_answer_key.json`. It uses the same schema as `data/answer_key.json` and is not wired into eval. `invoice_2115.txt` also has `also_accepted_reasons`. Every other row omits that field.
+Expected outcome for every file in `data/extra_invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). Precedence is **Reject over Hold over Approve**. The machine-readable copy is `data/extra_answer_key.json`. It uses the same schema as `data/answer_key.json` and is scored with `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json`. `invoice_2115.txt` also has `also_accepted_reasons`. Every other row omits that field.
 
 These files are for human approval before the system sees them. Nothing here was produced by running the pipeline, `main.py`, `scripts/eval.py`, or a Grok call.
 
@@ -9,7 +9,7 @@ How each file was decided:
 - Each file was read on its own. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.
 - Reference prices are the `policy.toml` table: WidgetA 250, WidgetB 500, GadgetX 750. Compare `abs(unit_price)`. At least 50% above the reference (`abs(unit_price) >= reference * 1.50`) is a hold, reason "Unit price 50% or more above reference", and it is not a fraud signal. A smaller difference is a price warning. Non-USD invoices are not price-checked.
 - Line math was checked to the cent.
-- Primary reason names are the policy's finding names. The price-spike name was set by the captain on 2026-10-31. The code map will catch up in a separate change.
+- Primary reason names are the policy's finding names. The price-spike name was decided on 2026-10-31. The code map will catch up in a separate change.
 - Warning text and reason text in the table match `data/extra_answer_key.json`, including trailing periods.
 
 | File | Invoice # | Outcome | Primary reason code | Warnings | Reason | Human action (HOLD) / Vendor next step (REJECT) | Source |

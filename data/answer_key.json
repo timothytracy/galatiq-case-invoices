@@ -31,7 +31,7 @@
       ],
       "reason": "FakeItem quantity 100 is more than the 0 in stock; the invoice also pushes urgent payment and a wire transfer, which are recorded as fraud signals.",
       "next_step": "Resend for the quantity in stock, or amend the PO. (Fraud signals recorded for the reviewer.)",
-      "source": "README + captain's call"
+      "source": "README, decided on 2026-10-31"
     },
     "data/invoices/invoice_1004.json": {
       "invoice_number": "INV-1004",
@@ -40,9 +40,9 @@
       "warnings": [
         "Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address"
       ],
-      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the captain's call.",
+      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the decision on 2026-10-31.",
       "next_step": "None (paid).",
-      "source": "README + captain's call"
+      "source": "README, decided on 2026-10-31"
     },
     "data/invoices/invoice_1004_revised.json": {
       "invoice_number": "INV-1004 (R1)",
@@ -60,7 +60,7 @@
       "outcome": "REJECT",
       "primary_reason": "Stock shortfall",
       "warnings": [
-        "Hold finding recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500)"
+        "Warning recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500)"
       ],
       "reason": "GadgetX quantity 8 is more than the 5 in stock; the vendor address is also non-commercial, recorded as a finding.",
       "next_step": "Resend for the quantity in stock, or amend the PO. (Address finding recorded for the reviewer.)",
