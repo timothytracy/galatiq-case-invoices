@@ -80,6 +80,7 @@ def test_reset_db_rebuilds_inventory_and_keeps_the_ledger(tmp_path, monkeypatch,
     from main import main
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path))
     connection = sqlite3.connect(inventory_db)
     connection.execute("UPDATE inventory SET stock = 0")
     connection.commit()
@@ -132,6 +133,7 @@ def test_main_creates_a_missing_inventory_file(tmp_path, monkeypatch):
     from main import main
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("INVENTORY_DB", raising=False)
     (tmp_path / "inventory.db").unlink()
     invoice = tmp_path / "a.txt"
@@ -150,6 +152,7 @@ def test_eval_reset_db_rebuilds_without_a_setup_step(tmp_path, monkeypatch, inve
     from scripts.eval import main as eval_main
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path))
     connection = sqlite3.connect(inventory_db)
     connection.execute("DELETE FROM inventory")
     connection.commit()

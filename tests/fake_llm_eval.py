@@ -6,7 +6,8 @@ run_invoice with a fake clock, a zero jitter rng, and max_attempts=5.
 request_tools returns that same text and no tool call.
 
 Extraction text is the deterministic parse of that file, serialized as the
-JSON the extraction prompt asks for. It is not a table of outcomes. Reasoning,
+JSON the extraction prompt asks for, plus embedded_instructions from the same
+phrase check validation uses. It is not a table of outcomes. Reasoning,
 critique, and audit replies match the defaults in tests/test_pipeline.py.
 """
 
@@ -17,6 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from db import ensure_inventory_db
+from decision.findings import injection_phrase
 from graph import run_invoice
 from main import payment_status
 from parsers import parse_file
@@ -64,6 +66,9 @@ def extraction_json(path: Path) -> str:
         "total": _num(invoice.total),
         "payment_terms": invoice.payment_terms,
         "notes": invoice.notes,
+        "embedded_instructions": injection_phrase(
+            f"{invoice.source.raw_text or ''} {invoice.notes or ''}"
+        ),
     }
     return json.dumps(payload)
 

@@ -5,6 +5,7 @@ from ledger.payments import (
     paid_rows,
     raw_sha256,
     record_payment,
+    settle_payment,
     split_window,
     vendor_key,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "paid_rows",
     "raw_sha256",
     "record_payment",
+    "settle_payment",
     "split_window",
     "vendor_key",
 ]

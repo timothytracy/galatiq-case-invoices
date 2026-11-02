@@ -180,13 +180,15 @@ def test_payment_writes_one_row_before_the_mock_and_refuses_a_repeat(tmp_path, m
         rows = paid_rows(ledger)
         seen["rows"] = len(rows)
         seen["file"] = rows[0].source_file
+        seen["status"] = rows[0].status
         return {"status": "success"}
 
     payment_module = importlib.import_module("pipeline.payment")
     monkeypatch.setattr(payment_module, "mock_payment", spy)
     first = payment(_payable("key-a"), ledger)
     assert first["payment"].status == "paid"
-    assert seen == {"rows": 1, "file": "memo.txt"}
+    assert seen == {"rows": 1, "file": "memo.txt", "status": "pending"}
+    assert [row.status for row in paid_rows(ledger)] == ["paid"]
     assert calls == [("Widgets Inc.", "500.00")]
 
     second = payment(_payable("key-b"), ledger)
@@ -209,6 +211,62 @@ def test_payment_writes_one_row_before_the_mock_and_refuses_a_repeat(tmp_path, m
     assert "UNIQUE" in sql.upper()
     assert "vendor_key" in sql
     assert "invoice_number" in sql
+
+
+@pytest.mark.parametrize("gateway", ["raises", "declines"])
+def test_an_unconfirmed_payment_is_a_failed_row_and_blocks_a_rerun(tmp_path, monkeypatch, gateway):
+    ledger = tmp_path / "payments.db"
+    calls = []
+
+    def broken(vendor, amount):
+        calls.append(vendor)
+        if gateway == "raises":
+            raise ConnectionError("gateway timed out")
+        return {"status": "declined"}
+
+    payment_module = importlib.import_module("pipeline.payment")
+    monkeypatch.setattr(payment_module, "mock_payment", broken)
+    first = payment(_payable("key-a"), ledger)
+    assert first["payment"].status == "not_paid"
+    assert first["outcome"] == "hold"
+    assert first["reason_code"] == "SYSTEM_ERROR"
+    assert first["payment"].detail == payment_module.PAYMENT_UNCONFIRMED
+    assert [row.status for row in paid_rows(ledger)] == ["failed"]
+
+    monkeypatch.setattr(payment_module, "mock_payment", lambda *_args: {"status": "success"})
+    second = payment(_payable("key-b"), ledger)
+    assert second["payment"].status == "not_paid"
+    assert second["reason_code"] == "DUPLICATE_INVOICE"
+    assert calls == ["Widgets Inc."]
+    assert [row.status for row in paid_rows(ledger)] == ["failed"]
+
+
+def test_an_old_ledger_reads_as_paid_and_is_migrated_on_write(tmp_path):
+    ledger = tmp_path / "payments.db"
+    connection = sqlite3.connect(ledger)
+    connection.execute(
+        "CREATE TABLE payments (vendor TEXT NOT NULL, vendor_key TEXT NOT NULL, "
+        "invoice_number TEXT, revision TEXT, total TEXT NOT NULL, currency TEXT NOT NULL, "
+        "invoice_date TEXT, source_file TEXT NOT NULL, raw_sha256 TEXT NOT NULL, "
+        "paid_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO payments VALUES ('Old Co.', 'old co.', 'INV-7', NULL, '100.00', 'USD', "
+        "'2026-01-01', 'old.txt', 'abc', '2026-01-01T00:00:00Z')"
+    )
+    connection.commit()
+    connection.close()
+
+    assert [(row.source_file, row.status) for row in paid_rows(ledger)] == [("old.txt", "paid")]
+    _seed(ledger)
+    assert [(row.source_file, row.status) for row in paid_rows(ledger)] == [
+        ("old.txt", "paid"),
+        ("synthetic_split_a.json", "paid"),
+    ]
+    assert record_payment(
+        ledger, vendor="Old Co.", invoice_number="INV-7", revision=None, total=Decimal("100.00"),
+        currency="USD", invoice_date="2026-01-01", source_file="again.txt", raw_text="different",
+    ) is False
 
 
 def test_two_writers_cannot_insert_the_same_invoice(tmp_path):
@@ -541,6 +599,7 @@ def test_synthetic_split_invoice_is_held_by_the_graph_and_not_paid(db_path, tmp_
 
 def test_reset_ledger_deletes_the_file_only_after_the_client_exists(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INVOICE_DATA_DIR", str(tmp_path))
     invoice = tmp_path / "a.txt"
     invoice.write_text("Vendor: Widgets Inc.\n", encoding="utf-8")
     ledger = tmp_path / "payments.db"

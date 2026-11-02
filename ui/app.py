@@ -18,7 +18,7 @@ from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
     INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
     detail_index, format_amount, format_money, invoice_view, label, pay_block, pay_message,
-    payment_text, reason_code_text, show_text, summarize, table_rows, concern_text,
+    payment_text, reason_code_text, released, show_text, summarize, table_rows, concern_text,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
@@ -49,7 +49,7 @@ st.markdown(
 
 def main() -> None:
     st.title("Invoice review")
-    mode = _mode_name(st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 1))
+    mode = _mode_name(st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 2))
     live = mode == "live"
     _offline_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
@@ -152,8 +152,11 @@ def screen_run(mode: str) -> None:
     entries = st.session_state.get("entries") or []
     if not entries:
         return
-    counts = summarize(entries)["counts"]
+    summary = summarize(entries)
+    counts = summary["counts"]
     tally = ", ".join(f"{name} {counts[name]}" for name in OUTCOMES)
+    if summary["released"]["count"]:
+        tally = f"{tally}, released after review {summary['released']['count']}"
     st.write(f"This session has {len(entries)} invoices ({tally}).")
     if st.button("Save run file"):
         st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
@@ -176,13 +179,19 @@ def screen_results(entries: list[dict]) -> None:
         outcome = row["outcome"] or ""
         number = f"<div class='sub'>{escape(row['invoice_number'])}</div>" if row.get("invoice_number") else ""
         reason = escape((row["reason"] or "").replace("\n", " "))
+        if released(row):
+            payment = _badge("approve", "Paid after review")
+        elif row["payment_status"] == "paid":
+            payment = _badge("approve", "Paid")
+        else:
+            payment = escape(payment_text(row["payment_status"]))
         body.append(
             f"<tr><td><div class='file'>{escape(row['file'])}</div>{number}</td>"
             f"<td>{_badge(outcome, outcome.upper())}</td><td>{escape(reason_code_text(row))}</td>"
-            f"<td>{escape(format_amount(row['amount'], row['currency']))}</td>"
+            f"<td>{escape(format_amount(row['amount'], row['currency']))}</td><td>{payment}</td>"
             f"<td><div class='reason' title='{reason}'>{reason}</div></td></tr>"
         )
-    _table(["Invoice", "Outcome", "Reason code", "Amount", "Reason"], body)
+    _table(["Invoice", "Outcome", "Reason code", "Amount", "Payment", "Reason"], body)
 
 def _facts(titles, values) -> None:
     columns = st.columns(len(titles))
@@ -286,6 +295,14 @@ def screen_metrics(entries: list[dict]) -> None:
         column.metric(label(name), summary["counts"][name])
     for column, name in zip(st.columns(3), OUTCOMES):
         column.metric(DOLLARS[name], f"{format_money(summary['dollars'][name])} USD")
+    paid_holds = summary["released"]
+    if paid_holds["count"]:
+        count, dollars, _ = st.columns(3)
+        count.metric("Released after review", paid_holds["count"])
+        dollars.metric("Dollars released after review", f"{format_money(paid_holds['dollars'])} USD")
+        st.caption("A released hold keeps its pipeline outcome and is not counted as held.")
+        if paid_holds["other"]:
+            st.write(", ".join(f"Released {format_money(amount)} {currency}" for currency, amount in paid_holds["other"].items()))
     average = summary["average_seconds"]
     st.metric("Average time per invoice", "n/a" if average is None else f"{average:.3f} s")
     if summary["timed_invoices"]:

@@ -320,11 +320,10 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
             assessed = assess(invoice, invoice.source.raw_text, STOCK)
             assert _names(invoice) == before
             assert "ITEM_NOT_IN_SOURCE" not in _codes(assessed), path.name
-            # 2107's live reject is a separate strict xfail. This loop still checks the name.
-            if path.name == "invoice_2107.pdf":
-                continue
-            assert assessed.outcome.upper() == expected["outcome"], path.name
-            assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]], path.name
+            # The parser alone never sets embedded_instructions; only the extraction step does.
+            if path.name != "invoice_2107.pdf":
+                assert assessed.outcome.upper() == expected["outcome"], path.name
+                assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]], path.name
             result = run_invoice(
                 path,
                 db_path,
@@ -349,24 +348,13 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
     assert seen == 41
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The live system rejects 2107 as EMBEDDED_INSTRUCTIONS, "
-        "and the offline reader never sets that flag."
-    ),
-)
 def test_offline_2107_matches_the_live_reject(db_path):
-    """Offline extraction approves and pays 2107. The answer key rejects it."""
+    """Offline extraction flags the injected instructions, so 2107 is rejected and unpaid."""
 
     path = ROOT / "data" / "extra_invoices" / "invoice_2107.pdf"
     expected = load_answer_key(ROOT / "data" / "extra_answer_key.json")[
         "data/extra_invoices/invoice_2107.pdf"
     ]
-    invoice = parse_file(path)
-    assessed = assess(invoice, invoice.source.raw_text or "", STOCK)
-    assert assessed.outcome.upper() == expected["outcome"]
-    assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]]
     result = run_invoice(
         path,
         db_path,
@@ -377,4 +365,5 @@ def test_offline_2107_matches_the_live_reject(db_path):
     )
     row = grade(result, expected)
     assert row["outcome_ok"] and row["reason_ok"], row
+    assert result["reason_code"] == "EMBEDDED_INSTRUCTIONS"
     assert result["payment"].status == "not_paid"
