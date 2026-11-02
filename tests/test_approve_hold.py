@@ -106,7 +106,8 @@ def test_second_approval_does_not_pay_again(tmp_path, capsys):
     assert _pay(result, tmp_path)["result"] == "paid"
     again = _pay(result, tmp_path)
     assert again["result"] == "held"
-    assert "DUPLICATE_INVOICE" in again["reason"]
+    assert again["reason_code"] == "NOT_PAYABLE"
+    assert again["reason"] == "Already paid."
     assert capsys.readouterr().out.count("Paid ") == 1
 
 
@@ -130,7 +131,8 @@ def test_prior_payment_and_split_block_release(tmp_path):
         source_file="same.txt", raw_text="same text",
     ) is True
     prior = _pay(result, tmp_path)
-    assert "DUPLICATE_INVOICE" in prior["reason"]
+    assert prior["reason_code"] == "NOT_PAYABLE"
+    assert prior["reason"] == "Already paid."
 
 
 @pytest.mark.parametrize("kind", ["corrupt", "locked"])

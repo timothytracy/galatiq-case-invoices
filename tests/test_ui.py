@@ -814,7 +814,7 @@ def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatc
     )
     assert again["result"] == "held"
     assert again["reason_code"] == "NOT_PAYABLE"
-    assert "DUPLICATE_INVOICE" in again["reason"]
+    assert again["reason"] == "Already paid."
     rejected = run_one(
         ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, live=False, ledger_path=ledger,
     )

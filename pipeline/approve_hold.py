@@ -2,7 +2,6 @@
 
 The caller's dict only names the invoice. Payment uses the pipeline record
 in `INVOICE_RELEASE_DIR` (default `logs/`), keyed by the repo-relative path.
-The review screen does not call this yet.
 """
 
 import hashlib
@@ -189,6 +188,9 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         saved.get("reason_code"),
     )
     if blocked:
+        # Same refusal. A duplicate found on the recheck means this bill is already paid.
+        if blocked == "DUPLICATE_INVOICE is not a review hold and is never paid.":
+            blocked = "Already paid."
         return finish("held", NOT_PAYABLE, blocked, saved)
     if invoice is None or not _grounded(invoice, _file_text(ROOT / _repo_path(saved.get("source")))):
         return finish("held", NOT_PAYABLE, "The vendor, invoice number, or total is not in the source file.", saved)
