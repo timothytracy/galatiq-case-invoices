@@ -44,6 +44,16 @@ python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 
 Each of those three exits 0 when the score is perfect. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
 
+### Reviewer quick path
+
+To watch one invoice go through every agent with no API key:
+
+```bash
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
+```
+
+`--replay` answers each Grok call from the recorded live run, so the same code runs with no network. `--reset-ledger` deletes `payments.db` first, so the invoice is not seen as already paid. The output is one JSON record per stage: ingestion, validation, approval, audit with its tool calls, and payment. Then comes `Paid 5000.00 to Widgets Inc.` and a final `result` record with the outcome. Any file in `data/invoices/` works the same way. Try `invoice_1002.txt` for a stock reject or `invoice_1012.txt` for a hold.
+
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 
 ```bash
