@@ -60,7 +60,7 @@
       "outcome": "REJECT",
       "primary_reason": "Stock shortfall",
       "warnings": [
-        "Hold finding recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500)"
+        "Warning recorded: non-commercial vendor address (1600 Pennsylvania Ave, Washington, DC 20500)"
       ],
       "reason": "GadgetX quantity 8 is more than the 5 in stock; the vendor address is also non-commercial, recorded as a finding.",
       "next_step": "Resend for the quantity in stock, or amend the PO. (Address finding recorded for the reviewer.)",
