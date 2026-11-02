@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db import create_database  # noqa: E402
+from db import ensure_inventory_db, inventory_db_path, reset_inventory_db  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from ledger.scenario import run_scenario  # noqa: E402
 from llm_client import (  # noqa: E402
@@ -186,6 +186,31 @@ def main(argv: list[str] | None = None) -> int:
         metavar="YYYY-MM-DD",
         help="Date the agents are told is today. Record stores it. Replay reads the file",
     )
+    parser.add_argument(
+        "--reset-ledger",
+        action="store_true",
+        help=(
+            "Delete payments.db in the working directory before this run. "
+            "Does not change inventory.db, recordings/, data/, or logs/."
+        ),
+    )
+    parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "Delete the repository inventory.db and rebuild it from the seed before this run. "
+            "Does not change payments.db, recordings/, data/, or logs/."
+        ),
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Delete payments.db in the working directory and the repository inventory.db, "
+            "then rebuild inventory.db from the seed. "
+            "Does not change recordings/, data/, or logs/."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
@@ -206,9 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     invoices = Path(args.invoices)
-    db_path = ROOT / "inventory.db"
-    if not db_path.exists():
-        create_database(db_path)
+    db_path = inventory_db_path(ROOT / "inventory.db")
+    if args.reset or args.reset_db:
+        reset_inventory_db(db_path)
+    else:
+        ensure_inventory_db(db_path)
+    if args.reset or args.reset_ledger:
+        Path("payments.db").unlink(missing_ok=True)
 
     with _release_dir():
         if args.ordered:

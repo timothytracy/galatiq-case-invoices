@@ -18,10 +18,10 @@ jobs:
           python-version: "3.12"
       - name: Install requirements
         run: python3 -m pip install -r requirements.txt
-      - name: Create the inventory database
-        run: python3 setup_db.py
       - name: Tests
         run: python3 -m pytest -q
+      - name: Setup wrapper still creates a missing inventory database
+        run: python3 setup_db.py "$RUNNER_TEMP/inventory.db"
       - name: Replay sample invoices
         run: python3 scripts/eval.py --replay recordings/samples_tools.jsonl
       - name: Replay unseen invoices

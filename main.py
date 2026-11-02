@@ -1,7 +1,9 @@
 """Process one invoice: python3 main.py --invoice_path=data/invoices/invoice_1001.txt
 
 Payments are remembered in payments.db, next to inventory.db.
---reset-ledger deletes that file first so a repeated demo is not a duplicate hold.
+inventory.db is created from the seed when it is missing.
+--reset-ledger deletes payments.db. --reset-db rebuilds inventory.db.
+--reset does both. recordings/, data/, and logs/ are left as they are.
 """
 
 import argparse
@@ -9,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from db import create_database
+from db import ensure_inventory_db, inventory_db_path, reset_inventory_db
 from graph import run_invoice
 from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode, tools_enabled
 from decision.outcome import result_codes
@@ -21,7 +23,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reset-ledger",
         action="store_true",
-        help="Delete payments.db before this run so a repeated demo file is not a duplicate hold.",
+        help=(
+            "Delete payments.db in the working directory before this run. "
+            "Does not change inventory.db, recordings/, data/, or logs/."
+        ),
+    )
+    parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "Delete inventory.db in the working directory and rebuild it from the seed "
+            "before this run. Does not change payments.db, recordings/, data/, or logs/."
+        ),
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Delete payments.db and inventory.db in the working directory, then rebuild "
+            "inventory.db from the seed. Does not change recordings/, data/, or logs/."
+        ),
     )
     mode_flags = parser.add_mutually_exclusive_group()
     mode_flags.add_argument("--record", metavar="PATH", help="Live call, then append to this JSONL file")
@@ -51,12 +72,14 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    db_path = Path("inventory.db")
-    if not db_path.exists():
-        create_database(db_path)
+    db_path = inventory_db_path(Path("inventory.db"))
+    if args.reset or args.reset_db:
+        reset_inventory_db(db_path)
+    else:
+        ensure_inventory_db(db_path)
     # Next to inventory.db. Gitignored. A second run of the same file is a duplicate hold.
     ledger = Path("payments.db")
-    if args.reset_ledger:
+    if args.reset or args.reset_ledger:
         ledger.unlink(missing_ok=True)
 
     if mode == "live" and as_of is None:

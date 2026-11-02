@@ -1,5 +1,10 @@
-"""Inventory database. setup_db.py is the only writer. The workflow opens it read-only."""
+"""Inventory database.
 
+ensure_inventory_db creates the seed file when it is missing and does not open
+an existing file. The pipeline reads the file and does not change it.
+"""
+
+import os
 import sqlite3
 from pathlib import Path
 
@@ -14,6 +19,19 @@ SEED = (
     ("GadgetX", 5),
     ("FakeItem", 0),
 )
+
+
+def inventory_db_path(default: str | Path = "inventory.db") -> Path:
+    """Inventory path for this run.
+
+    INVENTORY_DB, when set, replaces default. Tests set it to a temporary
+    file so they do not open the repository inventory.db.
+    """
+
+    override = os.environ.get("INVENTORY_DB", "").strip()
+    if override:
+        return Path(override)
+    return Path(default)
 
 
 def create_database(path: str | Path = "inventory.db") -> Path:
@@ -33,6 +51,23 @@ def create_database(path: str | Path = "inventory.db") -> Path:
     finally:
         connection.close()
     return db_path
+
+
+def ensure_inventory_db(path: str | Path = "inventory.db") -> Path:
+    """Create the seed file when it is missing. An existing file is not opened."""
+
+    db_path = Path(path)
+    if db_path.exists():
+        return db_path
+    return create_database(db_path)
+
+
+def reset_inventory_db(path: str | Path = "inventory.db") -> Path:
+    """Delete the inventory file and build a new one from the seed."""
+
+    db_path = Path(path)
+    db_path.unlink(missing_ok=True)
+    return create_database(db_path)
 
 
 def connect_readonly(path: str | Path = "inventory.db") -> sqlite3.Connection:

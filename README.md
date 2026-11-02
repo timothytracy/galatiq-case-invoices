@@ -35,7 +35,6 @@ Replay first. No API key.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 source .venv/bin/activate
-python3 setup_db.py
 python3 scripts/eval.py --replay recordings/samples_tools.jsonl
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
 python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
@@ -44,7 +43,9 @@ XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key 
 XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those six exits 0 when the score is perfect. CI runs the same six after the tests.
+Each of those six exits 0 when the score is perfect. CI runs the same six after the tests. A run creates `inventory.db` from the seed when the file is missing.
+
+`--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`. `--reset` does both. They do not change `recordings/`, `data/`, or `logs/`.
 
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 

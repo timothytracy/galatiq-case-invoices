@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from db import create_database
+from db import ensure_inventory_db
 from graph import run_invoice
 from main import payment_status
 from parsers import parse_file
@@ -128,10 +128,7 @@ def run_samples(db_path: Path) -> dict:
 
 
 def main() -> int:
-    db_path = ROOT / "inventory.db"
-    created = not db_path.exists()
-    if created:
-        create_database(db_path)
+    db_path = ensure_inventory_db(ROOT / "inventory.db")
     report = run_samples(db_path)
     for row in report["invoices"]:
         print(
