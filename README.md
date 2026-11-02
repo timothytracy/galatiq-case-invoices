@@ -2,6 +2,25 @@
 
 [![CI](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml/badge.svg)](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml)
 
+## Quick start
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+python3 setup_db.py
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt
+python3 scripts/eval.py
+```
+
+A live run reads `XAI_API_KEY` from the environment or from `.env` (see `.env.example`). The eval command scores the 20 sample invoices and needs that key. Replay does not. The sample check CI runs, with no key:
+
+```bash
+python3 setup_db.py
+python3 scripts/eval.py --replay recordings/samples.jsonl
+```
+
+The other four recordings are in [recordings/README.md](recordings/README.md). Decisions are in [docs/DECISIONS.md](docs/DECISIONS.md). The walkthrough is [docs/DEMO.md](docs/DEMO.md). Replay scores are in [docs/METRICS.md](docs/METRICS.md). Interview notes are in [docs/QA.md](docs/QA.md).
+
 ## Background
 
 Acme Corp is a PE-backed manufacturing firm losing **$2M/year** on manual invoice processing. Invoices arrive via email as PDFs in messy formats with frequent errors. Staff manually extract data, validate against a legacy inventory database (inconsistent), obtain VP approval (via email chains), and process payment (via a banking API).
