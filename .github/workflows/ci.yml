@@ -1,9 +1,6 @@
-# Samples, unseen, and ordered replay call scripts/eval.py directly.
-# A missing file fails the step. A present file still exits 1 when the
-# score is short of perfect. No API key is used.
-# Pending approval: tools-on recordings will be added after the ledger
-# audit-tool change merges, because it changes the tools-on prompt and
-# tool list. Those two steps skip only while their file is absent.
+# All five replay steps call scripts/eval.py directly. A missing file
+# fails the step. A present file still exits 1 when the score is short
+# of perfect. No API key is used.
 
 name: CI
 
@@ -30,21 +27,11 @@ jobs:
       - name: Replay unseen invoices
         run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
       - name: Replay sample invoices with tools
-        run: |
-          if [ ! -f recordings/samples_tools.jsonl ]; then
-            echo "skip: recordings/samples_tools.jsonl is not in the repo yet"
-            exit 0
-          fi
-          python3 scripts/eval.py --replay recordings/samples_tools.jsonl
+        run: python3 scripts/eval.py --replay recordings/samples_tools.jsonl
         env:
           XAI_TOOLS: "1"
       - name: Replay unseen invoices with tools
-        run: |
-          if [ ! -f recordings/unseen_tools.jsonl ]; then
-            echo "skip: recordings/unseen_tools.jsonl is not in the repo yet"
-            exit 0
-          fi
-          python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
+        run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
         env:
           XAI_TOOLS: "1"
       - name: Replay the ordered ledger scenario
