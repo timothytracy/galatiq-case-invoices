@@ -187,7 +187,9 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
         if check is not None:
             check(parsed)
         return parsed
-    # A forced final turn already had its one repair. Do not start the tool loop again.
+    # The cap already spent the tool budget, so this plain answer is the last
+    # chance. A schema failure after the one repair is a hold and is not
+    # retried. That keeps cost and latency bounded.
     if getattr(request, "forced_final_turn", False):
         raise LLMError(
             "malformed_output",
@@ -305,7 +307,6 @@ class ToolStep:
     Retries share the counts. set_attempt(1) starts a new step.
     The schema repair goes through repair(), which sends no tools.
     An audit cap takes one plain final turn instead of failing immediately.
-    Approved by the captain on 2026-11-01.
     """
 
     def __init__(self, llm, registry, tool_log: list | None = None, agent: str | None = None) -> None:
@@ -440,6 +441,7 @@ def _forced_final_turn(step: ToolStep, conversation: list, timeout) -> str:
     try:
         return step.llm.request(messages, timeout)
     except LLMError as exc:
+        # An API error on that same last chance is a hold too, not another attempt.
         exc.retryable = False
         exc.log.setdefault("tool_calls", list(step.log))
         raise
