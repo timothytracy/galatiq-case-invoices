@@ -2,14 +2,14 @@
 
 Expected outcome for every file in `data/extra_invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). Precedence is **Reject over Hold over Approve**. The machine-readable copy is `data/extra_answer_key.json`. It uses the same schema as `data/answer_key.json` and is scored with `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json`. `invoice_2115.txt` also has `also_accepted_reasons`. Every other row omits that field.
 
-These files are for human approval before the system sees them. Nothing here was produced by running the pipeline, `main.py`, `scripts/eval.py`, or a Grok call.
+Each file was labeled by reading it. Nothing here was produced by running the pipeline, `main.py`, `scripts/eval.py`, or a Grok call.
 
 How each file was decided:
 
 - Each file was read on its own. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.
 - Reference prices are the `policy.toml` table: WidgetA 250, WidgetB 500, GadgetX 750. Compare `abs(unit_price)`. At least 50% above the reference (`abs(unit_price) >= reference * 1.50`) is a hold, reason "Unit price 50% or more above reference", and it is not a fraud signal. A smaller difference is a price warning. Non-USD invoices are not price-checked.
 - Line math was checked to the cent.
-- Primary reason names are the policy's finding names. The price-spike name was decided on 2026-10-31. The code map will catch up in a separate change.
+- Primary reason names are the policy's finding names. `decision/wording.py` maps those names to reason codes, including the price-spike name to `PRICE_SPIKE`.
 - Warning text and reason text in the table match `data/extra_answer_key.json`, including trailing periods.
 
 | File | Invoice # | Outcome | Primary reason code | Warnings | Reason | Human action (HOLD) / Vendor next step (REJECT) | Source |
@@ -63,13 +63,13 @@ Cases the new files were written to cover:
 
 invoice_2001.pdf is a hold: WidgetA at $800.00 is 220% above $250.00, which is a price spike on its own. WidgetB at $600.00 is only 20% above $500.00 and stays a warning. Being over $10,000 is not a risk. invoice_2003.txt is a clean approve with a voided quote still printed on the page. invoice_2005.xml is a total mismatch with stock and prices otherwise fine. invoice_2116.csv is one WidgetB line over stock, with the math intact. It is not the split-line sum used on invoice_1013. invoice_2104.json stays an approve: WidgetB at $480.00 is below the $500.00 reference. invoice_2112.txt stays a two-signal hold on urgency and wire only; both unit prices are the reference prices. invoice_2113.xml is GBP and is not price-checked.
 
-invoice_2115.txt is the O-to-0 case that does not reconcile. WidgetA 8, WidgetB 2, the $3,000.00 subtotal, and the $0.00 tax agree. The only garbled figure is the total, `$3,5OO.00`. Reading O as 0 makes it $3,500.00, which does not match, so the fix is not applied. Decided 2026-10-31: both reason codes are accepted. The primary recorded is Missing required field, and `also_accepted_reasons` is `["Total or line-math mismatch"]`. No other row has that field.
+invoice_2115.txt is the O-to-0 case that does not reconcile. WidgetA 8, WidgetB 2, the $3,000.00 subtotal, and the $0.00 tax agree. The only garbled figure is the total, `$3,5OO.00`. Reading O as 0 makes it $3,500.00, which does not match, so the fix is not applied. Both reason codes are accepted. The primary recorded is Missing required field, and `also_accepted_reasons` is `["Total or line-math mismatch"]`. No other row has that field.
 
-The policy's known follow-up still applies to the code: critique today treats every invoice over $10,000 as risky, so a pipeline run can fail to approve invoice_2106.txt. The label follows the policy, which says being over the threshold is not a risk. invoice_2001.pdf is already a hold for the price spike, so that critique gap does not decide it.
+invoice_2106.txt is an approve. Being over $10,000 is not a risk. The replays score it approve, and the 2026-11-01 live runs did too, including the unseen tools-on run that hit the tool-call cap. invoice_2001.pdf is a hold for the price spike.
 
-## Decided 2026-10-31
+## Price sign and invoice 2115
 
-**invoice_2109.json** and **invoice_2110.xml.** Compare `abs(unit_price)` with the reference. abs(-250.00) equals $250.00 and abs(-500.00) equals $500.00, so neither is a price warning and neither is a price spike. 2109 stays REJECT for an unlabeled negative amount. 2110 stays HOLD for a labeled credit note. Current main still compares the signed price, so it would emit a warning until `decision/findings.py` compares `abs(unit_price)`. That code change is not in this PR.
+**invoice_2109.json** and **invoice_2110.xml.** Compare `abs(unit_price)` with the reference. abs(-250.00) equals $250.00 and abs(-500.00) equals $500.00, so neither is a price warning and neither is a price spike. 2109 stays REJECT for an unlabeled negative amount. 2110 stays HOLD for a labeled credit note. `decision/findings.py` compares `abs(unit_price)`.
 
 **invoice_2115.txt.** REJECT is settled. Missing required field and Total or line-math mismatch are both accepted. The primary recorded is Missing required field. The JSON field is `also_accepted_reasons`: `["Total or line-math mismatch"]`.
 
@@ -79,7 +79,7 @@ Fetched read-only from `cursor/extra-test-invoices-c6d0` at `03addffb23f20ed9eac
 
 | Invoice | Decision | Reason |
 |---|---|---|
-| invoice_2001.pdf | Kept | Over $10,000 with WidgetA at $800.00. Under the 2026-10-31 ruling that price is a hold on its own, and WidgetB at $600.00 stays a warning. |
+| invoice_2001.pdf | Kept | Over $10,000 with WidgetA at $800.00. That price is a hold on its own, and WidgetB at $600.00 stays a warning. |
 | invoice_2002.json | Dropped | "Replacement account" plus WidgetA at $600 (well above $250) stacks a bank-change hold and a two-signal hold, so it does not isolate either rule. invoice_2114.txt and invoice_2112.txt cover those holds separately. |
 | invoice_2003.txt | Kept | Clean approve with a voided quote still printed on the page. That distractor is not in the original set. |
 | invoice_2004.csv | Dropped | WidgetA 9 + 8 = 17 against stock 15 is the summed-stock reject already shown by invoice_1013. Replaced here by invoice_2116.csv, a single WidgetB line over stock in a CSV, with the math intact. |
@@ -90,9 +90,9 @@ Fetched read-only from `cursor/extra-test-invoices-c6d0` at `03addffb23f20ed9eac
 
 ## Forced Grok failure
 
-Not implemented in this PR. No production code changes, and nothing is added to the model client.
+The case is covered by a test double. Nothing is added to the model client, and there is no extra invoice file for it.
 
-The test is a test double. A fake LLM, passed in the way the existing tests pass a handler, raises a retryable error on every call. `test_grok_failure_is_a_hold_system_error` already does this with `LLMError`. The client retries until `model_retry_attempts` (5, unless `XAI_MAX_ATTEMPTS` overrides one run) is used up. The test does not set `XAI_API_KEY` and does not make a network call.
+A fake LLM, passed in the way the existing tests pass a handler, raises a retryable error on every call. `test_grok_failure_is_a_hold_system_error` already does this with `LLMError`. The client retries until `model_retry_attempts` (5, unless `XAI_MAX_ATTEMPTS` overrides one run) is used up. The test does not set `XAI_API_KEY` and does not make a network call.
 
 Expected outcome under the policy, when the failure is on extraction before any business finding exists: **HOLD**, primary reason **Grok or system failure after retries**, next action **Rerun the invoice or process it by hand.** Nothing is paid. It is a system error, not a business decision, and it does not depend on which invoice file was submitted. There is no extra-invoice file for this case.
 

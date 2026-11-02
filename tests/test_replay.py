@@ -748,4 +748,4 @@ def test_documented_replay_commands_match_the_recording():
         start = readme_replay.index(item, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
     assert "2026-11-01 PT" in recorded
-    assert "Pending approval:" in recorded
+    assert "These six were recorded on 2026-11-01 PT." in recorded

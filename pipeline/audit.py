@@ -29,7 +29,7 @@ TOOLS_LINE = (
     "The tools are read-only. Their results do not change during this step. "
     "Call each lookup at most once."
 )
-# Pending approval. Only when XAI_TOOLS is on, so the flag-off prompt stays as it was.
+# Only when XAI_TOOLS is on, so the flag-off prompt stays as it was.
 LEDGER_LINE = (
     "check_payment_ledger reports prior payments for this vendor and invoice "
     "number. A prior payment means you must not pass."

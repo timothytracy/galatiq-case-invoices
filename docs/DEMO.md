@@ -93,7 +93,7 @@ The replay on 2026-11-01 PT was again approve and paid. The result line listed 6
 
 Load `logs/invoice_1001.txt.json` in the review screen and open Invoice detail, Tool calls. Each row shows the stage or agent, the round, the attempt, the name, the arguments, the result or the error, and the latency when the log has one. A repeat is marked and noted as a reused result that does not count toward the cap. A call whose error is `blocked: tool_cap` is marked blocked. This 1001 log has neither.
 
-`check_payment_ledger` takes no arguments. On a fresh ledger it reports that this vendor and invoice number were not paid. In a single process, validation would already have held a duplicate or a split before audit, so the tool is redundant there. It can only tighten.
+`check_payment_ledger` takes no arguments. On a fresh ledger it reports that this vendor and invoice number were not paid. The lookup is there for two workers, or for a payment made outside this run, between validation and audit. It can only tighten.
 
 The samples-with-tools replay called the ledger tool 7 times and repeated one `get_policy_rule`, on `invoice_1004.json`. The full table is in [METRICS.md](METRICS.md).
 
@@ -111,6 +111,6 @@ XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key 
 XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Pending approval. Audit tools are on by default, so the `_tools` files match a run with `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. A mismatch changes the audit prompt, the fingerprint misses, and the invoice is a `SYSTEM_ERROR` hold. Nothing is paid. A miss is not a live call.
+Audit tools are on by default, so the `_tools` files match a run with `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. A mismatch changes the audit prompt, the fingerprint misses, and the invoice is a `SYSTEM_ERROR` hold. Nothing is paid. A miss is not a live call.
 
 CI runs those six after the tests and does not set an API key. The scores from the 2026-11-01 PT replays are in [METRICS.md](METRICS.md).

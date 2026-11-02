@@ -36,50 +36,78 @@ Rejects and holds that stop at validation had `tools=0` on the eval line. Audit 
 
 The cost line is `tokens total=N cost_usd=X` from `recording.py`, printed only on record and replay. It sums the `usage` objects stored in the recording. It does not call the API.
 
-Pending approval. The rates in that file are the published rates for `grok-4.20-0309-non-reasoning`: 1.25 USD per 1,000,000 input tokens and 2.50 USD per 1,000,000 output tokens when `prompt_tokens` is under 200,000. At or above 200,000 prompt tokens the rates are 2.50 and 5.00. `prompt_tokens` is not split into a cached-input rate, so the whole prompt is billed at the input rate. The sum is quantized to six decimal places, half up. None of these six recordings needed the long-context rate: the method switches on a single prompt, and the printed totals are the whole run.
+The rates in that file are the published rates for `grok-4.20-0309-non-reasoning`: 1.25 USD per 1,000,000 input tokens and 2.50 USD per 1,000,000 output tokens when `prompt_tokens` is under 200,000. At or above 200,000 prompt tokens the rates are 2.50 and 5.00. `prompt_tokens` is not split into a cached-input rate, so the whole prompt is billed at the input rate. The sum is quantized to six decimal places, half up. None of these six recordings needed the long-context rate: the method switches on a single prompt, and the printed totals are the whole run.
 
 ## Live runs
 
-These figures are from `live_runs_evidence.md` (sha256 `d5d550b820ac81efe811844da1cad8fa84b4ea352440800ba810153c47980eff`), the box logs from 2026-11-01 PT. A replay of a saved file does not move. The live passes are where the call counts moved. Scores did not.
+These runs were on 2026-11-01 PT, commit `400d7b9`, request building identical to main. Each cost is the captured usage priced at the rates in [Cost method](#cost-method), the same rates `recording.py` uses. Wall time is the whole CLI command, end minus start, with the invoices run one after another. A replay of a saved file does not move. These are separate live calls.
 
-### At `6ee5d927`
-
-Nine runs, each exit 0, one attempt, no payments database. No cost was logged for any of them. The log reports no tool cap hits.
-
-| Run | Set | Audit tools | Start–end (PT) | Score |
+| Set | Tools | Score | Cost USD | Wall s |
 |---|---|---|---|---|
-| 1 | samples | no | 17:57:27–17:58:14 | 20/20 |
-| 2 | samples | no | 17:58:14–17:59:09 | 20/20 |
-| 3 | samples | no | 17:59:09–17:59:56 | 20/20 |
-| 4 | unseen | no | 17:59:56–18:00:58 | 21/21 |
-| 5 | unseen | no | 18:00:58–18:02:11 | 21/21 |
-| 6 | unseen | no | 18:02:11–18:03:15 | 21/21 |
-| 7 | ordered | no | 18:03:15–18:03:48 | 11/11 |
-| 8 | samples | yes | 18:03:48–18:09:12 | 20/20 |
-| 9 | unseen | yes | 18:09:12–18:10:39 | 21/21 |
+| samples | on | 20/20 | 0.102653 | 62 |
+| samples | on | 20/20 | 0.098994 | 58 |
+| samples | on | 20/20 | 0.098465 | 57 |
+| unseen | on | 21/21 | 0.134998 | 82 |
+| unseen | on | 21/21 | 0.119826 | 63 |
+| unseen | on | 21/21 | 0.118861 | 62 |
+| ordered | on | 11 steps ok, ledger matches | 0.047564 | 28 |
+| samples | off (`XAI_TOOLS=0`) | 20/20 | 0.051425 | 48 |
+| unseen | off (`XAI_TOOLS=0`) | 21/21 | 0.059249 | 54 |
 
-Runs 1–7 are the log's tools-off lines. Runs 8 and 9 are `tools_samples` and `tools_unseen`.
+One unseen tools-on run hit the tool-call cap on `invoice_2106`. The forced final turn still gave the correct outcome.
 
-### At `a4c0e43d`
+Per-invoice cost is the run cost divided by the invoice count. Samples are 20 invoices. Unseen are 21. Each quotient is half up to six decimal places, the same quantization `recording.py` uses for a run total. The rates are in [Cost method](#cost-method): $1.25 per million input tokens and $2.50 per million output tokens when the prompt is under 200,000 tokens, and $2.50 and $5.00 at or above that. `prompt_tokens` is not split into a cached-input rate.
 
-Nine runs the same day, each exit 0, one attempt. Cost was logged. The log sums usage at 2.00 USD per 1,000,000 uncached input tokens, 0.20 USD per 1,000,000 cached input tokens, and 6.00 USD per 1,000,000 output tokens. That is not the replay rate in [Cost method](#cost-method).
+Live, tools on:
 
-| Run | Set | Audit tools | Start (PT) | Score | Calls / repeats | Ledger calls | Cap / forced | Cost |
-|---|---|---|---|---|---|---|---|---|
-| 1 | samples | yes | 18:37:25 | 20/20 | 44/3 | 7 | 0/0 | 0.123 |
-| 2 | samples | yes | 18:39:04 | 20/20 | 38/1 | 7 | 0/0 | 0.101 |
-| 3 | samples | yes | 18:40:18 | 20/20 | 40/1 | 7 | 0/0 | 0.108 |
-| 4 | unseen | yes | 18:41:28 | 21/21 | 49/1 | 8 | 0/0 | 0.113 |
-| 5 | unseen | yes | 18:42:39 | 21/21 | 49/1 | 8 | 0/0 | 0.105 |
-| 6 | unseen | yes | 18:43:50 | 21/21 | 51/0 | 8 | 0/0 | 0.112 |
-| 7 | ordered | yes | 18:45:03 | 11/11 steps ok | 16/1 | 3 | 0/0 | 0.042 |
-| 8 | samples | no | 18:45:39 | 20/20 | 0/0 | 0 | not logged | 0.066 |
-| 9 | unseen | no | 18:46:31 | 21/21 | 0/0 | 0 | not logged | 0.074 |
+- $0.102653 / 20 = $0.005133
+- $0.098994 / 20 = $0.004950
+- $0.098465 / 20 = $0.004923
+- $0.134998 / 21 = $0.006428
+- $0.119826 / 21 = $0.005706
+- $0.118861 / 21 = $0.005660
 
-The ordered line also records 3 ledger rows, `1001.txt`, `1011.pdf`, and `1004.json`, matching the expected files. The cap column is `0/0` on the audit-tool runs. On the two runs without the audit tools the log has a dash, so cap and forced turn were not logged there. The log says `check_payment_ledger` was called once in every audit that ran (7/7, 8/8, and 3/3), always with arguments `{}`, and every result was `already_paid` false, `same_vendor_paid_in_window` 0.00, and `over_split_threshold` false. The ordered duplicates were held at validation and never reached audit, so the tool did not change a decision.
+That range is $0.004923 to $0.006428 per invoice.
 
-The same cost method, on main `22acca19`, is logged as samples 0.099, 0.085, and 0.097 (the log's average 0.093) and unseen 0.126, 0.140, and 0.114 (average 0.127). That log gives the audit-tool averages here as 0.111 and 0.110. It does not give clock times for those earlier six. Its tools-off pair is 0.072 and 0.076. It says no invoice changed outcome, reason code, or matched-warning count against those earlier audit-tool runs. One tools-off difference is logged: `invoice_1005.json` warnings 1/1 on run 8 above, and 0/1 on `gc41_7`.
+Live, tools off:
 
-The six committed recordings include the live passes in that file, recorded on 2026-11-01 PT. Each header stores that day as `as_of` 2026-11-01. Samples, unseen, and ordered were recorded at `e3da9725`. The two earlier audit-tool files were recorded at `282a959d`. `ordered_tools.jsonl` is the default-settings ordered recording. Their scores, token totals, and costs are the replay table. The file lists ordered as 11/11.
+- $0.051425 / 20 = $0.002571
+- $0.059249 / 21 = $0.002821
 
-Scores on the live runs match those recordings: samples 20/20, unseen 21/21, ordered 11/11. The call counts on the audit-tool passes do not. The samples recording is 42 calls and 1 repeat. The three passes above are 44/3, 38/1, and 40/1. The unseen recording is 49 calls and 1 repeat. The three passes above are 49/1, 49/1, and 51/0. Cost is absent for every run at `6ee5d927`. A dollar figure in this section uses the cached-input method. A dollar figure in the replay table uses the rate in Cost method. They are not two prints of one formula.
+That range is $0.002571 to $0.002821 per invoice.
+
+The ordered live run is 11 steps, not 11 invoices: $0.047564 / 11 = $0.004324 per step.
+
+Replay costs use the same division on the usage stored in the committed recordings:
+
+- Samples, tools on: $0.102365 / 20 = $0.005118
+- Unseen, tools on: $0.119278 / 21 = $0.005680
+- Samples, tools off: $0.051456 / 20 = $0.002573
+- Unseen, tools off: $0.058625 / 21 = $0.002792
+- Ordered, tools on: $0.047920 / 11 = $0.004356 per step
+- Ordered, tools off: $0.026695 / 11 = $0.002427 per step
+
+Per-invoice time is wall seconds divided by the invoice count. The ordered row is 11 steps, so that quotient is per step. The quotients below are rounded to two decimal places.
+
+Live, tools on, samples (20 invoices):
+
+- 62 / 20 = 3.10 s
+- 58 / 20 = 2.90 s
+- 57 / 20 = 2.85 s
+
+That range is 2.85 s to 3.10 s per invoice.
+
+Live, tools on, unseen (21 invoices):
+
+- 82 / 21 = 3.90 s
+- 63 / 21 = 3.00 s
+- 62 / 21 = 2.95 s
+
+That range is 2.95 s to 3.90 s per invoice.
+
+Live, tools off:
+
+- Samples: 48 / 20 = 2.40 s per invoice
+- Unseen: 54 / 21 = 2.57 s per invoice
+
+Ordered, tools on: 28 / 11 = 2.55 s per step.

@@ -20,7 +20,7 @@ Each file starts with a header line, then one line per model request.
 {"answer":{"content":"...","tool_calls":null},"fingerprint":"<sha256>","model":"grok-4.20-0309-non-reasoning","usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0}}
 ```
 
-`as_of` is the date the prompts were told was today. Replay uses that date, not the machine clock. Live runs do not read this file and still use the wall clock. Pending approval: these six were recorded on 2026-11-01 PT. The commands below pass that day as `--as-of 2026-11-01`. Omit `--as-of` and the header stores the calendar date at the start of that run instead.
+`as_of` is the date the prompts were told was today. Replay uses that date, not the machine clock. Live runs do not read this file and still use the wall clock. These six were recorded on 2026-11-01 PT. The commands below pass that day as `--as-of 2026-11-01`. Omit `--as-of` and the header stores the calendar date at the start of that run instead.
 
 The fingerprint hashes the model, the full message list (including tool results), the tools offered or null, tool_choice or null, response_format or null, and temperature. It does not hash the API key, a timestamp, or a request id. A temp payments ledger path (`payments-*.db` or `payments-ordered-*.db` under the system temp directory) is replaced with `payments-ledger.db` before the hash, so a new temp file still matches. Record and replay also store a repo-relative invoice path in the audit prompt, so a different checkout directory still matches. Live prompts keep the path they were given.
 
