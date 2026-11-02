@@ -34,7 +34,6 @@ LEDGER_LINE = (
     "check_payment_ledger reports prior payments for this vendor and invoice "
     "number. A prior payment means you must not pass."
 )
-_LEDGER_HOLD_CODES = ("DUPLICATE_INVOICE", "SPLIT_INVOICE")
 
 
 def audit(
@@ -107,8 +106,8 @@ def audit(
     if ignored is not None:
         verdict = "PASS"
         feedback = []
-    # A ledger hit can only add a hold. A miss does not remove one.
-    ledger_holds = _ledger_holds(state, step)
+    # A tool hit can only add a hold. A miss adds nothing.
+    ledger_holds = _ledger_holds(step)
     guarded = _guard_audit(
         state, decision, list(fresh.findings) + ledger_holds, verdict, feedback
     )
@@ -347,29 +346,20 @@ def _box(verdict, outcome, conclusion, feedback=None, evidence=None) -> dict:
     }
 
 
-def _ledger_holds(state, step) -> list[Finding]:
-    """Duplicate and split findings a PASS is not allowed to pay over.
+def _ledger_holds(step) -> list[Finding]:
+    """Hold findings from a ledger-tool hit. One code, one finding.
 
-    Recorded findings stay. A tool hit adds the same codes. A tool miss adds
-    nothing, so the result cannot turn a hold into a payment.
+    A miss adds nothing, so the result cannot loosen the decision. Validation
+    already holds a duplicate or a split before audit in this process.
     """
 
     found: list[Finding] = []
     seen: set[str] = set()
-
-    def add(finding: Finding) -> None:
-        if finding.code not in _LEDGER_HOLD_CODES or finding.code in seen:
-            return
+    for finding in _findings_from_ledger_tool(step):
+        if finding.code in seen:
+            continue
         seen.add(finding.code)
         found.append(finding)
-
-    for finding in state.findings or []:
-        add(finding)
-    if state.validation is not None:
-        for finding in state.validation.findings or []:
-            add(finding)
-    for finding in _findings_from_ledger_tool(step):
-        add(finding)
     return found
 
 

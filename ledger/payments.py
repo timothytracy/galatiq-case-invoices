@@ -254,29 +254,43 @@ def _same_key_message(invoice: ExtractedInvoice, raw_text: str, row: PaymentRow)
     )
 
 
-def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding | None:
-    total = invoice.total
-    if total is None or total > POLICY.scrutiny_threshold:
-        return None
-    if invoice.currency not in POLICY.allowed_currencies:
-        return None
+def split_window(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> tuple[Decimal, bool]:
+    """Same-vendor paid total inside the split window, and whether the rule fires.
+
+    The total is this vendor and currency, with printed dates within
+    split_window_days. A date that does not parse is outside the window.
+    Another vendor does not count. The rule fires when this invoice is in an
+    allowed currency, at or under the approval threshold, and this total plus
+    the window is over the threshold.
+    """
+
+    paid = Decimal("0")
     key = vendor_key(invoice.vendor)
     this_date = parse_printed_date(invoice.invoice_date)
-    if not key or this_date is None:
+    if key and this_date is not None:
+        for row in rows:
+            if row.vendor_key != key or row.currency != invoice.currency:
+                continue
+            paid_on = parse_printed_date(row.invoice_date)
+            if paid_on is None or abs((this_date - paid_on).days) > POLICY.split_window_days:
+                continue
+            paid += Decimal(row.total)
+    total = invoice.total
+    over = (
+        total is not None
+        and total <= POLICY.scrutiny_threshold
+        and invoice.currency in POLICY.allowed_currencies
+        and paid + total > POLICY.scrutiny_threshold
+    )
+    return paid, over
+
+
+def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding | None:
+    total = invoice.total
+    window_sum, over = split_window(invoice, rows)
+    if not over or total is None:
         return None
-    window_sum = Decimal("0")
-    for row in rows:
-        if row.vendor_key != key or row.currency != invoice.currency:
-            continue
-        paid_on = parse_printed_date(row.invoice_date)
-        if paid_on is None:
-            continue
-        if abs((this_date - paid_on).days) > POLICY.split_window_days:
-            continue
-        window_sum += Decimal(row.total)
     combined = window_sum + total
-    if combined <= POLICY.scrutiny_threshold:
-        return None
     return Finding(
         code="SPLIT_INVOICE",
         message=(

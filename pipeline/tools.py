@@ -9,7 +9,7 @@ the probe. Audit gets audit_registry when XAI_TOOLS is on. Critique does not.
 from decimal import Decimal
 from functools import partial
 
-from decision.findings import collect_findings, math_reconciles, parse_printed_date
+from decision.findings import collect_findings, math_reconciles
 from decision.invoice_fields import (
     canonical_item,
     normalize_invoice_number,
@@ -17,10 +17,10 @@ from decision.invoice_fields import (
     show_qty,
     summed_quantities,
 )
-from ledger import paid_rows, vendor_key
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
 from decision.wording import ACTION, RULE_TEXT
+from ledger import paid_rows, split_window, vendor_key
 from llm_client import parse_tool_arguments
 
 
@@ -290,17 +290,9 @@ def check_payment_ledger(_arguments: dict, invoice, ledger_path) -> dict:
             (row for row in rows if row.vendor_key == key and row.invoice_number == number),
             None,
         )
-    paid = _window_paid(invoice, rows, key)
+    paid, over = split_window(invoice, rows)
     total = invoice.total
     combined = None if total is None else paid + total
-    threshold = POLICY.scrutiny_threshold
-    over = (
-        combined is not None
-        and total is not None
-        and total <= threshold
-        and invoice.currency in POLICY.allowed_currencies
-        and combined > threshold
-    )
     return {
         "already_paid": match is not None,
         "match_date": None if match is None else match.invoice_date,
@@ -309,30 +301,9 @@ def check_payment_ledger(_arguments: dict, invoice, ledger_path) -> dict:
         "this_total": None if total is None else show_money(total),
         "combined": None if combined is None else show_money(combined),
         "split_window_days": POLICY.split_window_days,
-        "scrutiny_threshold": show_money(threshold),
+        "scrutiny_threshold": show_money(POLICY.scrutiny_threshold),
         "over_split_threshold": over,
     }
-
-
-def _window_paid(invoice, rows, key: str) -> Decimal:
-    """Same-vendor paid total inside split_window_days. Other vendors are skipped.
-
-    Same rule as the ledger split check: same currency, printed dates, and a
-    date that does not parse is outside the window.
-    """
-
-    this_date = parse_printed_date(invoice.invoice_date)
-    if not key or this_date is None:
-        return Decimal("0")
-    paid = Decimal("0")
-    for row in rows:
-        if row.vendor_key != key or row.currency != invoice.currency:
-            continue
-        paid_on = parse_printed_date(row.invoice_date)
-        if paid_on is None or abs((this_date - paid_on).days) > POLICY.split_window_days:
-            continue
-        paid += Decimal(row.total)
-    return paid
 
 
 def get_policy_rule(arguments: dict) -> dict:

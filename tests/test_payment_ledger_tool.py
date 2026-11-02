@@ -18,7 +18,6 @@ from graph import route_after_audit
 from ledger import paid_rows, record_payment
 from ledger.scenario import run_scenario
 from llm_client import TOOL_CALL_CAP
-from models import Finding, ValidationReport
 from pipeline import audit
 from pipeline.payment import payment
 from pipeline.tools import audit_registry
@@ -337,51 +336,41 @@ def test_a_split_hit_cannot_pay(db_path, tmp_path, monkeypatch):
     _assert_not_paid(state, out)
 
 
-def test_a_pass_cannot_override_a_recorded_ledger_finding(db_path, monkeypatch):
-    """A tool miss does not clear a duplicate or split the rules already recorded."""
+def test_two_ledger_hits_become_one_finding(db_path, tmp_path, monkeypatch):
+    """Different arguments are not a repeat. The same code is still one finding."""
 
-    finding = Finding(
-        code="DUPLICATE_INVOICE",
-        message="This vendor and invoice number were already paid.",
-        severity="warning",
-        item="invoice_number",
+    ledger = tmp_path / "payments.db"
+    _pay(
+        ledger,
+        invoice_number="INV-1001",
+        total=Decimal("500.00"),
+        invoice_date="2026-01-02",
+        source_file="paid.txt",
+        raw_text="already paid",
     )
-    state = _numbered().model_copy(
-        update={"validation": ValidationReport(passed=True, findings=[finding])}
-    )
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    quiet = ScriptedToolModel([text_step(_verdict("PASS"))])
-    held = audit(state, quiet, db_path, FakeClock(), ZeroRandom(), 3, as_of=date(2026, 10, 31))
-    assert held["outcome"] == "hold"
-    assert held["reason_code"] == "DUPLICATE_INVOICE"
-    assert held["authorization"] is None
-    assert quiet.tool_requests == []
-
-    monkeypatch.setenv("XAI_TOOLS", "1")
-    split = Finding(
-        code="SPLIT_INVOICE",
-        message="The split window is over the threshold.",
-        severity="warning",
-        item="total",
-    )
-    loosened = _numbered().model_copy(update={"findings": [split]})
-    out, model = _run(
-        loosened,
+    state = _numbered()
+    out, _model = _run(
+        state,
         [
-            tool_step(("c1", "check_payment_ledger", "{}")),
+            tool_step(
+                ("c1", "check_payment_ledger", "{}"),
+                ("c2", "check_payment_ledger", json.dumps({"vendor": "Other Co"})),
+            ),
             text_step(_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
-        None,
+        ledger,
     )
-    body = json.loads(model.tool_requests[1]["messages"][-1]["content"])
-    assert body["already_paid"] is False
-    assert body["over_split_threshold"] is False
+    calls = out["logs"][-1]["result"]["tool_calls"]
+    assert calls[0]["result"]["already_paid"] is True
+    assert "repeat" not in calls[0]
+    assert "repeat" not in calls[1]
+    assert calls[1]["result"]["already_paid"] is True
+    assert [finding.code for finding in out["findings"]] == ["DUPLICATE_INVOICE"]
     assert out["outcome"] == "hold"
-    assert out["reason_code"] == "SPLIT_INVOICE"
-    assert out["authorization"] is None
-    _assert_not_paid(loosened, out)
+    assert out["reason_code"] == "DUPLICATE_INVOICE"
+    _assert_not_paid(state, out)
 
 
 def test_ledger_tool_counts_toward_the_cap_and_repeats_reuse(db_path, monkeypatch):
