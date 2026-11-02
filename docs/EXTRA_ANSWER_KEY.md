@@ -1,6 +1,6 @@
 # Answer key: extra invoices
 
-Expected outcome for every file in `data/extra_invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). Precedence is **Reject over Hold over Approve**. The machine-readable copy is `data/extra_answer_key.json`. It uses the same schema as `data/answer_key.json` and is not wired into eval. `invoice_2115.txt` also has `also_accepted_reasons`. Every other row omits that field.
+Expected outcome for every file in `data/extra_invoices/`, decided under [docs/DECISION_POLICY.md](DECISION_POLICY.md). Precedence is **Reject over Hold over Approve**. The machine-readable copy is `data/extra_answer_key.json`. It uses the same schema as `data/answer_key.json` and is scored with `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json`. `invoice_2115.txt` also has `also_accepted_reasons`. Every other row omits that field.
 
 These files are for human approval before the system sees them. Nothing here was produced by running the pipeline, `main.py`, `scripts/eval.py`, or a Grok call.
 
