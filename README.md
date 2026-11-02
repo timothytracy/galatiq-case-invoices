@@ -15,7 +15,7 @@ Replay of the six committed recordings, with no API key, on 2026-11-01 PT:
 | 21 unseen | off | 21/21 |
 | Ordered ledger | off | 11 steps ok, ledger matches |
 
-Live runs the same day, on the same request code as main, priced from captured usage at the rates in `recording.py`: samples with tools 20/20 three times ($0.102653, $0.098994, $0.098465); unseen with tools 21/21 three times ($0.134998, $0.119826, $0.118861); ordered with tools, 11 steps ok and the ledger matches, $0.047564; samples with tools off 20/20 at $0.051425; unseen with tools off 21/21 at $0.059249. One unseen tools-on run hit the tool-call cap on `invoice_2106`, and the forced final turn still matched the key. Token totals, tool counts, and the per-invoice arithmetic are in [docs/METRICS.md](docs/METRICS.md).
+Live runs on 2026-11-01 PT matched the keys every time (samples 20/20 x3, unseen 21/21 x3, ordered ok). Measured cost was $0.004923 to $0.006428 per invoice with audit tools and $0.002571 to $0.002821 without (run cost divided by invoice count; details in [docs/METRICS.md](docs/METRICS.md)).
 
 ![Invoice review screen in offline mode, sample results](docs/review_screen.png)
 
@@ -28,15 +28,6 @@ The screenshot is the review screen after an offline run of `data/invoices/`: 7 
 Of the 20 sample invoices, 16 are decided in the run (7 approve, 9 reject) and 4 are held for a person. Of the 21 unseen invoices, 15 are decided in the run (8 approve, 7 reject) and 6 are held. Together that is 31 decided automatically and 10 held, out of 41. Every reject and every hold in both answer keys is unpaid. The 15 approves are the invoices the keys mark as passing. Warning-only notes on an approve do not block payment.
 
 The five-day delay in the brief is the human chain: retype the bill, check inventory, chase a VP by email, then pay. Approves and rejects finish in the run. Holds are the queue a person still works, the 10 of 41 above. This page does not turn the brief's $2M into a savings figure. The brief does not give an invoice volume, so a dollar of loss avoided is not computed here.
-
-Measured cost per invoice is the run cost divided by the invoice count. The rates are the ones in `recording.py`: $1.25 per million input tokens and $2.50 per million output tokens when the prompt is under 200,000 tokens. Each quotient below is half up to six decimal places, the same quantization that file uses for a run total. The inputs are the live runs on 2026-11-01 PT:
-
-- Samples, tools on, 20 invoices: $0.102653 / 20 = $0.005133, $0.098994 / 20 = $0.004950, $0.098465 / 20 = $0.004923.
-- Unseen, tools on, 21 invoices: $0.134998 / 21 = $0.006428, $0.119826 / 21 = $0.005706, $0.118861 / 21 = $0.005660.
-- Samples, tools off: $0.051425 / 20 = $0.002571.
-- Unseen, tools off: $0.059249 / 21 = $0.002821.
-
-The ordered live run cost $0.047564 for 11 steps, so $0.047564 / 11 = $0.004324 per step. Replay costs use the same division and are in [docs/METRICS.md](docs/METRICS.md). Samples with tools: $0.102365 / 20 = $0.005118 per invoice. Unseen with tools: $0.119278 / 21 = $0.005680. Samples with tools off: $0.051456 / 20 = $0.002573. Unseen with tools off: $0.058625 / 21 = $0.002792.
 
 ## Quick start
 

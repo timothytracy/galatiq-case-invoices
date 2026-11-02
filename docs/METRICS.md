@@ -56,4 +56,33 @@ These runs were on 2026-11-01 PT. The request code is identical to main. Each co
 
 One unseen tools-on run hit the tool-call cap on `invoice_2106`. The forced final turn still gave the correct outcome.
 
-Per-invoice cost is the run cost divided by the invoice count, half up to six decimal places. Samples are 20 invoices. Unseen are 21. The ordered figure is the run cost divided by 11 steps. Those quotients are in the README results section. The replay table above is a different set of numbers: the same rate, applied to the usage stored in the committed recordings.
+Per-invoice cost is the run cost divided by the invoice count. Samples are 20 invoices. Unseen are 21. Each quotient is half up to six decimal places, the same quantization `recording.py` uses for a run total. The rates are in [Cost method](#cost-method): $1.25 per million input tokens and $2.50 per million output tokens when the prompt is under 200,000 tokens, and $2.50 and $5.00 at or above that. `prompt_tokens` is not split into a cached-input rate.
+
+Live, tools on:
+
+- $0.102653 / 20 = $0.005133
+- $0.098994 / 20 = $0.004950
+- $0.098465 / 20 = $0.004923
+- $0.134998 / 21 = $0.006428
+- $0.119826 / 21 = $0.005706
+- $0.118861 / 21 = $0.005660
+
+That range is $0.004923 to $0.006428 per invoice.
+
+Live, tools off:
+
+- $0.051425 / 20 = $0.002571
+- $0.059249 / 21 = $0.002821
+
+That range is $0.002571 to $0.002821 per invoice.
+
+The ordered live run is 11 steps, not 11 invoices: $0.047564 / 11 = $0.004324 per step.
+
+Replay costs use the same division on the usage stored in the committed recordings:
+
+- Samples, tools on: $0.102365 / 20 = $0.005118
+- Unseen, tools on: $0.119278 / 21 = $0.005680
+- Samples, tools off: $0.051456 / 20 = $0.002573
+- Unseen, tools off: $0.058625 / 21 = $0.002792
+- Ordered, tools on: $0.047920 / 11 = $0.004356 per step
+- Ordered, tools off: $0.026695 / 11 = $0.002427 per step
