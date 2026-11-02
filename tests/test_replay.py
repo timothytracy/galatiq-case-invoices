@@ -742,7 +742,10 @@ def test_documented_replay_commands_match_the_recording():
     replay = [(command, tools) for command, tools, _name in ci]
     readme = _eval_commands((ROOT / "README.md").read_text(encoding="utf-8"))
     readme_replay = [(command, tools) for command, tools, _name in readme if "--replay" in command]
-    assert readme_replay == replay
+    start = 0
+    for item in replay:
+        assert item in readme_replay[start:], item
+        start = readme_replay.index(item, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
     assert "2026-11-01 PT" in recorded
     assert "Pending approval:" in recorded

@@ -1,6 +1,6 @@
 # Interview notes
 
-Short answers a presenter can defend from this tree. Scores are the replays in [METRICS.md](METRICS.md), run on 2026-11-02 with no API key. Design facts are the code and the policy. New policy text is marked Pending approval there.
+Short answers a presenter can defend from this tree. Scores are the replays in [METRICS.md](METRICS.md), run on 2026-11-01 PT with no API key. Design facts are the code and the policy. New policy text is marked Pending approval there.
 
 ## Design
 
@@ -26,7 +26,7 @@ Short answers a presenter can defend from this tree. Scores are the replays in [
 
 **Why temperature 0?** Every model request sends `temperature` 0. The fingerprint hashes that value, so a different temperature would not replay.
 
-**What does replay prove?** It proves this code still handles the saved replies the same way, with no key and no network. It does not prove the model would say the same thing tomorrow. The five replays on 2026-11-02 scored 20/20, 21/21, 11 ordered steps all ok, 20/20 with the audit tools, and 21/21 with the audit tools. Costs and token totals are in [METRICS.md](METRICS.md).
+**What does replay prove?** It proves this code still handles the saved replies the same way, with no key and no network. It does not prove the model would say the same thing tomorrow. The six replays on 2026-11-01 PT scored 20/20, 21/21, 11 ordered steps all ok, 20/20 with the audit tools, 21/21 with the audit tools, and 11 ordered steps all ok with the audit tools. Costs and token totals are in [METRICS.md](METRICS.md).
 
 **Where is the live variance?** Not in a second replay of the same file. The live passes are in [METRICS.md](METRICS.md) under Live runs. The scores match the recordings. The audit-tool call counts do not. Cost was not logged for the nine runs at `6ee5d927`. Where a live cost is logged, the method is the one in that log, not the replay rate.
 
@@ -36,15 +36,15 @@ Short answers a presenter can defend from this tree. Scores are the replays in [
 
 **Who gets the audit tools (XAI_TOOLS)?** Audit only. Critique is not wired to the registry. Critique already receives `verified_by_code` (today's date, stock, whether the totals reconcile, the reference prices, and whether the dates are after today). The four tools are `lookup_item`, `recompute_totals`, `get_policy_rule`, and, pending approval, `check_payment_ledger`.
 
-**What are the caps?** `TOOL_ROUND_CAP` is 3 and `TOOL_CALL_CAP` is 8, both in `llm_client.py`. An identical repeat in that step returns the earlier result, does not run the tool again, and does not count against the 8. The round still counts. A schema repair sends no tools. On the 2026-11-02 replays the only repeats were one `get_policy_rule` on `invoice_1004.json` and one on `invoice_2008.txt`. No call was blocked and no invoice hit either cap.
+**What are the caps?** `TOOL_ROUND_CAP` is 3 and `TOOL_CALL_CAP` is 8, both in `llm_client.py`. An identical repeat in that step returns the earlier result, does not run the tool again, and does not count against the 8. The round still counts. A schema repair sends no tools. On the 2026-11-01 PT replays the repeats were one `get_policy_rule` on `invoice_1004.json` in the samples tools replay, one on `invoice_2008.txt` in the unseen tools replay, and one `get_policy_rule` on `invoice_1004.json` in the ordered tools replay. No call was blocked and no invoice hit either cap.
 
-**What is the forced turn?** If audit hits the round cap or the call cap, it does not hold immediately. It gets one more model call with no tools, using the tool results already gathered, and asks for the verdict. The audit log then has `tool_cap_hit` (`rounds` or `calls`) and `forced_final_turn`. If that reply fails, including a schema failure after the normal repair, the invoice is a `SYSTEM_ERROR` hold and nothing is paid. None of the five replays took that path.
+**What is the forced turn?** If audit hits the round cap or the call cap, it does not hold immediately. It gets one more model call with no tools, using the tool results already gathered, and asks for the verdict. The audit log then has `tool_cap_hit` (`rounds` or `calls`) and `forced_final_turn`. If that reply fails, including a schema failure after the normal repair, the invoice is a `SYSTEM_ERROR` hold and nothing is paid. None of the six replays took that path.
 
 **Why does the review screen show tool calls?** Invoice detail reads `tool_calls` off the stage log. A repeat is marked. A call with error `blocked: tool_cap` is marked blocked. Calls that only exist on a failed attempt stay in the list and are marked as a failed attempt. A run with no calls says "No tool calls."
 
 ## Cost and failure
 
-**What does a run cost?** Replay prints `tokens total=N cost_usd=X` from the usage stored in the recording. The method is in [METRICS.md](METRICS.md): published rates for `grok-4.20-0309-non-reasoning`, short-context under 200,000 prompt tokens, long-context at or above that, no separate cached-input rate, six decimal places. Pending approval on that price. The five replay costs on 2026-11-02 were 0.051456, 0.058625, 0.026695, 0.102365, and 0.119278 USD. The two larger ones are the runs that offered the audit tools. Those runs also used more tokens (73608 and 86882, against 34199 and 39976).
+**What does a run cost?** Replay prints `tokens total=N cost_usd=X` from the usage stored in the recording. The method is in [METRICS.md](METRICS.md): published rates for `grok-4.20-0309-non-reasoning`, short-context under 200,000 prompt tokens, long-context at or above that, no separate cached-input rate, six decimal places. Pending approval on that price. The six replay costs on 2026-11-01 PT were 0.051456, 0.058625, 0.026695, 0.102365, 0.119278, and 0.047920 USD. The samples and unseen runs that offered the audit tools used more tokens (73608 and 86882, against 34199 and 39976). The ordered tools replay was 33870 tokens and 0.047920 USD.
 
 **What fails closed?** A missing API key exits before any invoice, on a live run. Retries are timeout, 429, 5xx, network, JSON that is still invalid after the schema repair, and approval wording that refuses the input or contradicts an approve. The backoff is 1, 2, 4, 8, 16 seconds plus up to 25% jitter, 5 attempts unless `XAI_MAX_ATTEMPTS` overrides one run. After that, or on 400, 401, or 403, the outcome is a `SYSTEM_ERROR` hold and nothing is paid. Bad approval wording that survives the retries is `BAD_REASONING`. A locked or corrupt ledger is a `SYSTEM_ERROR` hold, at validation, at payment, and, pending approval, inside the ledger tool. A missing ledger is empty, not an error. An unreadable file is a reject, `UNREADABLE`. An extracted item name missing from the source text is an `ITEM_NOT_IN_SOURCE` hold, and a missing source fails closed.
 

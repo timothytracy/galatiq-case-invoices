@@ -1,6 +1,6 @@
 # Demo
 
-A walkthrough for a 10 to 15 minute slot. Commands are from the repo root after the install in the [README](../README.md) quick start. Replay needs no API key. A live command needs `XAI_API_KEY`. The outcomes below are from the replays on 2026-11-02, the same runs as [METRICS.md](METRICS.md).
+A walkthrough for a 10 to 15 minute slot. Commands are from the repo root after the install in the [README](../README.md) quick start. Replay needs no API key. A live command needs `XAI_API_KEY`. The outcomes below are from the replays on 2026-11-01 PT, the same runs as [METRICS.md](METRICS.md).
 
 ## 1. Architecture
 
@@ -33,10 +33,10 @@ That is the routing in `graph.py`. Holds and rejects both end at `reject_log`. N
 
 ```bash
 python3 setup_db.py
-python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
+XAI_TOOLS=0 python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
 ```
 
-The replay on 2026-11-02 printed one JSON object per stage, in this order: ingestion, validation, approval, audit, payment. Then the mock line `Paid 5000.00 to Widgets Inc.` The result line was outcome `approve`, `payment_status` `paid`, and no tool calls. The same records are written to `logs/invoice_1001.txt.json`.
+The replay on 2026-11-01 PT printed one JSON object per stage, in this order: ingestion, validation, approval, audit, payment. Then the mock line `Paid 5000.00 to Widgets Inc.` The result line was outcome `approve`, `payment_status` `paid`, and no tool calls. The same records are written to `logs/invoice_1001.txt.json`.
 
 What to say while it scrolls:
 
@@ -69,10 +69,10 @@ To show the replay without a key, load the log just written. On Run or load, set
 Scored eval gives each invoice a fresh ledger, so the sample key never sees a duplicate. Order is a separate file.
 
 ```bash
-python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-From the replay on 2026-11-02, the first two lines:
+From the replay on 2026-11-01 PT, the first two lines:
 
 - `invoice_1001.txt` outcome approve, paid, ok
 - `invoice_1001.txt` outcome hold, reason `DUPLICATE_INVOICE`, not paid, ok
@@ -86,10 +86,10 @@ The next pair is the other-format case: `invoice_1011.pdf` approves and is paid,
 The audit tools (XAI_TOOLS) are the only tools. Critique is not given them. They are read-only, bound to the current invoice, and they do not decide and do not pay. A hit can only add a hold.
 
 ```bash
-XAI_TOOLS=1 python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples_tools.jsonl
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples_tools.jsonl
 ```
 
-The replay on 2026-11-02 was again approve and paid. The result line listed 6 tool calls, in this order: `check_payment_ledger`, `lookup_item`, `lookup_item`, `recompute_totals`, `get_policy_rule`, `get_policy_rule`. There was no `tool_cap_hit` and no `forced_final_turn`.
+The replay on 2026-11-01 PT was again approve and paid. The result line listed 6 tool calls, in this order: `check_payment_ledger`, `lookup_item`, `lookup_item`, `recompute_totals`, `get_policy_rule`, `get_policy_rule`. There was no `tool_cap_hit` and no `forced_final_turn`.
 
 Load `logs/invoice_1001.txt.json` in the review screen and open Invoice detail, Tool calls. Each row shows the stage or agent, the round, the attempt, the name, the arguments, the result or the error, and the latency when the log has one. A repeat is marked and noted as a reused result that does not count toward the cap. A call whose error is `blocked: tool_cap` is marked blocked. This 1001 log has neither.
 
@@ -103,13 +103,14 @@ Use the same code path with `--replay` and no key. Do not pass `--record` and `-
 
 ```bash
 python3 setup_db.py
-python3 scripts/eval.py --replay recordings/samples.jsonl
-python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
-python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
-XAI_TOOLS=1 python3 scripts/eval.py --replay recordings/samples_tools.jsonl
-XAI_TOOLS=1 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
+python3 scripts/eval.py --replay recordings/samples_tools.jsonl
+python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
+python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --replay recordings/samples.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-The `_tools` files match a run with `XAI_TOOLS=1`. The other three match a run that does not offer the audit tools. A mismatch changes the audit prompt, the fingerprint misses, and the invoice is a `SYSTEM_ERROR` hold. Nothing is paid. A miss is not a live call.
+Pending approval. Audit tools are on by default, so the `_tools` files match a run with `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. A mismatch changes the audit prompt, the fingerprint misses, and the invoice is a `SYSTEM_ERROR` hold. Nothing is paid. A miss is not a live call.
 
-CI runs those five after the tests and does not set an API key. The scores from the 2026-11-02 replays are in [METRICS.md](METRICS.md).
+CI runs those six after the tests and does not set an API key. The scores from the 2026-11-01 PT replays are in [METRICS.md](METRICS.md).

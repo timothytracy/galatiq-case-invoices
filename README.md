@@ -16,10 +16,11 @@ A live run reads `XAI_API_KEY` from the environment or from `.env` (see `.env.ex
 
 ```bash
 python3 setup_db.py
-python3 scripts/eval.py --replay recordings/samples.jsonl
+python3 scripts/eval.py --replay recordings/samples_tools.jsonl
+XAI_TOOLS=0 python3 scripts/eval.py --replay recordings/samples.jsonl
 ```
 
-The other four recordings are in [recordings/README.md](recordings/README.md). Decisions are in [docs/DECISIONS.md](docs/DECISIONS.md). The walkthrough is [docs/DEMO.md](docs/DEMO.md). Replay scores are in [docs/METRICS.md](docs/METRICS.md). Interview notes are in [docs/QA.md](docs/QA.md).
+The other recordings are in [recordings/README.md](recordings/README.md). Decisions are in [docs/DECISIONS.md](docs/DECISIONS.md). The walkthrough is [docs/DEMO.md](docs/DEMO.md). Replay scores are in [docs/METRICS.md](docs/METRICS.md). Interview notes are in [docs/QA.md](docs/QA.md).
 
 ## Background
 
