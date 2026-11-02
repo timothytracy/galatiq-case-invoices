@@ -1,4 +1,4 @@
-"""Create the local inventory database: python3 setup_db.py [path]"""
+"""Rebuild the inventory database from the seed: python3 setup_db.py [path]"""
 
 import argparse
 from pathlib import Path

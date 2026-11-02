@@ -3,12 +3,14 @@
 import hashlib
 import json
 import re
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from db import load_stock
-from llm_client import AgentStepFailed, call_with_retries, tool_request, tools_enabled
+from llm_client import AgentStepFailed, call_with_retries
+from tool_loop import tool_request
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
-from pipeline.decisions import _tighten
+from pipeline.decisions import tighten
 from pipeline.fact_guard import (
     AUDIT_CLAIMS,
     VERIFIED_FACTS,
@@ -16,7 +18,7 @@ from pipeline.fact_guard import (
     partition_concerns,
     verified_payload,
 )
-from pipeline.stage_log import _stopped, agent_finding, stage_log
+from pipeline.stage_log import stopped, agent_finding, stage_log
 from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
 from decision.outcome import (
@@ -30,16 +32,25 @@ from decision.policy import MAX_SEND_BACKS
 from decision.findings import assess
 from decision.wording import explain, resolve_as_of, today_line
 
-# One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
 TOOLS_LINE = (
     "The tools are read-only. Their results do not change during this step. "
     "Call each lookup at most once."
 )
-# Only when XAI_TOOLS is on, so the flag-off prompt stays as it was.
 LEDGER_LINE = (
     "check_payment_ledger reports prior payments for this vendor and invoice "
     "number. A prior payment means you must not pass."
 )
+
+
+@dataclass(frozen=True)
+class AuditResult:
+    """The guarded audit: never looser than the rules or the model."""
+
+    verdict: str
+    outcome: str | None
+    conclusion: str
+    feedback: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
 
 
 def audit(
@@ -57,7 +68,7 @@ def audit(
     decision = state.decision
     if invoice is None or decision is None:
         reason = "Audit had no decision."
-        return _stopped(
+        return stopped(
             state,
             "hold",
             reason,
@@ -70,21 +81,16 @@ def audit(
     stock = dict(load_stock(db_path))
     facts = verified_payload(invoice, stock, as_of)
     step_attempts: list[dict] = []
-    tools_on = tools_enabled()
-    request = llm.request
-    step = None
-    if tools_on:
-        step = tool_request(
-            llm,
-            audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
-            agent="audit",
-            final_turn_on_cap=True,
-        )
-        request = step
+    step = tool_request(
+        llm,
+        audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
+        agent="audit",
+        final_turn_on_cap=True,
+    )
     try:
         draft = call_with_retries(
-            request,
-            _audit_messages(state, invoice, decision, as_of, facts, tools_on),
+            step,
+            _audit_messages(state, invoice, decision, as_of, facts),
             AuditDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -92,7 +98,7 @@ def audit(
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return _stopped(
+        return stopped(
             state,
             "hold",
             str(exc),
@@ -119,8 +125,8 @@ def audit(
         state, decision, list(fresh.findings) + ledger_holds, verdict, feedback
     )
     new_decision = decision
-    if guarded["verdict"] != "SEND_BACK" and guarded["outcome"] not in (None, decision.decision):
-        new_decision = _tighten(decision, guarded["outcome"], guarded["conclusion"], guarded["evidence"])
+    if guarded.verdict != "SEND_BACK" and guarded.outcome not in (None, decision.decision):
+        new_decision = tighten(decision, guarded.outcome, guarded.conclusion, guarded.evidence)
 
     findings = list(state.findings) or list(fresh.findings)
     for extra in ledger_holds:
@@ -135,19 +141,19 @@ def audit(
     extra = _audit_finding(guarded, findings)
     if extra is not None:
         findings = findings + [extra]
-    if guarded["verdict"] == "SEND_BACK":
+    if guarded.verdict == "SEND_BACK":
         kept = []
     else:
         kept = findings
     authorization = None
-    if guarded["verdict"] == "PASS" and guarded["outcome"] == "approve":
+    if guarded.verdict == "PASS" and guarded.outcome == "approve":
         authorization = issue_authorization(state)
 
     result = {
         "model_verdict": draft.verdict,
-        "verdict": guarded["verdict"],
-        "outcome": guarded["outcome"],
-        "feedback": guarded["feedback"],
+        "verdict": guarded.verdict,
+        "outcome": guarded.outcome,
+        "feedback": guarded.feedback,
         "notes": draft.notes,
         "cited_codes": [str(code).strip().upper() for code in draft.cited_codes if str(code).strip()],
         "audit_note": note_text,
@@ -159,10 +165,10 @@ def audit(
     note = _cap_note(step)
     if note:
         result.update(note)
-    if step is not None and step.log:
+    if step.log:
         result["tool_calls"] = list(step.log)
     update = {
-        "audit_verdict": guarded["verdict"],
+        "audit_verdict": guarded.verdict,
         "decision": new_decision,
         "findings": kept,
         "authorization": authorization,
@@ -170,11 +176,11 @@ def audit(
         "agent_error": None,
         "logs": state.logs + [stage_log(state.filename, "audit", result)],
     }
-    if guarded["verdict"] == "SEND_BACK":
+    if guarded.verdict == "SEND_BACK":
         update["outcome"] = None
         update["reason_code"] = None
         update["action"] = None
-        update["feedback"] = guarded["feedback"]
+        update["feedback"] = guarded.feedback
         update["send_backs"] = state.send_backs + 1
         update["decision"] = None
         update["critique_rounds"] = 0
@@ -182,13 +188,13 @@ def audit(
         update["critique_stricter"] = False
     else:
         _outcome, code, _reason, action = explain(kept, state.invoice)
-        if guarded["outcome"] == "approve":
+        if guarded.outcome == "approve":
             code, action = None, None
-        update["outcome"] = guarded["outcome"]
+        update["outcome"] = guarded.outcome
         update["reason_code"] = code
         update["action"] = action
         update["decision"] = new_decision.model_copy(
-            update={"decision": guarded["outcome"], "reason_code": code, "action": action}
+            update={"decision": guarded.outcome, "reason_code": code, "action": action}
         )
     return update
 
@@ -218,10 +224,10 @@ def issue_authorization(state: PipelineState) -> PaymentAuthorization | None:
     )
 
 
-def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
+def _audit_finding(guarded: AuditResult, findings: list[Finding]) -> Finding | None:
     """A hold the audit itself added, when the rules did not already record one."""
 
-    if guarded["verdict"] != "ESCALATE" or guarded["outcome"] != "hold":
+    if guarded.verdict != "ESCALATE" or guarded.outcome != "hold":
         return None
     if any(finding.code in HOLD_CODES for finding in findings):
         return None
@@ -229,7 +235,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
         SEND_BACK_CAP_MESSAGE,
         "Critique concerns were not addressed.",
     }
-    message = guarded["conclusion"]
+    message = guarded.conclusion
     if message not in authored:
         message = "Audit escalated the invoice to a hold."
     return Finding(
@@ -240,7 +246,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     )
 
 
-def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> list[dict]:
+def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
     findings = []
     if state.validation is not None:
         findings = [finding.model_dump(mode="json") for finding in state.validation.findings]
@@ -272,8 +278,7 @@ def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> l
                 "Put every code you rely on in cited_codes. Leave cited_codes empty when the "
                 "concern is not one of those codes. "
                 "A printed date on or before today is not in the future. "
-                + (f"{TOOLS_LINE} {LEDGER_LINE} " if tools_on else "")
-                + "Return JSON only."
+                + f"{TOOLS_LINE} {LEDGER_LINE} Return JSON only."
             ),
         },
         {"role": "user", "content": json.dumps(payload)},
@@ -283,7 +288,7 @@ def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> l
 def _cap_note(step) -> dict | None:
     """Cap fields for the audit stage. Absent when this step did not hit the cap."""
 
-    if step is None or not step.cap_hit:
+    if not step.cap_hit:
         return None
     note = {"tool_cap_hit": step.cap_hit}
     if step.forced_final_turn:
@@ -352,16 +357,6 @@ def _ignored_audit_note(
     return f"{codes}. {text}".strip() if text else codes
 
 
-def _box(verdict, outcome, conclusion, feedback=None, evidence=None) -> dict:
-    return {
-        "verdict": verdict,
-        "outcome": outcome,
-        "feedback": [] if feedback is None else feedback,
-        "conclusion": conclusion,
-        "evidence": [] if evidence is None else evidence,
-    }
-
-
 def _ledger_holds(step) -> list[Finding]:
     """Hold findings from a ledger-tool hit. One code, one finding.
 
@@ -383,13 +378,12 @@ def _findings_from_ledger_tool(step) -> list[Finding]:
     """Turn one ledger-tool hit into hold findings. Repeats are the same hit."""
 
     result = None
-    if step is not None:
-        for row in step.log:
-            if row.get("name") != "check_payment_ledger" or row.get("repeat"):
-                continue
-            body = row.get("result")
-            if isinstance(body, dict):
-                result = body
+    for row in step.log:
+        if row.get("name") != "check_payment_ledger" or row.get("repeat"):
+            continue
+        body = row.get("result")
+        if isinstance(body, dict):
+            result = body
     if not result:
         return []
     found = []
@@ -422,7 +416,7 @@ def _findings_from_ledger_tool(step) -> list[Finding]:
     return found
 
 
-def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
+def _guard_audit(state, decision, findings, model_verdict, feedback) -> AuditResult:
     """Never looser than the rules or the model. PASS on a reject means do not send it back."""
 
     hard = [finding for finding in findings if finding.severity == "blocking" and finding.code in REJECT_CODES]
@@ -436,12 +430,12 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
     conclusion = decision.reasoning.conclusion
     if hard or decision.decision == "reject":
         messages = [finding.message for finding in hard]
-        return _box("PASS", "reject", " ".join(messages) or conclusion, evidence=messages)
+        return AuditResult("PASS", "reject", " ".join(messages) or conclusion, evidence=messages)
     if holds and decision.decision == "approve":
         messages = [finding.message for finding in holds]
-        return _box("ESCALATE", "hold", " ".join(messages), evidence=messages)
+        return AuditResult("ESCALATE", "hold", " ".join(messages), evidence=messages)
     if not concerns_addressed(state.critique_concerns, decision):
-        return _box(
+        return AuditResult(
             "ESCALATE",
             "hold",
             "Critique concerns were not addressed.",
@@ -454,21 +448,21 @@ def _guard_audit(state, decision, findings, model_verdict, feedback) -> dict:
         feedback = text_notes + feedback
     if verdict == "SEND_BACK":
         if state.send_backs >= MAX_SEND_BACKS:
-            return _box(
+            return AuditResult(
                 "ESCALATE",
                 "hold",
                 SEND_BACK_CAP_MESSAGE,
-                feedback,
+                feedback or [],
                 feedback or ["send-back cap reached"],
             )
-        return _box(
+        return AuditResult(
             "SEND_BACK",
             None,
             conclusion,
             feedback or ["re-check the extracted fields against the raw text"],
         )
     if verdict == "ESCALATE" or decision.decision == "hold":
-        return _box("ESCALATE", "hold", conclusion)
+        return AuditResult("ESCALATE", "hold", conclusion)
     if decision.decision == "approve":
-        return _box("PASS", "approve", conclusion)
-    return _box("PASS", decision.decision, conclusion)
+        return AuditResult("PASS", "approve", conclusion)
+    return AuditResult("PASS", decision.decision, conclusion)

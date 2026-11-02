@@ -2,7 +2,7 @@
 
     XAI_API_KEY=... python3 scripts/tool_roundtrip_probe.py
 
-The script forces XAI_TOOLS=1 and calls echo_note through the real loop.
+The script calls echo_note through the real loop.
 It prints the tool-call log and the final JSON. It never prints the key.
 """
 
@@ -42,7 +42,6 @@ def _show(value) -> str:
 
 def main() -> int:
     load_dotenv()
-    os.environ["XAI_TOOLS"] = "1"
     if not os.environ.get("XAI_API_KEY", "").strip():
         print("XAI_API_KEY is not set", file=sys.stderr)
         return 2

@@ -23,20 +23,8 @@ jobs:
       - name: Setup wrapper still creates a missing inventory database
         run: python3 setup_db.py "$RUNNER_TEMP/inventory.db"
       - name: Replay sample invoices
-        run: python3 scripts/eval.py --replay recordings/samples_tools.jsonl
-      - name: Replay unseen invoices
-        run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
-      - name: Replay the ordered ledger scenario
-        run: python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
-      - name: Replay sample invoices with tools off
         run: python3 scripts/eval.py --replay recordings/samples.jsonl
-        env:
-          XAI_TOOLS: "0"
-      - name: Replay unseen invoices with tools off
+      - name: Replay unseen invoices
         run: python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
-        env:
-          XAI_TOOLS: "0"
-      - name: Replay the ordered ledger scenario with tools off
+      - name: Replay the ordered ledger scenario
         run: python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
-        env:
-          XAI_TOOLS: "0"

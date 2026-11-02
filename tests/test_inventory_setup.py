@@ -159,7 +159,7 @@ def test_eval_reset_db_rebuilds_without_a_setup_step(tmp_path, monkeypatch, inve
     monkeypatch.setattr("scripts.eval.run_invoice", _fake_result)
     empty = tmp_path / "invoices"
     empty.mkdir()
-    recording = str(ROOT / "recordings" / "samples_tools.jsonl")
+    recording = str(ROOT / "recordings" / "samples.jsonl")
 
     assert eval_main(["--replay", str(tmp_path / "missing.jsonl"), "--reset-db"]) == 1
     assert load_stock(inventory_db) == []

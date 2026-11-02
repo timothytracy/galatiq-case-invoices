@@ -4,7 +4,7 @@ import sqlite3
 
 from db import load_stock
 from models import Finding, PipelineState, ValidationReport
-from pipeline.stage_log import _stopped, stage_log
+from pipeline.stage_log import stopped, stage_log
 from decision.findings import assess
 from decision.outcome import finding_codes
 from decision.wording import explain, resolve_as_of, today_line
@@ -16,7 +16,7 @@ def validate(state: PipelineState, db_path, as_of=None, ledger_path=None) -> dic
     invoice = state.invoice
     if invoice is None:
         reason = "No invoice was extracted."
-        return _stopped(
+        return stopped(
             state,
             "reject",
             reason,

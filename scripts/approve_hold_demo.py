@@ -69,7 +69,7 @@ def _offline(path: Path, ledger: Path):
     """Replay one saved invoice. No test double and no API key."""
 
     database = ensure_inventory_db(inventory_db_path("inventory.db"))
-    client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples_tools.jsonl"), None)
+    client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples.jsonl"), None)
     with redirect_stdout(io.StringIO()):
         return run_invoice(path, database, client, as_of=as_of, ledger_path=ledger)
 
