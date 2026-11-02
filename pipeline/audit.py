@@ -6,7 +6,7 @@ import re
 from decimal import Decimal
 
 from db import load_stock
-from llm_client import AgentStepFailed, call_with_retries, tool_request, tools_enabled
+from llm_client import AgentStepFailed, call_with_retries, tool_request
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
 from pipeline.decisions import _tighten
 from pipeline.fact_guard import (
@@ -24,12 +24,10 @@ from decision.policy import MAX_SEND_BACKS
 from decision.findings import assess
 from decision.wording import explain, resolve_as_of, today_line
 
-# One sentence, and only when XAI_TOOLS is on. The flag-off prompt stays as it was.
 TOOLS_LINE = (
     "The tools are read-only. Their results do not change during this step. "
     "Call each lookup at most once."
 )
-# Only when XAI_TOOLS is on, so the flag-off prompt stays as it was.
 LEDGER_LINE = (
     "check_payment_ledger reports prior payments for this vendor and invoice "
     "number. A prior payment means you must not pass."
@@ -64,21 +62,16 @@ def audit(
     stock = dict(load_stock(db_path))
     facts = verified_payload(invoice, stock, as_of)
     step_attempts: list[dict] = []
-    tools_on = tools_enabled()
-    request = llm.request
-    step = None
-    if tools_on:
-        step = tool_request(
-            llm,
-            audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
-            agent="audit",
-            final_turn_on_cap=True,
-        )
-        request = step
+    step = tool_request(
+        llm,
+        audit_registry(invoice, stock, state.raw_text or "", ledger_path=ledger_path),
+        agent="audit",
+        final_turn_on_cap=True,
+    )
     try:
         draft = call_with_retries(
-            request,
-            _audit_messages(state, invoice, decision, as_of, facts, tools_on),
+            step,
+            _audit_messages(state, invoice, decision, as_of, facts),
             AuditDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -153,7 +146,7 @@ def audit(
     note = _cap_note(step)
     if note:
         result.update(note)
-    if step is not None and step.log:
+    if step.log:
         result["tool_calls"] = list(step.log)
     update = {
         "audit_verdict": guarded["verdict"],
@@ -225,7 +218,7 @@ def _audit_finding(guarded: dict, findings: list[Finding]) -> Finding | None:
     return Finding(code="AUDIT_ESCALATED", message=message, severity="warning")
 
 
-def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> list[dict]:
+def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
     findings = []
     if state.validation is not None:
         findings = [finding.model_dump(mode="json") for finding in state.validation.findings]
@@ -257,8 +250,7 @@ def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> l
                 "Put every code you rely on in cited_codes. Leave cited_codes empty when the "
                 "concern is not one of those codes. "
                 "A printed date on or before today is not in the future. "
-                + (f"{TOOLS_LINE} {LEDGER_LINE} " if tools_on else "")
-                + "Return JSON only."
+                + f"{TOOLS_LINE} {LEDGER_LINE} Return JSON only."
             ),
         },
         {"role": "user", "content": json.dumps(payload)},
@@ -268,7 +260,7 @@ def _audit_messages(state, invoice, decision, as_of, facts, tools_on: bool) -> l
 def _cap_note(step) -> dict | None:
     """Cap fields for the audit stage. Absent when this step did not hit the cap."""
 
-    if step is None or not step.cap_hit:
+    if not step.cap_hit:
         return None
     note = {"tool_cap_hit": step.cap_hit}
     if step.forced_final_turn:
@@ -368,13 +360,12 @@ def _findings_from_ledger_tool(step) -> list[Finding]:
     """Turn one ledger-tool hit into hold findings. Repeats are the same hit."""
 
     result = None
-    if step is not None:
-        for row in step.log:
-            if row.get("name") != "check_payment_ledger" or row.get("repeat"):
-                continue
-            body = row.get("result")
-            if isinstance(body, dict):
-                result = body
+    for row in step.log:
+        if row.get("name") != "check_payment_ledger" or row.get("repeat"):
+            continue
+        body = row.get("result")
+        if isinstance(body, dict):
+            result = body
     if not result:
         return []
     found = []

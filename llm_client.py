@@ -4,10 +4,8 @@ A missing XAI_API_KEY raises MissingAPIKey. Timeouts, 429, 5xx, network
 errors, and JSON that is still invalid after the schema repair are retried.
 Other 4xx errors are not.
 
-XAI_TOOLS defaults on for audit. request() never sends tools. tool_request()
-sends them for unset, empty, 1, true, yes, and on. 0, false, off, and no
-turn them off. Any other token raises ModeError at startup. Critique does
-not call tool_request.
+request() never sends tools. tool_request() always does. Only audit calls
+tool_request.
 
 XAI_MODE is live (default), record, or replay. Live sends the same payload
 as before and does not open a recording. Record appends each reply after
@@ -46,8 +44,6 @@ SCHEMA_REPAIR_LIMIT = 2
 TOOL_ROUND_CAP = 3
 TOOL_CALL_CAP = 8
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
-_TOOLS_OFF = frozenset({"0", "false", "off", "no"})
-_TOOLS_ON = frozenset({"", "1", "true", "yes", "on"})
 
 _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
@@ -121,28 +117,6 @@ def read_max_attempts() -> int:
     if value < 1:
         raise ValueError("XAI_MAX_ATTEMPTS must be at least 1")
     return value
-
-
-def tools_enabled() -> bool:
-    """Audit tools default on. 0, false, off, and no turn them off.
-
-    The value is stripped and case-folded. Unset, empty, 1, true, yes, and
-    on are on. Any other token raises ModeError. The request bytes are unchanged.
-    """
-
-    raw = os.environ.get("XAI_TOOLS")
-    if raw is None:
-        return True
-    value = raw.strip().lower()
-    if value in _TOOLS_OFF:
-        return False
-    if value in _TOOLS_ON:
-        return True
-    raise ModeError(
-        f"XAI_TOOLS={value!r} is not recognized. "
-        "Unset, empty, 1, true, yes, and on turn audit tools on. "
-        "0, false, off, and no turn them off."
-    )
 
 
 def resolve_run_mode(record: str | None, replay: str | None) -> tuple[str, str | None]:
@@ -466,7 +440,7 @@ class GrokClient:
         return self._exchange(messages, timeout, tools=None)
 
     def request_tools(self, messages: list[dict], tools: list[dict], timeout: float = 60) -> dict:
-        """One completion that may ask for tools. Audit calls this unless tools are off.
+        """One completion that may ask for tools. Audit calls this.
 
         Returns {"content": str, "tool_calls": [{"id", "name", "arguments"}]}.
         arguments is the raw JSON string from the model.
@@ -608,8 +582,6 @@ class ToolStep:
             raise
 
     def __call__(self, messages, timeout=60) -> str:
-        if not tools_enabled():
-            return self.llm.request(messages, timeout)
         return _tool_loop(self, messages, timeout)
 
 
@@ -623,9 +595,8 @@ def tool_request(
 ) -> ToolStep:
     """A request(messages) -> str that structured_call already knows how to use.
 
-    Tools off: llm.request, the same payload as the tools-off path.
-    Tools on: run tool calls until the model returns plain content, then
-    return that text. The repair turn, if any, is repair() and sends no tools.
+    Run tool calls until the model returns plain content, then return that
+    text. The repair turn, if any, is repair() and sends no tools.
     final_turn_on_cap takes one plain reply when the cap blocks the next call.
     """
 

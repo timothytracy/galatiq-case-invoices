@@ -27,7 +27,7 @@ class FakeLLM:
         return result
 
     def request_tools(self, messages, tools, timeout=60):
-        """The scripted text, and no tool call. Audit tools can stay on."""
+        """The scripted text, and no tool call."""
 
         return {"content": self.request(messages, timeout), "tool_calls": []}
 

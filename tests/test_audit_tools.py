@@ -2,7 +2,6 @@
 
 import json
 import socket
-from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,9 +11,7 @@ from db import create_database, load_stock
 from graph import route_after_audit, run_invoice
 from main import _result_line, tool_calls_of
 from pipeline import audit
-from pipeline.audit import LEDGER_LINE, TOOLS_LINE, _audit_messages
-from pipeline.critique import _critique_messages
-from pipeline.fact_guard import verified_payload
+from pipeline.audit import LEDGER_LINE, TOOLS_LINE
 from pipeline.payment import payment
 from pipeline.tools import audit_registry
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
@@ -67,7 +64,6 @@ def _verdict(verdict: str) -> str:
 
 def _run(steps, db_path, monkeypatch):
     _block_network(monkeypatch)
-    monkeypatch.setenv("XAI_TOOLS", "1")
     model = ScriptedToolModel(steps)
     out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 5)
     return out, model
@@ -257,27 +253,8 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
     assert out["outcome"] == "approve"
 
 
-def test_flag_off_audit_request_has_no_tools(db_path, monkeypatch):
+def test_audit_request_sends_tools(db_path, monkeypatch):
     _block_network(monkeypatch)
-    monkeypatch.setenv("XAI_TOOLS", "0")
-    model = ScriptedToolModel([text_step(_verdict("PASS"))])
-    out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
-    assert out["outcome"] == "approve"
-    assert model.tool_requests == []
-    assert len(model.requests) == 1
-    system = model.requests[0]["messages"][0]["content"]
-    assert TOOLS_LINE not in system
-    assert "lookup_item" not in system
-    assert "check_payment_ledger" not in system
-    assert "prior payment" not in system
-    assert "verified_by_code" in model.requests[0]["messages"][1]["content"]
-    assert "tool_calls" not in _audit_log(out)["result"]
-    assert "tool_calls" not in _result_line(Path("x.txt"), out)
-
-
-def test_default_audit_request_sends_tools(db_path, monkeypatch):
-    _block_network(monkeypatch)
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
     model = ScriptedToolModel([text_step(_verdict("PASS"))])
     out = audit(_payable_state(), model, db_path, FakeClock(), ZeroRandom(), 3)
     assert out["outcome"] == "approve"
@@ -296,30 +273,8 @@ def test_default_audit_request_sends_tools(db_path, monkeypatch):
     assert "tool_calls" not in _audit_log(out)["result"]
 
 
-def test_tools_sentence_is_the_only_audit_prompt_change(monkeypatch):
-    state = _payable_state()
-    as_of = date(2026, 10, 31)
-    facts = verified_payload(state.invoice, {"WidgetA": 15}, as_of)
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    off = _audit_messages(state, state.invoice, state.decision, as_of, facts, False)
-    critique_off = _critique_messages(state.decision, as_of, facts)
-    monkeypatch.setenv("XAI_TOOLS", "1")
-    on = _audit_messages(state, state.invoice, state.decision, as_of, facts, True)
-    critique_on = _critique_messages(state.decision, as_of, facts)
-    assert off[1] == on[1]
-    assert TOOLS_LINE not in off[0]["content"]
-    assert on[0]["content"] == off[0]["content"].replace(
-        "Return JSON only.", f"{TOOLS_LINE} {LEDGER_LINE} Return JSON only."
-    )
-    assert "check_payment_ledger" not in off[0]["content"]
-    assert "prior payment" not in off[0]["content"]
-    assert critique_off == critique_on
-    assert "lookup_item" not in critique_off[0]["content"]
-
-
-def test_critique_sends_no_tools_even_when_the_flag_is_on(tmp_path, db_path, monkeypatch):
+def test_critique_sends_no_tools(tmp_path, db_path, monkeypatch):
     _block_network(monkeypatch)
-    monkeypatch.setenv("XAI_TOOLS", "1")
     path = write_invoice(
         tmp_path, "big.txt", "WidgetA 15, WidgetB 10, GadgetX 5\nTotal: 12500.00\n"
     )
@@ -389,25 +344,3 @@ def test_critique_sends_no_tools_even_when_the_flag_is_on(tmp_path, db_path, mon
     assert "tool_calls" not in critique_log["result"]
     paid = result["payment"]
     assert (paid.status if not isinstance(paid, dict) else paid["status"]) == "paid"
-
-
-def test_critique_sends_no_tools_when_xai_tools_is_unset(db_path, monkeypatch):
-    from pipeline.critique import critique
-
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    seen = []
-
-    class Model:
-        def request(self, messages, timeout=60):
-            seen.append(messages)
-            assert task_of(messages) == "critique"
-            assert "lookup_item" not in messages[0]["content"]
-            return json.dumps({"concerns": [], "stricter": False})
-
-        def request_tools(self, messages, tools, timeout=60):
-            raise AssertionError("critique must not send tools")
-
-    out = critique(_payable_state(), Model(), db_path, FakeClock(), ZeroRandom(), 3)
-    assert len(seen) == 1
-    critique_log = next(row for row in out["logs"] if row["stage"] == "critique")
-    assert "tool_calls" not in critique_log["result"]

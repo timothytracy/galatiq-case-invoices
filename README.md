@@ -4,16 +4,13 @@
 
 The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. Rejects and holds are not paid.
 
-Replay of the six committed recordings, no API key, on 2026-11-01 PT:
+Replay of the three committed recordings, no API key, on 2026-11-01 PT:
 
-| Set | Tools | Score |
-|---|---|---|
-| 20 samples | on | 20/20 |
-| 21 unseen | on | 21/21 |
-| Ordered ledger | on | 11 steps ok, ledger matches |
-| 20 samples | off | 20/20 |
-| 21 unseen | off | 21/21 |
-| Ordered ledger | off | 11 steps ok, ledger matches |
+| Set | Score |
+|---|---|
+| 20 samples | 20/20 |
+| 21 unseen | 21/21 |
+| Ordered ledger | 11 steps ok, ledger matches |
 
 Live runs the same day matched those scores: samples 20/20 three times, unseen 21/21 three times, and the ordered ledger ok.
 
@@ -23,7 +20,7 @@ The review screen shows ten sample invoices from that recorded run.
 
 ### Business impact
 
-The brief describes five-day processing delays. In the live runs on 2026-11-01 PT, a tools-on invoice took 2.85–3.90 s and cost $0.004923–$0.006428. A tools-off invoice took 2.40–2.57 s and cost $0.002571–$0.002821. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
+The brief describes five-day processing delays. In the live runs on 2026-11-01 PT, an invoice took 2.85–3.90 s and cost $0.004923–$0.006428. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
 
 ## How to run
 
@@ -34,15 +31,12 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 source .venv/bin/activate
 python3 setup_db.py
-python3 scripts/eval.py --replay recordings/samples_tools.jsonl
-python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen_tools.jsonl
-python3 scripts/eval.py --ordered --replay recordings/ordered_tools.jsonl
-XAI_TOOLS=0 python3 scripts/eval.py --replay recordings/samples.jsonl
-XAI_TOOLS=0 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
-XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
+python3 scripts/eval.py --replay recordings/samples.jsonl
+python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
+python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those six exits 0 when the score is perfect. CI runs the same six after the tests and does not set an API key.
+Each of those three exits 0 when the score is perfect. CI runs the same three after the tests and does not set an API key.
 
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 
@@ -88,7 +82,7 @@ flowchart TD
 ## Key decisions
 
 - Code decides: reject wins over hold, hold wins over approve, and critique and audit can only tighten.
-- Audit tools default on, read inventory, totals, policy, and the ledger, cap at 3 rounds and 8 calls, and cannot pay.
+- Audit has tools that read inventory, totals, policy, and the ledger, cap at 3 rounds and 8 calls, and cannot pay.
 - The same vendor and invoice number is a `DUPLICATE_INVOICE` hold, and a same-vendor cluster inside the split window that crosses the threshold is a `SPLIT_INVOICE` hold.
 - Scored eval uses a fresh ledger per invoice, and `scripts/eval.py --ordered` shares one ledger.
 - Replay runs this code on saved replies with no API key and no network, and a miss is a `SYSTEM_ERROR` hold that pays nothing.
@@ -142,7 +136,7 @@ Reject log is the other exit. Rejects are logged as stage `reject_log`. Holds ar
 
 ### Tools, the ledger, and the fact guard
 
-Audit is the only stage with tools. Critique is not given them. Unset, empty, `1`, `true`, `yes`, and `on` leave them on. `0`, `false`, `off`, and `no` turn them off. Any other value stops the run at startup.
+Audit is the only stage with tools. Critique is not given them.
 
 The four tools are `lookup_item`, `recompute_totals`, `get_policy_rule`, and `check_payment_ledger`. They are read-only and bound to the current invoice. They do not open the database, and they do not pay. A hit on the ledger tool can add a `DUPLICATE_INVOICE` or `SPLIT_INVOICE` finding. A miss adds nothing. An identical repeat returns the earlier result, does not run the tool again, and does not count against the 8-call cap. The round still counts.
 
@@ -163,4 +157,4 @@ The reject, hold, and warning tables are in [docs/DESIGN.md](docs/DESIGN.md).
 - [docs/METRICS.md](docs/METRICS.md) — replay and live-run numbers
 - [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md) and [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md) — the labeled outcomes
 - [docs/graph.md](docs/graph.md) — the generated graph
-- [recordings/README.md](recordings/README.md) — how the six recordings were made
+- [recordings/README.md](recordings/README.md) — how the three recordings were made

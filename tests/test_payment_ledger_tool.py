@@ -3,7 +3,6 @@
 The tool is bound to the current invoice. A hit can hold. It cannot pay.
 """
 
-import hashlib
 import json
 import socket
 import sqlite3
@@ -28,17 +27,6 @@ from tests.fakes import FakeClock, ScriptedToolModel, ZeroRandom
 from tests.test_audit_tools import _verdict
 from tests.test_tool_loop import _payable_state, text_step, tool_step
 
-# Tools-off audit messages for _payable_state at 2026-10-31, canonical JSON.
-# Captured from main 22acca19. A new request key or prompt word changes it.
-_MAIN_TOOLS_OFF_AUDIT = "5f9b40f0a389058955136ed1ffcfd4f3acdf9c6fc773f2c28670b86d82e0da3a"
-_USER_KEYS = {
-    "extracted",
-    "decision",
-    "findings",
-    "critique_concerns",
-    "raw_text",
-    "verified_by_code",
-}
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -104,7 +92,6 @@ def _clear(body):
 
 
 def _run(state, steps, db_path, monkeypatch, ledger):
-    monkeypatch.setenv("XAI_TOOLS", "1")
     model = ScriptedToolModel(steps)
     out = audit(
         state,
@@ -426,35 +413,7 @@ def test_ledger_tool_counts_toward_the_cap_and_repeats_reuse(db_path, monkeypatc
     assert out["authorization"] is not None
 
 
-def test_tools_off_payload_matches_main(db_path, monkeypatch):
-    monkeypatch.setenv("XAI_TOOLS", "0")
-    model = ScriptedToolModel([text_step(_verdict("PASS"))])
-    out = audit(
-        _payable_state(),
-        model,
-        db_path,
-        FakeClock(),
-        ZeroRandom(),
-        3,
-        as_of=date(2026, 10, 31),
-    )
-    assert out["outcome"] == "approve"
-    assert model.tool_requests == []
-    assert len(model.requests) == 1
-    request = model.requests[0]
-    assert set(request) == {"messages", "timeout"}
-    assert "tools" not in request
-    assert "tool_choice" not in request
-    system = request["messages"][0]["content"]
-    assert "check_payment_ledger" not in system
-    assert "prior payment" not in system
-    assert set(json.loads(request["messages"][1]["content"])) == _USER_KEYS
-    blob = json.dumps(request["messages"], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(blob).hexdigest() == _MAIN_TOOLS_OFF_AUDIT
-
-
-def test_ordered_scenario_with_tools_on(db_path, tmp_path, monkeypatch):
-    monkeypatch.setenv("XAI_TOOLS", "1")
+def test_ordered_scenario(db_path, tmp_path):
     ledger = tmp_path / "payments.db"
 
     class Model:
