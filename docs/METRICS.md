@@ -1,6 +1,6 @@
 # Replay metrics
 
-Every replay number is from a committed recording, run on 2026-11-01 PT, with no API key. `python3 setup_db.py` was run first. Each command exited 0. The score, token, cost, call, and repeat figures are the stdout of `scripts/eval.py`. The live API runs are in [Live runs](#live-runs).
+Every replay number is from a committed recording, run on 2026-11-01 PT, with no API key. A replay creates `inventory.db` from the seed when the file is missing. Each command exited 0. The score, token, cost, call, and repeat figures are the stdout of `scripts/eval.py`. The live API runs are in [Live runs](#live-runs).
 
 | Run | Command | Score | Tokens | Cost USD | Calls | Repeats |
 |---|---|---|---|---|---|---|

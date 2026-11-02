@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db import create_database  # noqa: E402
+from db import ensure_inventory_db, inventory_db_path, reset_inventory_db  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from ledger.scenario import run_scenario  # noqa: E402
 from llm_client import (  # noqa: E402
@@ -193,6 +193,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also print each stage's JSON record and the mock payment line",
     )
+    parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "Delete the repository inventory.db and rebuild it from the seed before this run. "
+            "Eval does not use payments.db. "
+            "Does not change recordings/, data/, or logs/."
+        ),
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Rebuild the repository inventory.db from the seed before this run. "
+            "Same as --reset-db. Eval does not use payments.db. "
+            "Does not change recordings/, data/, or logs/."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
@@ -202,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "replay" and not Path(recording).is_file():
         print(f"replay recording not found: {recording}", file=sys.stderr)
         return 1
+    invoices = Path(args.invoices)
+    if args.ordered:
+        if not Path(args.ordered).is_file():
+            print(f"Scenario file not found: {args.ordered}", file=sys.stderr)
+            return 2
+    elif not invoices.is_dir():
+        print(f"Invoice directory not found: {invoices}", file=sys.stderr)
+        return 2
+    elif not Path(args.answer_key).is_file():
+        print(f"Answer key not found: {args.answer_key}", file=sys.stderr)
+        return 2
     try:
         client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:
@@ -211,10 +240,11 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    invoices = Path(args.invoices)
-    db_path = ROOT / "inventory.db"
-    if not db_path.exists():
-        create_database(db_path)
+    db_path = inventory_db_path(ROOT / "inventory.db")
+    if args.reset or args.reset_db:
+        reset_inventory_db(db_path)
+    else:
+        ensure_inventory_db(db_path)
 
     with _release_dir():
         if args.ordered:

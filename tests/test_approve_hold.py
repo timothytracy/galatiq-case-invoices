@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from db import inventory_db_path
 from pipeline.approve_hold import ROOT, approve_and_pay
 
 WHEN = __import__("datetime").datetime(2026, 11, 2, 5, 30, tzinfo=__import__("datetime").timezone.utc)
@@ -23,7 +24,7 @@ def _run(path: Path, tmp_path: Path, ledger: Path | None = None):
     from tests.fake_llm_eval import AS_OF, handler_for
     from tests.fakes import FakeClock, FakeLLM, ZeroRandom
     return run_invoice(
-        path, ROOT / "inventory.db", FakeLLM(handler_for(path)),
+        path, inventory_db_path(ROOT / "inventory.db"), FakeLLM(handler_for(path)),
         clock=FakeClock(), rng=ZeroRandom(), max_attempts=5, as_of=AS_OF,
         ledger_path=ledger or (tmp_path / "payments.db"),
     )
@@ -289,7 +290,7 @@ def test_a_failed_record_write_does_not_pay_or_raise(tmp_path, monkeypatch):
 
 def test_stock_changed_after_the_run_is_refused(tmp_path):
     result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
-    database = sqlite3.connect(ROOT / "inventory.db")
+    database = sqlite3.connect(inventory_db_path(ROOT / "inventory.db"))
     before = database.execute("SELECT item, stock FROM inventory").fetchall()
     database.execute("UPDATE inventory SET stock = 0")
     database.commit()

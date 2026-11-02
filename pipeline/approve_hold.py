@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
+from db import ensure_inventory_db, inventory_db_path
 from models import ExtractedInvoice, Finding, PipelineState
 from pipeline.audit import amount_in_text, issue_authorization
 from pipeline.payment import payment
@@ -292,10 +293,12 @@ def _recheck(saved, invoice, ledger):
     except (OSError, ValueError):
         return "The source file could not be read."
     state = _pay_state(saved, invoice).model_copy(update={"raw_text": live})
+    database = inventory_db_path(ROOT / "inventory.db")
     from pipeline.validation import validate
     try:
+        ensure_inventory_db(database)
         with redirect_stdout(io.StringIO()):
-            checked = validate(state, ROOT / "inventory.db", ledger_path=ledger)
+            checked = validate(state, database, ledger_path=ledger)
     except (OSError, sqlite3.Error) as exc:
         return f"inventory database could not be opened: {exc}"
     fresh = list(checked.get("findings") or [])

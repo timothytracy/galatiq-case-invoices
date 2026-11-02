@@ -60,7 +60,6 @@ Replay first. No API key.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 source .venv/bin/activate
-python3 setup_db.py
 python3 scripts/eval.py --replay recordings/samples.jsonl
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
@@ -77,6 +76,8 @@ python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --r
 ```
 
 `--replay` answers each Grok call from the recorded live run, so the same code runs with no network. `--reset-ledger` deletes `payments.db` first, so the invoice is not seen as already paid. The output is one JSON record per stage: ingestion, validation, approval, audit with its tool calls, and payment. Then comes `Paid 5000.00 to Widgets Inc.` and a final `result` record with the outcome. Any file in `data/invoices/` works the same way. Try `invoice_1002.txt` for a stock reject or `invoice_1012.txt` for a hold.
+
+`--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`, including the release records stored there, so a held invoice must be rerun before it can be approved. `--reset` does both. `scripts/eval.py --reset` and `--reset-db` rebuild inventory only; eval does not use `payments.db`. They do not change `recordings/`, `data/`, or `logs/`.
 
 A live run needs `XAI_API_KEY` in the environment or in `.env` (see `.env.example`).
 

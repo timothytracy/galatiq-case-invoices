@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from db import create_database  # noqa: E402
+from db import ensure_inventory_db, inventory_db_path  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from llm_client import begin_client  # noqa: E402
 from pipeline.approve_hold import approve_and_pay  # noqa: E402
@@ -68,9 +68,7 @@ def _run_demo() -> int:
 def _offline(path: Path, ledger: Path):
     """Replay one saved invoice. No test double and no API key."""
 
-    database = Path("inventory.db")
-    if not database.is_file():
-        create_database(database)
+    database = ensure_inventory_db(inventory_db_path("inventory.db"))
     client, as_of = begin_client("replay", str(ROOT / "recordings" / "samples.jsonl"), None)
     with redirect_stdout(io.StringIO()):
         return run_invoice(path, database, client, as_of=as_of, ledger_path=ledger)

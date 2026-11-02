@@ -1,10 +1,9 @@
-"""Create the local inventory database: python3 setup_db.py [path]"""
+"""Rebuild the inventory database from the seed: python3 setup_db.py [path]"""
 
 import argparse
-import sqlite3
 from pathlib import Path
 
-from db import SEED, create_database
+from db import SEED, load_stock, reset_inventory_db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -12,14 +11,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", default="inventory.db")
     args = parser.parse_args(argv)
 
-    db_path = create_database(args.path)
-    connection = sqlite3.connect(db_path)
-    try:
-        rows = connection.execute(
-            "SELECT item, stock FROM inventory ORDER BY item"
-        ).fetchall()
-    finally:
-        connection.close()
+    db_path = reset_inventory_db(args.path)
+    rows = load_stock(db_path)
 
     print(f"database\t{Path(db_path)}")
     for item, stock in rows:

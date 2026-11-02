@@ -8,6 +8,7 @@ from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
+from db import ensure_inventory_db
 from llm_client import SleepClock, read_max_attempts
 from models import PipelineState
 from pipeline import approve, audit, critique, ingest, payment, reject_log, validate
@@ -149,8 +150,11 @@ def run_invoice(
     A record or replay client carries that same date on as_of. Using it
     here means a replay on a later day still builds the recorded prompts.
     A live client leaves as_of unset, so the wall clock is still used.
+    The inventory file is created from the seed when it is missing.
+    An existing inventory file is not opened or changed here.
     """
 
+    ensure_inventory_db(db_path)
     if as_of is None:
         as_of = getattr(llm, "as_of", None)
     temporary = ledger_path is None
