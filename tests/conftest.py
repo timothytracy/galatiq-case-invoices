@@ -13,10 +13,11 @@ def clear_used_payment_keys():
 
 
 @pytest.fixture(autouse=True)
-def tools_off_unless_a_test_sets_them(monkeypatch):
-    """XAI_TOOLS stays off in tests. A test that wants tools sets it itself.
+def tools_default_on(monkeypatch):
+    """Drop XAI_TOOLS so a test sees the process default, which is on.
 
-    Record and replay stay off too, so a developer shell cannot redirect a test.
+    A test that needs the rollback sets XAI_TOOLS=0. Record and replay stay
+    off too, so a developer shell cannot redirect a test.
     """
 
     monkeypatch.delenv("XAI_TOOLS", raising=False)

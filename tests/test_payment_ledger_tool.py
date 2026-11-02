@@ -427,7 +427,7 @@ def test_ledger_tool_counts_toward_the_cap_and_repeats_reuse(db_path, monkeypatc
 
 
 def test_tools_off_payload_matches_main(db_path, monkeypatch):
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
+    monkeypatch.setenv("XAI_TOOLS", "0")
     model = ScriptedToolModel([text_step(_verdict("PASS"))])
     out = audit(
         _payable_state(),

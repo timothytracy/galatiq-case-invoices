@@ -11,7 +11,7 @@ from pathlib import Path
 
 from db import create_database
 from graph import run_invoice
-from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode
+from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode, tools_enabled
 from decision.outcome import result_codes
 
 
@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
+        tools_enabled()
         client, as_of = begin_client(mode, recording, args.as_of)
     except MissingAPIKey as exc:
         print(str(exc), file=sys.stderr)

@@ -1,6 +1,7 @@
 """Record and replay. No network and no API key on the replay path."""
 
 import json
+import re
 import socket
 import tempfile
 from datetime import date
@@ -324,7 +325,9 @@ def test_tool_loop_forced_final_and_repair_replay_without_a_network_client(tmp_p
     )
     messages = [{"role": "user", "content": "Answer with JSON."}]
     recorder = GrokClient(api_key="test-key", mode="record", recording=path, as_of=date(2026, 11, 1))
-    step = tool_request(recorder, example_registry(), agent="audit")
+    step = tool_request(
+        recorder, example_registry(), agent="audit", final_turn_on_cap=True
+    )
     parsed = call_with_retries(
         step,
         messages,
@@ -343,7 +346,9 @@ def test_tool_loop_forced_final_and_repair_replay_without_a_network_client(tmp_p
 
     install_openai_raise(monkeypatch)
     player = GrokClient(mode="replay", recording=path)
-    replay_step = tool_request(player, example_registry(), agent="audit")
+    replay_step = tool_request(
+        player, example_registry(), agent="audit", final_turn_on_cap=True
+    )
     again = call_with_retries(
         replay_step,
         list(messages),
@@ -672,3 +677,75 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert replayed == 0, replayed_out
     assert "replay miss:" not in replayed_out
     assert "MISS" not in replayed_out
+
+
+_TOOLS_OFF_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl"}
+_TOOLS_ON_RECORDINGS = {
+    "samples_tools.jsonl",
+    "unseen_tools.jsonl",
+    "ordered_tools.jsonl",
+}
+
+
+def _eval_commands(text: str) -> list[tuple[str, str | None, str]]:
+    """Each python3 scripts/eval.py command, its XAI_TOOLS value, and the recording."""
+
+    found = []
+    for match in re.finditer(r"python3\s+scripts/eval\.py\b[^`\n]*?(?=&&|\n|`|$)", text):
+        command = re.sub(r"\s+", " ", match.group(0).strip())
+        recording = re.search(r"recordings/([A-Za-z0-9_.-]+\.jsonl)", command)
+        if recording is None:
+            continue
+        prefix = text[max(0, match.start() - 24) : match.start()]
+        flag = re.search(r"XAI_TOOLS=(\S+)\s+$", prefix)
+        found.append((command, None if flag is None else flag.group(1), recording.group(1)))
+    return found
+
+
+def _ci_commands(text: str) -> list[tuple[str, str | None, str]]:
+    lines = text.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        if "python3 scripts/eval.py" not in line:
+            continue
+        command = re.sub(r"\s+", " ", line.split("run:", 1)[-1].strip())
+        recording = re.search(r"recordings/([A-Za-z0-9_.-]+\.jsonl)", command)
+        if recording is None:
+            continue
+        tools = None
+        for follow in lines[index + 1 : index + 6]:
+            if follow.strip().startswith("- name:"):
+                break
+            flag = re.search(r'XAI_TOOLS:\s*"([^"]+)"', follow)
+            if flag:
+                tools = flag.group(1)
+                break
+        found.append((command, tools, recording.group(1)))
+    return found
+
+
+def test_documented_replay_commands_match_the_recording():
+    docs = [ROOT / "README.md", ROOT / "SOLUTION.md", ROOT / "recordings" / "README.md"]
+    docs.extend(sorted((ROOT / "docs").glob("*.md")))
+    commands = []
+    for path in docs:
+        commands.extend(_eval_commands(path.read_text(encoding="utf-8")))
+    ci = _ci_commands((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    assert len(ci) == 6
+    for command, tools, name in commands + ci:
+        if name in _TOOLS_OFF_RECORDINGS:
+            assert tools == "0", command
+        elif name in _TOOLS_ON_RECORDINGS:
+            assert tools is None, command
+        else:
+            raise AssertionError(name)
+    replay = [(command, tools) for command, tools, _name in ci]
+    readme = _eval_commands((ROOT / "README.md").read_text(encoding="utf-8"))
+    readme_replay = [(command, tools) for command, tools, _name in readme if "--replay" in command]
+    start = 0
+    for item in replay:
+        assert item in readme_replay[start:], item
+        start = readme_replay.index(item, start) + 1
+    recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
+    assert "2026-11-01 PT" in recorded
+    assert "Pending approval:" in recorded

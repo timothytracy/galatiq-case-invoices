@@ -17,7 +17,13 @@ sys.path.insert(0, str(ROOT))
 from db import create_database  # noqa: E402
 from graph import run_invoice  # noqa: E402
 from ledger.scenario import run_scenario  # noqa: E402
-from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode  # noqa: E402
+from llm_client import (  # noqa: E402
+    MissingAPIKey,
+    ModeError,
+    begin_client,
+    resolve_run_mode,
+    tools_enabled,
+)
 from main import payment_status, tool_calls_of  # noqa: E402
 from decision.outcome import result_codes  # noqa: E402
 from decision.wording import KEY_REASON_TO_CODE  # noqa: E402
@@ -181,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
+        tools_enabled()
     except ModeError as exc:
         print(str(exc), file=sys.stderr)
         return 2

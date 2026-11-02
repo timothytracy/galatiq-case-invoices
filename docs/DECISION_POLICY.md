@@ -96,3 +96,5 @@ Decided on 2026-10-31: **a non-commercial address flagged on an otherwise clean 
 ## Known follow-ups
 
 Split detection is unit-tested on synthetic invoices only.
+
+Pending approval. Audit tools are on by default. Unset, empty, `1`, `true`, `yes`, and `on` leave them on, decided on 2026-11-01. `0`, `false`, `off`, and `no` turn them off and restore the previous audit request.

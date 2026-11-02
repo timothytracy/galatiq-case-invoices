@@ -3,6 +3,7 @@
 This is a regression probe, not a product mode. The model double is the same
 shape the pipeline tests inject: request(messages, timeout=60), passed to
 run_invoice with a fake clock, a zero jitter rng, and max_attempts=5.
+request_tools returns that same text and no tool call.
 
 Extraction text is the deterministic parse of that file, serialized as the
 JSON the extraction prompt asks for. It is not a table of outcomes. Reasoning,

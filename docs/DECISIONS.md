@@ -45,6 +45,8 @@ There is no durable work list and no extra database table. When the attempts are
 
 When `XAI_TOOLS` is on, a hit on the audit's 3-round or 8-call cap does not hold immediately. The step gets one plain model call with no tools, using the tool results already gathered and the verified facts, and asks for the verdict. The cap has already spent the budget, so that reply is the last chance. An API error, or a schema failure after the normal repair, is a `SYSTEM_ERROR` hold and nothing is paid. That bound keeps cost and latency from growing. Approved on 2026-11-01.
 
+Pending approval. Audit tools are on by default. Unset, empty, `1`, `true`, `yes`, and `on` leave them on, decided on 2026-11-01. `0`, `false`, `off`, and `no` turn them off and restore the previous audit request. Critique does not get tools.
+
 Pending approval. When the audit tools (XAI_TOOLS) are in use, audit may also call `check_payment_ledger`. Critique does not get tools.
 
 The tool takes no arguments. It is bound to this invoice's vendor, invoice number, and the run's ledger path, so the model cannot name another vendor. It is read-only. Its duplicate check matches that vendor and invoice number only. It does not match the raw-text hash. Validation does, so the tool is a narrower lookup than the validation duplicate check. It also reports the same vendor's paid total inside `split_window_days` against `scrutiny_threshold`, using the same split helper as validation.
@@ -61,11 +63,11 @@ The fingerprint is a SHA-256 of canonical JSON. The hashed fields are the model,
 
 A replay miss (no saved reply for that fingerprint) is a non-retryable error. It is not a live call. The invoice is a `SYSTEM_ERROR` hold and nothing is paid.
 
-The recording starts with a header line that stores `as_of`, the date the prompts were told was today, and the model name. Replay uses that date, not the machine clock. `--as-of` on a recording run stores that date. Omit it and the header stores the calendar date at the start of the run. The five committed files each have `"as_of": "2026-11-01"` in the header.
+The recording starts with a header line that stores `as_of`, the date the prompts were told was today, and the model name. Replay uses that date, not the machine clock. `--as-of` on a recording run stores that date. Omit it and the header stores the calendar date at the start of the run. The six committed files were recorded on 2026-11-01 PT. Each header stores that day as `"as_of": "2026-11-01"`.
 
 `scripts/eval.py` on record or replay prints `tokens total=N cost_usd=X` from the usage objects stored on each request line. The price is in `recording.py`: the published short-context rate for `grok-4.20-0309-non-reasoning` when `prompt_tokens` is under 200,000, and the long-context rate at or above that. Prompt tokens are not split into a cached-input rate. Pending approval on that price.
 
-CI (`.github/workflows/ci.yml`) runs `setup_db.py`, the tests, and the five replays. It does not set an API key. The two `_tools` recordings match a run with `XAI_TOOLS=1`. The other three match a run that does not offer the audit tools. The tools change the audit prompt, so the fingerprints do not cross. The commands are in [recordings/README.md](../recordings/README.md).
+Pending approval. Audit tools are on by default. CI (`.github/workflows/ci.yml`) runs `setup_db.py`, the tests, and the six replays. It does not set an API key. `samples_tools.jsonl`, `unseen_tools.jsonl`, and `ordered_tools.jsonl` match `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. The tools change the audit prompt, so the fingerprints do not cross. The commands are in [recordings/README.md](../recordings/README.md).
 
 ## What is Python and what is the model
 
