@@ -1,6 +1,8 @@
-# Automated invoice processing
+# Acme invoice agents: Grok reads, code decides who gets paid
 
 [![CI](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml/badge.svg)](https://github.com/timothytracy/galatiq-case-invoices/actions/workflows/ci.yml)
+
+**Grok reads and questions every invoice, and written rules decide whether it is paid, so no money moves without an audit PASS or a named person's release.**
 
 The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
 
@@ -27,6 +29,28 @@ The brief describes $2M a year in manual processing, a 30% error rate, and five-
 - **Errors.** All 41 labeled outcomes were correct in replay and in three live runs of each set, and no reject or hold was paid. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
 - **People.** 31 of the 41 invoices, 76%, need no one at Acme. The 15 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 10, 24%, are holds. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
 - **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 76%. Acme's real mix and volume set the dollar figure, so none is claimed here.
+
+### What changes for Acme
+
+| Today at Acme | What the system does instead |
+|---|---|
+| Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text, and an OCR fix is kept only when the math reconciles. A name that is not in the text is a hold, not a guess. |
+| Staff check a legacy inventory database that is inconsistent. | One SQLite table, opened read-only. Names match after case, spaces, and hyphens are normalized. Quantities are summed per item. A near-miss name is rejected with "Likely meant X." and is never substituted. |
+| A VP approves by email chain. | Code applies written rules. A USD total over $10,000 gets one critique, and an audit with read-only tools can only tighten. A hold names one action for one owner, and `approve_and_pay` records the release. |
+| Staff pay through the banking API. | `mock_payment` runs only after an audit PASS or a reviewer release. The payments ledger blocks a duplicate or a split before money moves. |
+
+Each kind of hold has one owner. These roles are proposed. The brief does not name Acme's teams.
+
+| Hold kind | Codes | Owner | Can a reviewer pay it? |
+|---|---|---|---|
+| Vendor identity or bank change | `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER` | Accounts payable, with the vendor-master owner | Yes. A second approver is the production next step. |
+| Invoice history | `REVISED_INVOICE` | Accounts payable | Yes |
+| Invoice history | `DUPLICATE_INVOICE`, `SPLIT_INVOICE` | Accounts payable | No |
+| Price | `PRICE_SPIKE` | Purchasing, which owns the PO price | Yes |
+| Currency or credit | `NON_USD`, `CREDIT_NOTE` | Finance and accounting | No |
+| Extraction trust | `ITEM_NOT_IN_SOURCE` | Accounts payable checks the document | No |
+| Review escalation | `CRITIQUE_HOLD`, `AUDIT_ESCALATED` | The approver who replaces the VP email chain | Yes, except at the send-back cap |
+| System failure | `SYSTEM_ERROR`, `BAD_REASONING` | Engineering on call reruns the invoice | No |
 
 ## How to run
 

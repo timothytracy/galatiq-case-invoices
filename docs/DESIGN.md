@@ -4,29 +4,7 @@ Every invoice ends in one outcome: approve, reject, or hold. Every outcome carri
 
 The numbers live in [policy.toml](../policy.toml). `decision/policy.py` loads that file at startup. A missing key, a wrong type, or a nonsense value stops the process and names the key.
 
-## Acme's process
-
-The brief describes four manual steps. This is what replaces each one.
-
-| Today at Acme | What the system does |
-|---|---|
-| Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text, and an OCR fix is kept only when the math reconciles. A name that is not in the text is a hold, not a guess. |
-| Staff check a legacy inventory database that is inconsistent. | One SQLite table, opened read-only. Names match after case, spaces, and hyphens are normalized. Quantities are summed per item. A near-miss name is rejected with "Likely meant X." and is never substituted. |
-| A VP approves by email chain. | Code applies written rules. A USD total over $10,000 gets one critique, and an audit with read-only tools can only tighten. A hold names one action for one owner, and `approve_and_pay` records the release. |
-| Staff pay through the banking API. | `mock_payment` runs only after an audit PASS or a reviewer release. The payments ledger blocks a duplicate or a split before money moves. |
-
-Each kind of hold has one owner. These roles are proposed. The brief does not name Acme's teams.
-
-| Hold kind | Codes | Owner | Can a reviewer pay it? |
-|---|---|---|---|
-| Vendor identity or bank change | `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER` | Accounts payable, with the vendor-master owner | Yes. A second approver is the production next step. |
-| Invoice history | `REVISED_INVOICE` | Accounts payable | Yes |
-| Invoice history | `DUPLICATE_INVOICE`, `SPLIT_INVOICE` | Accounts payable | No |
-| Price | `PRICE_SPIKE` | Purchasing, which owns the PO price | Yes |
-| Currency or credit | `NON_USD`, `CREDIT_NOTE` | Finance and accounting | No |
-| Extraction trust | `ITEM_NOT_IN_SOURCE` | Accounts payable checks the document | No |
-| Review escalation | `CRITIQUE_HOLD`, `AUDIT_ESCALATED` | The approver who replaces the VP email chain | Yes, except at the send-back cap |
-| System failure | `SYSTEM_ERROR`, `BAD_REASONING` | Engineering on call reruns the invoice | No |
+How each of Acme's manual steps is replaced, and who owns each kind of hold, is in the [README](../README.md#what-changes-for-acme).
 
 ## Approve
 
