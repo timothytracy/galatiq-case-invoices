@@ -72,6 +72,19 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
     }
 
 
+def is_recorded(path: Path, client) -> bool:
+    """True when a replay client holds the first extraction answer for this file.
+
+    Uses the same prompt builder as ingest, so a replay run hits the same fingerprint.
+    """
+
+    try:
+        raw = read_raw(Path(path))
+    except Exception:
+        return False
+    return client.has_answer(_extract_messages(raw, [], client.as_of))
+
+
 def _path_in_prompt(path: Path, llm) -> Path:
     """Live keeps the caller's path. Record and replay use a repo-relative one.
 

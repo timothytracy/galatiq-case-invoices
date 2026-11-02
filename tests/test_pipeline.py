@@ -756,6 +756,64 @@ def test_main_from_another_folder_writes_only_to_the_data_folder(tmp_path):
     assert (data / "logs" / "invoice_1001.txt.json").is_file()
 
 
+def _no_key_run(tmp_path: Path, invoice: Path) -> tuple[subprocess.CompletedProcess, Path]:
+    data = tmp_path / "store"
+    data.mkdir(exist_ok=True)
+    env = os.environ.copy()
+    for name in ("XAI_API_KEY", "XAI_MODE", "XAI_RECORDING", "INVENTORY_DB"):
+        env.pop(name, None)
+    env["INVOICE_DATA_DIR"] = str(data)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), f"--invoice_path={invoice}"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    return proc, data
+
+
+def test_no_key_replays_a_recorded_invoice_and_says_so(tmp_path):
+    proc, data = _no_key_run(tmp_path, ROOT / "data" / "extra_invoices" / "invoice_2107.pdf")
+    assert proc.returncode == 0, proc.stderr
+    assert "No XAI_API_KEY set. Using replay (recorded Grok runs). Set XAI_API_KEY to run live." in proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["outcome"] == "reject"
+    assert result["reason_code"] == "EMBEDDED_INSTRUCTIONS"
+    assert result["payment_status"] == "not_paid"
+    assert "No XAI_API_KEY" not in proc.stdout
+    assert (data / "logs" / "invoice_2107.pdf.json").is_file()
+
+
+def test_no_key_stops_a_new_invoice_before_the_pipeline(tmp_path):
+    invoice = write_invoice(tmp_path, "new.txt", "Vendor: New Co\nWidgetA\nTotal: 5.00\n")
+    proc, data = _no_key_run(tmp_path, invoice)
+    assert proc.returncode == 1
+    assert "new.txt is not in the recordings. Processing a new invoice needs XAI_API_KEY." in proc.stderr
+    assert proc.stdout == ""
+    assert list(data.iterdir()) == []
+    assert not list(tmp_path.rglob("payments.db"))
+    assert not list(tmp_path.rglob("new.txt.json"))
+
+
+def test_explicit_replay_stops_a_new_invoice_before_the_pipeline(tmp_path):
+    invoice = write_invoice(tmp_path, "new.txt", "Vendor: New Co\nWidgetA\nTotal: 5.00\n")
+    data = tmp_path / "store"
+    data.mkdir()
+    env = os.environ.copy()
+    env.pop("XAI_API_KEY", None)
+    env["INVOICE_DATA_DIR"] = str(data)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.run(
+        [
+            sys.executable, str(ROOT / "main.py"), f"--invoice_path={invoice}",
+            f"--replay={ROOT / 'recordings' / 'samples.jsonl'}", "--reset",
+        ],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode == 1
+    assert "needs XAI_API_KEY" in proc.stderr
+    assert list(data.iterdir()) == []
+
+
 def test_missing_key_fails_fast(tmp_path, monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -764,16 +822,6 @@ def test_missing_key_fails_fast(tmp_path, monkeypatch):
     env = os.environ.copy()
     env.pop("XAI_API_KEY", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = subprocess.run(
-        [sys.executable, str(ROOT / "main.py"), f"--invoice_path={INVOICES / 'invoice_1001.txt'}"],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode != 0
-    assert "XAI_API_KEY" in proc.stderr
     folder = subprocess.run(
         [sys.executable, str(ROOT / "main.py"), f"--invoice_path={INVOICES}"],
         cwd=tmp_path,

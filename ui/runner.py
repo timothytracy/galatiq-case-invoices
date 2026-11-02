@@ -1,4 +1,4 @@
-"""Run one invoice with Grok or the fake LLM, and read a saved run back."""
+"""Run one invoice with Grok, live or replayed, and read a saved run back."""
 
 import glob
 import io
@@ -15,9 +15,8 @@ from pydantic import BaseModel
 
 from db import create_database, data_dir, inventory_db_path, payments_db_path
 from graph import run_invoice
-from llm_client import GrokClient, load_dotenv
-from tests.fake_llm_eval import AS_OF, handler_for
-from tests.fakes import FakeClock, FakeLLM, ZeroRandom
+from llm_client import GrokClient, key_available
+from pipeline.ingestion import is_recorded
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
@@ -27,8 +26,7 @@ DEFAULT_RUN = ROOT / "output" / "runs" / "review_run.json"
 PAYMENTS_DB = payments_db_path()
 def grok_key_set() -> bool:
     """True when the CLI's Grok client would start. It reads XAI_API_KEY."""
-    load_dotenv()
-    return bool(os.environ.get("XAI_API_KEY", "").strip())
+    return key_available()
 def invoice_files(folder: Path | None = None) -> list[Path]:
     directory = folder or INVOICES
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES)
@@ -78,6 +76,10 @@ def recording_files(folder: Path | None = None) -> list[Path]:
     if not directory.is_dir():
         return []
     return sorted(path for path in directory.glob("*.jsonl") if path.is_file())
+def unrecorded(paths: list[Path], recording: Path) -> list[Path]:
+    """Invoices the recording has no extraction answer for. Nothing is run."""
+    client = GrokClient(mode="replay", recording=recording)
+    return [path for path in paths if not is_recorded(path, client)]
 
 
 def run_one(
@@ -88,15 +90,14 @@ def run_one(
     ledger_path: Path | None = None,
     replay: Path | None = None,
 ) -> dict:
-    """One invoice. live=True uses GrokClient, the same client main.py constructs.
+    """One invoice, live or replayed. Both use GrokClient, the same client main.py constructs.
 
     The ledger is kept and returned on the entry. Live uses payments.db.
-    Offline and replay use the given file, or a new temporary ledger that is
-    not payments.db. The release sha is written into that same file, so
+    Replay uses the given file, or a new temporary ledger that is not
+    payments.db. The release sha is written into that same file, so
     approval must use it too. Replay sets XAI_MODE and XAI_RECORDING for this
     call only, then restores them.
     """
-    database = ensure_db(db_path)
     env = None
     if replay is not None:
         recording = Path(replay)
@@ -107,21 +108,16 @@ def run_one(
         ledger = PAYMENTS_DB if ledger_path is None else Path(ledger_path)
         kind = "grok"
     else:
-        ledger = temporary_ledger() if ledger_path is None else Path(ledger_path)
-        kind = "fake"
+        raise ValueError("run_one needs live=True or a replay recording")
+    database = ensure_db(db_path)
     previous = {key: os.environ.get(key) for key in env} if env else None
     if env:
         os.environ.update(env)
     try:
-        if kind == "fake":
-            llm = FakeLLM(handler_for(path))
-            extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
-        else:
-            llm, extra = GrokClient(), {}
-        extra["ledger_path"] = ledger
+        llm = GrokClient()
         started = time.perf_counter()
         with redirect_stdout(io.StringIO()):
-            result = run_invoice(path, database, llm, **extra)
+            result = run_invoice(path, database, llm, ledger_path=ledger)
         elapsed = time.perf_counter() - started
     finally:
         if previous is not None:
@@ -148,10 +144,7 @@ def _replay_ledger(ledger_path: Path | None) -> Path:
 def pack(entries: list[dict]) -> dict:
     modes = {entry.get("llm") for entry in entries if entry.get("llm")}
     llm = modes.pop() if len(modes) == 1 else "mixed"
-    payload = {"record": "review_run", "llm": llm, "invoices": entries}
-    if llm == "fake":
-        payload["as_of"] = AS_OF.isoformat()
-    return payload
+    return {"record": "review_run", "llm": llm, "invoices": entries}
 def save_run(path: Path, entries: list[dict]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(pack(entries), indent=2) + "\n", encoding="utf-8")
@@ -198,7 +191,7 @@ def _run_files(path: Path) -> list[Path]:
 
 def parse_payload(payload, name: str = "") -> list[dict]:
     if isinstance(payload, dict) and payload.get("record") == "review_run":
-        mode = payload.get("llm") if payload.get("llm") in {"fake", "grok"} else None
+        mode = payload.get("llm") if payload.get("llm") in {"grok", "replay"} else None
         entries = []
         for row in payload.get("invoices") or []:
             if isinstance(row, dict):
@@ -246,16 +239,6 @@ def state_from_log(records: list) -> dict:
 
 def mode_label(entries: list[dict]) -> str:
     """How the shown run was produced. Empty when nothing has been loaded."""
-    modes = {entry.get("llm") for entry in entries if entry.get("llm") in {"fake", "grok", "replay"}}
-    if modes == {"fake"}:
-        return "Offline (fake LLM)"
-    if modes == {"grok"}:
-        return "Live (Grok)"
-    if modes == {"replay"}:
-        return "Replay (recorded Grok)"
-    if modes == {"fake", "grok"}:
-        return "Live (Grok) and Offline (fake LLM)"
-    if not modes:
-        return ""
-    names = {"grok": "Live (Grok)", "fake": "Offline (fake LLM)", "replay": "Replay (recorded Grok)"}
-    return " and ".join(names[mode] for mode in ("grok", "fake", "replay") if mode in modes)
+    names = {"grok": "Live (Grok)", "replay": "Replay (recorded Grok)"}
+    modes = {entry.get("llm") for entry in entries if entry.get("llm") in names}
+    return " and ".join(names[mode] for mode in ("grok", "replay") if mode in modes)

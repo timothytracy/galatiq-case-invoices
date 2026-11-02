@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st
 
-from llm_client import MissingAPIKey
+from llm_client import NEEDS_KEY, REPLAY_NOTICE, MissingAPIKey
 from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
     INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
@@ -24,10 +24,11 @@ from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
     DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
     mode_label, parse_payload, recording_files, resolve_path, run_one, save_run, temporary_ledger,
+    unrecorded,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
-MODES = ("Live (Grok)", "Offline (fake LLM)", "Replay (recorded Grok)")
+MODES = ("Live (Grok)", "Replay (recorded Grok)")
 REPLAY_BANNER = "Replay of a recorded Grok run. This makes no live model calls."
 BADGE = {"approve": "green", "reject": "red", "hold": "orange", "blocking": "red", "warning": "orange", "info": "gray"}
 DOLLARS = {"approve": "Dollars approved", "reject": "Dollars rejected", "hold": "Dollars held"}
@@ -49,10 +50,13 @@ st.markdown(
 
 def main() -> None:
     st.title("Invoice review")
-    mode = _mode_name(st.sidebar.radio("Mode", MODES, index=0 if grok_key_set() else 2))
+    key_set = grok_key_set()
+    mode = _mode_name(st.sidebar.radio("Mode", MODES, index=0 if key_set else 1))
     live = mode == "live"
-    _offline_releases(live)
+    _temp_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
+    if not key_set:
+        st.warning(REPLAY_NOTICE)
     if mode == "replay":
         st.info(REPLAY_BANNER)
     used = mode_label(st.session_state.get("entries") or [])
@@ -71,8 +75,8 @@ def main() -> None:
     else:
         screens[page]()
 
-def _offline_releases(live: bool) -> None:
-    """Offline runs keep the pipeline's release records out of logs/.
+def _temp_releases(live: bool) -> None:
+    """Replay runs keep the pipeline's release records out of logs/.
 
     The pipeline writes the record itself. This only points INVOICE_RELEASE_DIR
     at one temporary folder for the session. Live mode leaves the default logs/.
@@ -88,27 +92,23 @@ def _offline_releases(live: bool) -> None:
     os.environ["INVOICE_RELEASE_DIR"] = str(path)
 
 def _mode_name(choice: str) -> str:
-    if choice.startswith("Live"):
-        return "live"
-    if choice.startswith("Replay"):
-        return "replay"
-    return "offline"
+    return "live" if choice.startswith("Live") else "replay"
 
 
 def _session_ledger(live: bool) -> Path:
     """Fallback ledger for a loaded entry that has no ledger of its own.
 
     A processed result carries the ledger its run wrote. Pay uses that path.
-    Offline keeps one temporary file here only for entries without one.
+    Replay keeps one temporary file here only for entries without one.
     Live uses payments.db.
     """
     if live:
         return PAYMENTS_DB
-    current = st.session_state.get("offline_ledger")
+    current = st.session_state.get("replay_ledger")
     path = Path(current) if current else None
     if path is None or not path.is_file() or is_real_payments_db(path):
         path = temporary_ledger()
-        st.session_state["offline_ledger"] = str(path)
+        st.session_state["replay_ledger"] = str(path)
     return path
 
 
@@ -132,7 +132,7 @@ def screen_run(mode: str) -> None:
         one, folder = st.columns(2)
         process_one = one.button("Process this invoice", type="primary")
         process_folder = folder.button("Process data/invoices")
-        st.caption("Each offline or replay run keeps the temporary ledger that run wrote.")
+        st.caption("Each replay run keeps the temporary ledger that run wrote.")
     with right:
         st.subheader("Load")
         st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
@@ -423,6 +423,11 @@ def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool)
     if mode == "replay" and replay is None:
         st.error("Choose a recording. Replay does not call the model.")
         return
+    if mode == "replay":
+        missing = unrecorded(paths, replay)
+        if missing:
+            st.error("\n\n".join(NEEDS_KEY.format(file=path.name) for path in missing))
+            return
     # One ledger for this click. A later click gets its own file, so a second
     # run of the same invoice is not a duplicate of the first. Pay reads the
     # path stored on that result.

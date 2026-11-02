@@ -30,7 +30,6 @@ def no_dotenv(monkeypatch):
     """A developer .env must not put a real key back into a test."""
 
     monkeypatch.setattr("llm_client.load_dotenv", lambda path=None: None)
-    monkeypatch.setattr("ui.runner.load_dotenv", lambda path=None: None)
 
 
 @pytest.fixture(autouse=True)

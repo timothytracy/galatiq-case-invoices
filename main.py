@@ -10,13 +10,21 @@ inventory.db is created from the seed when it is missing.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from db import ensure_inventory_db, inventory_db_path, log_dir, payments_db_path, reset_inventory_db
 from graph import run_invoice
-from llm_client import MissingAPIKey, ModeError, begin_client, resolve_run_mode
+from llm_client import (
+    NEEDS_KEY, REPLAY_NOTICE, GrokClient, MissingAPIKey, ModeError, begin_client, resolve_run_mode,
+)
 from decision.outcome import result_codes
+from pipeline.ingestion import is_recorded
+
+RECORDINGS = Path(__file__).resolve().parent / "recordings"
+# ordered.jsonl is left out: its later answers depend on the ledger order of that scenario.
+FALLBACK_RECORDINGS = ("samples.jsonl", "unseen.jsonl")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,7 +73,21 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         mode, recording = resolve_run_mode(args.record, args.replay)
-        client, as_of = begin_client(mode, recording, args.as_of)
+        fallback = mode == "live" and not os.environ.get("XAI_MODE", "").strip()
+        try:
+            client, as_of = begin_client(mode, recording, args.as_of)
+        except MissingAPIKey:
+            if not fallback:
+                raise
+            print(REPLAY_NOTICE, file=sys.stderr, flush=True)
+            mode, recording = "replay", _covering_recording(path)
+            if recording is None:
+                print(NEEDS_KEY.format(file=path.name), file=sys.stderr)
+                return 1
+            client, as_of = begin_client(mode, recording, args.as_of)
+        if mode == "replay" and not is_recorded(path, client):
+            print(NEEDS_KEY.format(file=path.name), file=sys.stderr)
+            return 1
     except MissingAPIKey as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -93,6 +115,16 @@ def main(argv: list[str] | None = None) -> int:
     _write_log(path, result)
     print(json.dumps(_result_line(path, result)), flush=True)
     return 0
+
+
+def _covering_recording(path: Path) -> str | None:
+    """The first committed recording that holds this invoice, or None."""
+
+    for name in FALLBACK_RECORDINGS:
+        recording = RECORDINGS / name
+        if recording.is_file() and is_recorded(path, GrokClient(mode="replay", recording=recording)):
+            return str(recording)
+    return None
 
 
 def _write_log(path: Path, result: dict) -> None:
