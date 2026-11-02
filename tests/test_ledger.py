@@ -241,6 +241,39 @@ def test_two_writers_cannot_insert_the_same_invoice(tmp_path):
     assert len(paid_rows(ledger)) == 1
 
 
+def test_two_split_payments_cannot_both_land(tmp_path):
+    """Two writers can both see an empty window. The lock lets one pay."""
+
+    ledger = tmp_path / "payments.db"
+    barrier = threading.Barrier(2)
+    results = []
+
+    def write(number):
+        barrier.wait()
+        results.append(
+            record_payment(
+                ledger,
+                vendor="Split Synthetic Co.",
+                invoice_number=number,
+                revision=None,
+                total=Decimal("6000.00"),
+                currency="USD",
+                invoice_date="2026-04-01",
+                source_file=f"{number}.txt",
+                raw_text=number,
+            )
+        )
+
+    threads = [threading.Thread(target=write, args=(number,)) for number in ("INV-1", "INV-2")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results.count(True) == 1
+    assert results.count("SPLIT_INVOICE") == 1
+    assert len(paid_rows(ledger)) == 1
+
+
 def test_record_payment_is_only_called_from_the_payment_step():
     callers = []
     for path in ROOT.rglob("*.py"):

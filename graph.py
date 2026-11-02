@@ -54,7 +54,7 @@ def build_graph(
         ),
     )
     graph.add_node("payment", lambda state: payment(state, ledger_path))
-    graph.add_node("reject_log", reject_log)
+    graph.add_node("reject_log", lambda state: reject_log(state, ledger_path))
 
     graph.add_edge(START, "ingestion")
     graph.add_conditional_edges(

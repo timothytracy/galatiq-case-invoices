@@ -23,3 +23,10 @@ def tools_default_on(monkeypatch):
     monkeypatch.delenv("XAI_TOOLS", raising=False)
     monkeypatch.delenv("XAI_MODE", raising=False)
     monkeypatch.delenv("XAI_RECORDING", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def release_records(tmp_path, monkeypatch):
+    """Pipeline release records stay out of the repo logs/ directory."""
+
+    monkeypatch.setenv("INVOICE_RELEASE_DIR", str(tmp_path / "releases"))

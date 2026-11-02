@@ -114,3 +114,13 @@ XAI_TOOLS=0 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 Audit tools are on by default, so the `_tools` files match a run with `XAI_TOOLS` unset. `samples.jsonl`, `unseen.jsonl`, and `ordered.jsonl` match `XAI_TOOLS=0`. A mismatch changes the audit prompt, the fingerprint misses, and the invoice is a `SYSTEM_ERROR` hold. Nothing is paid. A miss is not a live call.
 
 CI runs those six after the tests and does not set an API key. The scores from the 2026-11-01 PT replays are in [METRICS.md](METRICS.md).
+
+## 7. Releasing a held invoice
+
+A reviewer can pay a hold without the review screen. The command runs the offline pipeline on two real files, then calls `approve_and_pay`. The ledger and the decision log are temporary. It does not call the model.
+
+```bash
+python3 scripts/approve_hold_demo.py --demo
+```
+
+`invoice_1012.txt` is a `VENDOR_RENAMED` hold. The mock line is `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. The decision record says `paid` and `pipeline_outcome` stays `hold`. `invoice_1002.txt` is a stock shortfall. It stays unpaid, `decision` `held`, reason `NOT_PAYABLE`, and `pipeline_outcome` stays `reject`. The review screen does not call `approve_and_pay` yet.

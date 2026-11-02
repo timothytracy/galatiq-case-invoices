@@ -14,9 +14,9 @@ from ledger import arrival_findings, record_payment
 _USED_KEYS: set[str] = set()
 
 
-def payment(state: PipelineState, ledger_path=None) -> dict:
+def payment(state: PipelineState, ledger_path=None, *, release: bool = False) -> dict:
     invoice = state.invoice
-    blocked = _payment_blocked(state)
+    blocked = "" if release else _payment_blocked(state)
     refusal = blocked or _authorization_refusal(state)
     auth = state.authorization
     findings = list(state.findings)
@@ -31,12 +31,22 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
             detail=refusal or "payment blocked",
         )
     else:
-        # The row is written before the mock call. A miss pays nothing.
+        # The release record is written before the ledger row. A failed write
+        # pays nothing and does not raise.
+        if not release:
+            from pipeline.approve_hold import remember
+            noted = remember(state, ledger_path)
+            if noted is not True:
+                return _hold_unreadable_ledger(
+                    state, findings, noted or "release record could not be written", release
+                )
         wrote = _write_ledger(state, ledger_path)
         if wrote is False:
-            return _refuse_duplicate(state, findings, ledger_path)
+            return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
+        if wrote == "SPLIT_INVOICE":
+            return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
         if wrote is not True:
-            return _hold_unreadable_ledger(state, findings, wrote)
+            return _hold_unreadable_ledger(state, findings, wrote, release)
         # Record the key before the mock call so a retry cannot pay twice.
         _USED_KEYS.add(auth.key)
         response = mock_payment(invoice.vendor, invoice.total)
@@ -56,16 +66,16 @@ def payment(state: PipelineState, ledger_path=None) -> dict:
     return {
         "payment": record,
         "findings": findings,
-        "logs": state.logs + [stage_log(state.filename, "payment", result)],
+        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
     }
 
 
 def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
     """True when there is no ledger, or the row was inserted.
 
-    False is a duplicate. A string is an unreadable ledger. None as the path
-    keeps the direct unit tests on the authorization key. The graph always
-    passes a path.
+    False is a duplicate. "SPLIT_INVOICE" is the split rule. Any other string
+    is an unreadable ledger. None as the path keeps the direct unit tests on
+    the authorization key. The graph always passes a path.
     """
 
     if ledger_path is None:
@@ -84,7 +94,7 @@ def _write_ledger(state: PipelineState, ledger_path) -> bool | str:
     )
 
 
-def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str) -> dict:
+def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str, release: bool = False) -> dict:
     """The ledger file could not be written. Nothing is paid."""
 
     findings = list(findings) + [
@@ -111,50 +121,51 @@ def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str) 
         "outcome": outcome,
         "reason_code": code,
         "action": action,
-        "logs": state.logs + [stage_log(state.filename, "payment", result)],
+        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
     }
 
 
-def _refuse_duplicate(state: PipelineState, findings: list, ledger_path) -> dict:
-    """Unique index hit. Nothing is paid. The outcome becomes a hold."""
+def _refuse_ledger(state, findings, ledger_path, code: str, release: bool) -> dict:
+    """The write lock refused the row. Nothing is paid."""
 
-    refusal = (
-        "payment refused: this vendor and invoice number are already in the payments ledger"
-    )
     extra = arrival_findings(ledger_path, state.invoice, state.raw_text)
-    if not any(item.code == "DUPLICATE_INVOICE" for item in extra):
-        extra = extra + [
-            Finding(
-                code="DUPLICATE_INVOICE",
-                message="This vendor and invoice number are already in the payments ledger.",
-                severity="warning",
-                item="invoice_number",
-            )
-        ]
-    findings = list(findings) + extra
-    findings.append(Finding(code=PAYMENT_REFUSED, message=refusal, severity="blocking"))
-    outcome, code, reason, action = explain(findings, state.invoice)
+    if code == "DUPLICATE_INVOICE":
+        detail = "payment refused: this vendor and invoice number are already in the payments ledger"
+        fallback = "This vendor and invoice number are already in the payments ledger."
+        item = "invoice_number"
+    else:
+        detail = "This invoice plus payments in the split window is over the approval threshold."
+        fallback = detail
+        item = "total"
+    if not any(found.code == code for found in extra):
+        extra = extra + [Finding(code=code, message=fallback, severity="warning", item=item)]
+    elif code == "SPLIT_INVOICE":
+        detail = next(found.message for found in extra if found.code == code)
+    findings = list(findings) + list(extra)
+    if code == "DUPLICATE_INVOICE":
+        findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
+    outcome, reason_code, reason, action = explain(findings, state.invoice)
     record = PaymentRecord(
         status="not_paid",
         vendor=state.invoice.vendor,
         amount=state.invoice.total,
         currency=state.invoice.currency,
-        detail=refusal,
+        detail=detail,
     )
     result = {
         "payment": record.model_dump(mode="json"),
         "outcome": outcome,
         "reason": reason,
-        "reason_code": code,
+        "reason_code": reason_code,
         "codes": finding_codes(findings),
     }
     return {
         "payment": record,
         "findings": findings,
         "outcome": outcome,
-        "reason_code": code,
+        "reason_code": reason_code,
         "action": action,
-        "logs": state.logs + [stage_log(state.filename, "payment", result)],
+        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
     }
 
 

@@ -102,13 +102,21 @@ The unique index on `(vendor_key, invoice_number)` refuses a second row, includi
 
 The in-memory authorization key still refuses a second use of the same audit key inside one process. Scored eval gives each invoice a fresh temporary ledger and deletes it when the call returns, so the answer keys stay as they are. `scripts/eval.py --ordered` runs `data/ordered_scenario.json` on one shared temporary ledger, not on `payments.db`. `python3 main.py --reset-ledger` deletes `payments.db` before that one file. A missing API key does not delete it, because the client is created first.
 
-The split and same-text checks run at validation and assume one process at a time. Two processes can each pay half of a split before either has written. The unique index does not stop that, because the invoice numbers differ.
+The split and same-text checks run at validation. The payment write checks them again inside the lock, so a second writer sees the first row. The unique index still refuses the same vendor and invoice number.
 
 A revision of a number that has not been paid is still only `REVISED_INVOICE`. On a fresh ledger, `invoice_1004_revised.json` is that case. Once `invoice_1004.json` has been paid, the revision is `DUPLICATE_INVOICE` and the revised-invoice finding stays. The ordered scenario is that second case: the step is a duplicate hold, and the scenario still requires `REVISED_INVOICE` on the finding list.
 
+## Releasing a hold
+
+`approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
+
+The pipeline's `logs/` directory is trusted the same way `payments.db` is. Anyone who can edit those files can edit the ledger. A release still re-checks the live source file and the live inventory without the model. Matching the vendor, invoice number, total, and each line's name and quantity is a sanity check: text that is already in the file passes, and that check does not show the record is unchanged. Before the release file is written, the run stores its sha256 in `payments.db` when the outcome is a payable hold, or NULL otherwise, and approval pays only when the file's sha256 equals that row.
+
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` is the list of holds a person may release. A hold is payable only when every finding, including the fresh validation, is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. A reject, any reject-class finding, or any other hold is never paid. An `AUDIT_ESCALATED` finding is not payable when `send_back_cap` is set or when its message is the send-back cap sentence. A number that only shares digits, or an OCR form such as `INV 1O12`, stays held. The total must be greater than zero, the currency must be USD, and the amount must equal the recorded total. One reviewer, with a name and a note, can release `FRAUD_CLUSTER` or `NEW_REMITTANCE`. A second approver for vendor-risk holds is the production next step.
+
 ## Known limitations / cut scope
 
-The payments ledger is the section above. The two gaps that remain are the write-before-the-mock and the single-process split check.
+The payments ledger is the section above. The gap that remains is the write-before-the-mock. The split check runs inside that write.
 
 USD reference prices are in `policy.toml`. The rush line on INV-1010 is a descriptor note and a price warning, not a reject. The EUR invoice is not price-checked. The inventory table is the four README rows and has no extra columns.
 
