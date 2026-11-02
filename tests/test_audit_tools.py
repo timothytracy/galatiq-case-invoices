@@ -12,7 +12,7 @@ from db import create_database, load_stock
 from graph import route_after_audit, run_invoice
 from main import _result_line, tool_calls_of
 from pipeline import audit
-from pipeline.audit import TOOLS_LINE, _audit_messages
+from pipeline.audit import LEDGER_LINE, TOOLS_LINE, _audit_messages
 from pipeline.critique import _critique_messages
 from pipeline.fact_guard import verified_payload
 from pipeline.payment import payment
@@ -268,6 +268,8 @@ def test_flag_off_audit_request_has_no_tools(db_path, monkeypatch):
     system = model.requests[0]["messages"][0]["content"]
     assert TOOLS_LINE not in system
     assert "lookup_item" not in system
+    assert "check_payment_ledger" not in system
+    assert "prior payment" not in system
     assert "verified_by_code" in model.requests[0]["messages"][1]["content"]
     assert "tool_calls" not in _audit_log(out)["result"]
     assert "tool_calls" not in _result_line(Path("x.txt"), out)
@@ -286,8 +288,10 @@ def test_tools_sentence_is_the_only_audit_prompt_change(monkeypatch):
     assert off[1] == on[1]
     assert TOOLS_LINE not in off[0]["content"]
     assert on[0]["content"] == off[0]["content"].replace(
-        "Return JSON only.", f"{TOOLS_LINE} Return JSON only."
+        "Return JSON only.", f"{TOOLS_LINE} {LEDGER_LINE} Return JSON only."
     )
+    assert "check_payment_ledger" not in off[0]["content"]
+    assert "prior payment" not in off[0]["content"]
     assert critique_off == critique_on
     assert "lookup_item" not in critique_off[0]["content"]
 
@@ -349,6 +353,7 @@ def test_critique_sends_no_tools_even_when_the_flag_is_on(tmp_path, db_path, mon
                 "lookup_item",
                 "recompute_totals",
                 "get_policy_rule",
+                "check_payment_ledger",
             ]
             return {"content": handler(messages), "tool_calls": []}
 
