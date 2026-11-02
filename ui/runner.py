@@ -1,5 +1,6 @@
 """Run one invoice with Grok or the fake LLM, and read a saved run back."""
 
+import glob
 import io
 import json
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from db import create_database
+from db import create_database, inventory_db_path
 from graph import run_invoice
 from llm_client import GrokClient, load_dotenv
 from tests.fake_llm_eval import AS_OF, handler_for
@@ -35,7 +36,7 @@ def resolve_path(text: str) -> Path:
     path = Path(text.strip())
     return path if path.is_absolute() else ROOT / path
 def ensure_db(path: Path | None = None) -> Path:
-    db_path = path or DEFAULT_DB
+    db_path = path or inventory_db_path(DEFAULT_DB)
     if not db_path.exists():
         create_database(db_path)
     return db_path
@@ -71,31 +72,79 @@ def temporary_ledger() -> Path:
         path.unlink(missing_ok=True)
         raise RuntimeError("temporary ledger must not be payments.db")
     return path
-def run_one(path: Path, db_path: Path | None = None, *, live: bool = False, ledger_path: Path | None = None) -> dict:
+def recording_files(folder: Path | None = None) -> list[Path]:
+    """Committed replay recordings, sorted by file name."""
+    directory = folder or (ROOT / "recordings")
+    if not directory.is_dir():
+        return []
+    return sorted(path for path in directory.glob("*.jsonl") if path.is_file())
+
+
+def run_one(
+    path: Path,
+    db_path: Path | None = None,
+    *,
+    live: bool = False,
+    ledger_path: Path | None = None,
+    replay: Path | None = None,
+) -> dict:
     """One invoice. live=True uses GrokClient, the same client main.py constructs.
 
     The ledger is kept and returned on the entry. Live uses payments.db.
-    Offline uses the given file, or a new temporary ledger that is not payments.db.
-    The release sha is written into that same file, so approval must use it too.
+    Offline and replay use the given file, or a new temporary ledger that is
+    not payments.db. The release sha is written into that same file, so
+    approval must use it too. Replay sets XAI_MODE and XAI_RECORDING for this
+    call only, then restores them.
     """
     database = ensure_db(db_path)
-    if live:
-        llm, extra = GrokClient(), {}
+    env = None
+    if replay is not None:
+        recording = Path(replay)
+        env = {"XAI_MODE": "replay", "XAI_RECORDING": str(recording)}
+        ledger = _replay_ledger(ledger_path)
+        kind = "replay"
+    elif live:
         ledger = PAYMENTS_DB if ledger_path is None else Path(ledger_path)
+        kind = "grok"
     else:
-        llm = FakeLLM(handler_for(path))
-        extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
         ledger = temporary_ledger() if ledger_path is None else Path(ledger_path)
-    extra["ledger_path"] = ledger
-    started = time.perf_counter()
-    with redirect_stdout(io.StringIO()):
-        result = run_invoice(path, database, llm, **extra)
+        kind = "fake"
+    previous = {key: os.environ.get(key) for key in env} if env else None
+    if env:
+        os.environ.update(env)
+    try:
+        if kind == "fake":
+            llm = FakeLLM(handler_for(path))
+            extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
+        else:
+            llm, extra = GrokClient(), {}
+        extra["ledger_path"] = ledger
+        started = time.perf_counter()
+        with redirect_stdout(io.StringIO()):
+            result = run_invoice(path, database, llm, **extra)
+        elapsed = time.perf_counter() - started
+    finally:
+        if previous is not None:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
     return {
-        "elapsed_seconds": time.perf_counter() - started,
+        "elapsed_seconds": elapsed,
         "state": to_jsonable(result),
-        "llm": "grok" if live else "fake",
+        "llm": kind,
         "ledger_path": str(ledger),
     }
+
+
+def _replay_ledger(ledger_path: Path | None) -> Path:
+    """A temporary ledger. Replay never opens payments.db."""
+    if ledger_path is None or is_real_payments_db(ledger_path):
+        return temporary_ledger()
+    return Path(ledger_path)
+
+
 def pack(entries: list[dict]) -> dict:
     modes = {entry.get("llm") for entry in entries if entry.get("llm")}
     llm = modes.pop() if len(modes) == 1 else "mixed"
@@ -109,10 +158,10 @@ def save_run(path: Path, entries: list[dict]) -> Path:
     return path
 
 def load_run(path: Path) -> list[dict]:
-    files = sorted(path.glob("*.json")) if path.is_dir() else [path]
-    if path.is_dir() and not files:
-        raise ValueError(f"No JSON files in {path}")
-    if not path.is_dir() and not path.is_file():
+    files = _run_files(path)
+    if not files:
+        if path.is_dir() or _is_glob(path):
+            raise ValueError(f"No JSON files in {path}")
         raise ValueError(f"Run file not found: {path}")
     entries = []
     for item in files:
@@ -122,6 +171,30 @@ def load_run(path: Path) -> list[dict]:
             raise ValueError(f"{item.name} is not JSON") from exc
         entries.extend(parse_payload(payload, item.name))
     return entries
+
+def _is_glob(path: Path) -> bool:
+    return any(mark in str(path) for mark in "*?[")
+
+
+def _is_release_record(path: Path) -> bool:
+    """Payment release files sit next to run logs and are not runs."""
+    return path.name.endswith(".release.json")
+
+
+def _run_files(path: Path) -> list[Path]:
+    """JSON run logs. A directory or glob skips *.release.json payment records."""
+    if _is_glob(path):
+        matches = [Path(item) for item in sorted(glob.glob(str(path)))]
+        return [item for item in matches if item.is_file() and not _is_release_record(item)]
+    if path.is_dir():
+        return [
+            item for item in sorted(path.glob("*.json"))
+            if item.is_file() and not _is_release_record(item)
+        ]
+    if path.is_file():
+        return [path]
+    return []
+
 
 def parse_payload(payload, name: str = "") -> list[dict]:
     if isinstance(payload, dict) and payload.get("record") == "review_run":
@@ -173,9 +246,16 @@ def state_from_log(records: list) -> dict:
 
 def mode_label(entries: list[dict]) -> str:
     """How the shown run was produced. Empty when nothing has been loaded."""
-    modes = {entry.get("llm") for entry in entries if entry.get("llm") in {"fake", "grok"}}
+    modes = {entry.get("llm") for entry in entries if entry.get("llm") in {"fake", "grok", "replay"}}
     if modes == {"fake"}:
         return "Offline (fake LLM)"
     if modes == {"grok"}:
         return "Live (Grok)"
-    return "Live (Grok) and Offline (fake LLM)" if modes else ""
+    if modes == {"replay"}:
+        return "Replay (recorded Grok)"
+    if modes == {"fake", "grok"}:
+        return "Live (Grok) and Offline (fake LLM)"
+    if not modes:
+        return ""
+    names = {"grok": "Live (Grok)", "fake": "Offline (fake LLM)", "replay": "Replay (recorded Grok)"}
+    return " and ".join(names[mode] for mode in ("grok", "fake", "replay") if mode in modes)

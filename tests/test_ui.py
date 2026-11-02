@@ -1,6 +1,7 @@
 """Review screen: fake-LLM runs, saved logs, hold notes, and the Streamlit boot."""
 
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -41,7 +42,8 @@ from ui.present import (
 )
 from ui.reviews import load_reviews, record_review
 from ui.runner import (
-    PAYMENTS_DB, grok_key_set, is_real_payments_db, load_run, run_one, save_run, temporary_ledger,
+    PAYMENTS_DB, ensure_db, grok_key_set, is_real_payments_db, load_run, recording_files,
+    run_one, save_run, temporary_ledger,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -980,6 +982,145 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     assert "Paid northwind.txt." not in paid
     assert not app.exception
     assert (real.read_bytes() if real.exists() else None) == before
+
+
+def test_paid_status_after_approve_and_pay(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1012.txt")
+    _show(app, "Hold queue")
+    app.text_input(key="pay-reviewer-0-invoice_1012.txt").set_value("Ada")
+    app.text_area(key="pay-note-0-invoice_1012.txt").set_value("Same company.")
+    app.checkbox(key="pay-confirm-0-invoice_1012.txt").set_value(True)
+    _submit_pay(app, "invoice_1012.txt", 0)
+    queued = _visible(app)
+    assert "Paid" in queued
+    assert "9,975.00" in queued
+    assert "Not paid" not in queued
+    assert "Payment did not happen" not in queued
+    _show(app, "Invoice detail")
+    detail = _visible(app)
+    assert "Paid" in detail
+    assert "9,975.00" in detail
+    assert "Not paid" not in detail
+    assert "Payment did not happen" not in detail
+    assert "Payment happened." in detail
+
+
+def test_processing_the_same_invoice_twice_matches(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1001.txt")
+    first = _session_entry(app, "invoice_1001.txt")
+    assert first["state"]["outcome"] == "approve"
+    assert first["state"]["payment"]["status"] == "paid"
+    _process_path(app, "data/invoices/invoice_1001.txt")
+    shown = _visible(app)
+    assert "PAYMENT_REFUSED" not in shown
+    assert "already used" not in shown
+    second = _session_entry(app, "invoice_1001.txt")
+    assert second["state"]["outcome"] == first["state"]["outcome"]
+    assert second["state"]["payment"]["status"] == first["state"]["payment"]["status"]
+    assert second["ledger_path"] != first["ledger_path"]
+    assert not is_real_payments_db(second["ledger_path"])
+    body = json.dumps(second["state"])
+    assert "PAYMENT_REFUSED" not in body
+    assert "authorization key was already used" not in body
+
+
+def test_replay_mode_lists_recordings_and_runs_offline(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    names = [path.name for path in recording_files()]
+    assert {"ordered.jsonl", "samples.jsonl", "unseen.jsonl"} <= set(names)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    mode = next(radio for radio in app.sidebar.radio if radio.label == "Mode")
+    assert "Replay (recorded Grok)" in mode.options
+    mode.set_value("Replay (recorded Grok)").run()
+    assert not app.exception, app.exception
+    visible = _visible(app)
+    assert "Replay of a recorded Grok run" in visible
+    assert "no live model calls" in visible
+    recording = next(item for item in app.selectbox if item.label == "Recording")
+    assert "samples.jsonl" in recording.options
+    assert "ordered.jsonl" in recording.options
+    assert "unseen.jsonl" in recording.options
+    _process_path(app, "data/invoices/invoice_1002.txt")
+    played = _session_entry(app, "invoice_1002.txt")
+    assert played["llm"] == "replay"
+    assert played["state"]["outcome"] == "reject"
+    assert played["state"]["reason_code"] == "STOCK_SHORTFALL"
+    assert not is_real_payments_db(played["ledger_path"])
+    assert os.environ.get("XAI_MODE") != "replay"
+    assert not os.environ.get("XAI_API_KEY", "").strip()
+    _process_path(app, "data/extra_invoices/invoice_2108.txt")
+    missed = _visible(app)
+    assert "replay miss" in missed.lower()
+    assert "no recording for fingerprint" in missed
+
+
+def test_load_run_skips_release_records(tmp_path):
+    folder = tmp_path / "logs"
+    folder.mkdir()
+    log = folder / "invoice_1002.txt.json"
+    log.write_text(
+        json.dumps([
+            {
+                "record": "stage",
+                "stage": "reject_log",
+                "invoice_file": "invoice_1002.txt",
+                "result": {"outcome": "reject", "reason": "stock is short"},
+            },
+            {
+                "record": "result",
+                "file": "invoice_1002.txt",
+                "outcome": "reject",
+                "reason_code": "STOCK_SHORTFALL",
+                "action": "Send it back.",
+                "payment_status": "not_paid",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    release = folder / "data%2Finvoices%2Finvoice_1002.txt.release.json"
+    release.write_text(
+        json.dumps({"record": "release", "file": "data/invoices/invoice_1002.txt", "outcome": "reject"}),
+        encoding="utf-8",
+    )
+    loaded = load_run(folder)
+    assert len(loaded) == 1
+    assert loaded[0]["state"]["filename"] == "invoice_1002.txt"
+    assert loaded[0]["state"]["outcome"] == "reject"
+    assert loaded[0]["state"]["reason_code"] == "STOCK_SHORTFALL"
+    globbed = load_run(folder / "*.json")
+    assert len(globbed) == 1
+    assert globbed[0]["state"]["outcome"] == "reject"
+    assert globbed[0]["state"]["filename"] == "invoice_1002.txt"
+
+
+def test_ensure_db_honors_inventory_db(monkeypatch, tmp_path):
+    target = tmp_path / "custom-inventory.db"
+    monkeypatch.setenv("INVENTORY_DB", str(target))
+    found = ensure_db()
+    assert found == target
+    assert target.is_file()
+
+
+def _process_path(app, path: str) -> None:
+    app.text_input(key="invoice_path").set_value(path).run()
+    next(button for button in app.button if button.label == "Process this invoice").click().run()
+    assert not app.exception, app.exception
+
+
+def _session_entry(app, filename: str) -> dict:
+    found = [
+        entry for entry in app.session_state["entries"]
+        if (entry.get("state") or {}).get("filename") == filename
+    ]
+    assert found, filename
+    return found[-1]
 
 
 def _screen_text(entry: dict) -> str:
