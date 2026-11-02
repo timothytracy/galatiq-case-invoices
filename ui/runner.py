@@ -71,29 +71,31 @@ def temporary_ledger() -> Path:
         path.unlink(missing_ok=True)
         raise RuntimeError("temporary ledger must not be payments.db")
     return path
-def run_one(path: Path, db_path: Path | None = None, *, live: bool = False) -> dict:
+def run_one(path: Path, db_path: Path | None = None, *, live: bool = False, ledger_path: Path | None = None) -> dict:
     """One invoice. live=True uses GrokClient, the same client main.py constructs.
 
-    Offline runs pass a temporary payments ledger and delete it afterward.
-    They do not write payments.db.
+    The ledger is kept and returned on the entry. Live uses payments.db.
+    Offline uses the given file, or a new temporary ledger that is not payments.db.
+    The release sha is written into that same file, so approval must use it too.
     """
     database = ensure_db(db_path)
-    temporary = None
     if live:
         llm, extra = GrokClient(), {}
+        ledger = PAYMENTS_DB if ledger_path is None else Path(ledger_path)
     else:
         llm = FakeLLM(handler_for(path))
         extra = {"clock": FakeClock(), "rng": ZeroRandom(), "max_attempts": 5, "as_of": AS_OF}
-        temporary = temporary_ledger()
-        extra["ledger_path"] = temporary
+        ledger = temporary_ledger() if ledger_path is None else Path(ledger_path)
+    extra["ledger_path"] = ledger
     started = time.perf_counter()
-    try:
-        with redirect_stdout(io.StringIO()):
-            result = run_invoice(path, database, llm, **extra)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-    return {"elapsed_seconds": time.perf_counter() - started, "state": to_jsonable(result), "llm": "grok" if live else "fake"}
+    with redirect_stdout(io.StringIO()):
+        result = run_invoice(path, database, llm, **extra)
+    return {
+        "elapsed_seconds": time.perf_counter() - started,
+        "state": to_jsonable(result),
+        "llm": "grok" if live else "fake",
+        "ledger_path": str(ledger),
+    }
 def pack(entries: list[dict]) -> dict:
     modes = {entry.get("llm") for entry in entries if entry.get("llm")}
     llm = modes.pop() if len(modes) == 1 else "mixed"

@@ -6,9 +6,9 @@ The pipeline function is ``pipeline.approve_hold.approve_and_pay``:
 
 ``result`` is the pipeline result dict, the same object the run loaded or
 ``run_one`` stored. It is not a display row. ``amount`` is that invoice's
-extracted total, unchanged. ``demo=True`` tells the pipeline to use a
-temporary ledger, so an offline run never passes payments.db. This module
-does not check currency, amounts, or the ledger, and it does not pay.
+extracted total, unchanged. ``demo=True`` still receives ``ledger_path``: that must be the ledger the
+pipeline run wrote. Dropping it is refused. This module does not check
+currency, amounts, or the ledger, and it does not pay.
 
 The shaped result is ``status`` "paid" or "refused", plus ``result``,
 ``reason_code``, ``reason``, and ``payment_status`` from the pipeline.
@@ -65,7 +65,7 @@ def approve_and_pay(
         reviewer=reviewer,
         note=note,
         amount=amount,
-        ledger_path=None if demo else ledger_path,
+        ledger_path=ledger_path,
         log_path=log_path,
         demo=demo,
     )

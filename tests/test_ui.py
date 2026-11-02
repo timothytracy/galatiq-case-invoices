@@ -40,7 +40,9 @@ from ui.present import (
     tool_call_view,
 )
 from ui.reviews import load_reviews, record_review
-from ui.runner import grok_key_set, is_real_payments_db, load_run, run_one, save_run, temporary_ledger
+from ui.runner import (
+    PAYMENTS_DB, grok_key_set, is_real_payments_db, load_run, run_one, save_run, temporary_ledger,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -239,7 +241,7 @@ def test_live_mode_uses_the_cli_client_and_offline_does_not(monkeypatch, db_path
     monkeypatch.setattr("ui.runner.GrokClient", lambda: Stub())
     entry = run_one(ROOT / "data" / "invoices" / "invoice_1001.txt", db_path, live=True)
     assert calls["client"] == "Stub"
-    assert calls["kwargs"] == {}
+    assert calls["kwargs"] == {"ledger_path": PAYMENTS_DB}
     assert entry["llm"] == "grok"
 
 
@@ -662,7 +664,7 @@ def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch, tmp_pat
     assert refused["reason"] == "A reject is never paid."
     assert refused["payment_status"] == "not_paid"
     assert seen[0]["demo"] is True
-    assert seen[0]["ledger"] is None
+    assert seen[0]["ledger"] == ROOT / "payments.db"
     assert seen[0]["amount"] == "500.00"
     assert seen[0]["reviewer"] == "Ada"
     kind, text = pay_message(
@@ -749,8 +751,16 @@ def test_loaded_run_without_a_record_is_refused(monkeypatch, tmp_path):
     assert "chdir" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
     assert "chdir" not in (ROOT / "ui" / "runner.py").read_text(encoding="utf-8")
     state = saved_result(_review_hold("northwind.txt", "500.00", "USD", "VENDOR_RENAMED", "formerly"))
-    refused = approve_and_pay(
+    missing_ledger = approve_and_pay(
         state, reviewer="Ada", note="Same company.", amount=extracted_total(state), demo=True,
+    )
+    assert missing_ledger["result"] == "held"
+    assert missing_ledger["reason_code"] == "NOT_PAYABLE"
+    assert missing_ledger["reason"] == "A ledger is required."
+    ledger = temporary_ledger()
+    refused = approve_and_pay(
+        state, reviewer="Ada", note="Same company.", amount=extracted_total(state),
+        ledger_path=ledger, demo=True,
     )
     assert refused["result"] == "held"
     assert refused["reason_code"] == "NOT_PAYABLE"
@@ -774,7 +784,11 @@ def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatc
     before = {path.name for path in logs.glob("*.release.json")} if logs.is_dir() else set()
     real = ROOT / "payments.db"
     pay_before = real.read_bytes() if real.exists() else None
-    held = run_one(ROOT / "data" / "invoices" / "invoice_1012.txt", db_path, live=False)
+    ledger = temporary_ledger()
+    assert not is_real_payments_db(ledger)
+    held = run_one(
+        ROOT / "data" / "invoices" / "invoice_1012.txt", db_path, live=False, ledger_path=ledger,
+    )
     state = saved_result(held)
     assert held["llm"] == "fake"
     assert state["outcome"] == "hold"
@@ -786,24 +800,40 @@ def test_offline_process_writes_a_release_record_and_can_pay(db_path, monkeypatc
     assert str(record["invoice"]["total"]) == "9975.00"
     after = {path.name for path in logs.glob("*.release.json")} if logs.is_dir() else set()
     assert after == before
+    assert held["ledger_path"] == str(ledger)
+    assert ledger.is_file()
     paid = approve_and_pay(
-        state, reviewer="Ada", note="Same company.", amount=extracted_total(state), demo=True,
+        state, reviewer="Ada", note="Same company.", amount=extracted_total(state),
+        ledger_path=ledger, demo=True,
     )
     assert paid["result"] == "paid"
     assert paid["payment_status"] == "paid"
-    rejected = run_one(ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, live=False)
+    again = approve_and_pay(
+        state, reviewer="Ada", note="Same company.", amount=extracted_total(state),
+        ledger_path=ledger, demo=True,
+    )
+    assert again["result"] == "held"
+    assert again["reason_code"] == "NOT_PAYABLE"
+    assert "DUPLICATE_INVOICE" in again["reason"]
+    rejected = run_one(
+        ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, live=False, ledger_path=ledger,
+    )
     assert saved_result(rejected)["outcome"] == "reject"
     unpaid = approve_and_pay(
         saved_result(rejected),
         reviewer="Ada",
         note="Stock is short.",
         amount=extracted_total(saved_result(rejected)),
+        ledger_path=ledger,
         demo=True,
     )
     assert unpaid["result"] == "held"
+    assert unpaid["reason_code"] == "NOT_PAYABLE"
+    assert unpaid["reason"] == "A reject is never paid."
     assert unpaid["payment_status"] == "not_paid"
     assert (real.read_bytes() if real.exists() else None) == pay_before
     assert not (tmp_path / "payments.db").exists()
+    ledger.unlink(missing_ok=True)
 
 
 def test_pay_action_is_only_for_review_holds():
@@ -850,9 +880,10 @@ def test_offline_run_does_not_write_payments_db(db_path, monkeypatch, tmp_path):
     assert entry["llm"] == "fake"
     assert created
     ledger = created[0]
+    assert entry["ledger_path"] == str(ledger)
+    assert ledger.is_file()
     assert ledger.name != "payments.db"
     assert not is_real_payments_db(ledger)
-    assert not ledger.exists()
     assert not (tmp_path / "payments.db").exists()
     assert (real.read_bytes() if real.exists() else None) == before
 

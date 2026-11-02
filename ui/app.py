@@ -22,8 +22,8 @@ from ui.present import (
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
-    DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, load_run, mode_label, parse_payload,
-    resolve_path, run_one, save_run,
+    DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
+    mode_label, parse_payload, resolve_path, run_one, save_run, temporary_ledger,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
@@ -82,6 +82,20 @@ def _offline_releases(live: bool) -> None:
         path = Path(tempfile.mkdtemp(prefix="review-releases-"))
         st.session_state["release_dir"] = str(path)
     os.environ["INVOICE_RELEASE_DIR"] = str(path)
+
+def _session_ledger(live: bool) -> Path:
+    """The ledger the pipeline run and the later pay must share.
+
+    Offline uses one temporary file for the session. Live uses payments.db.
+    """
+    if live:
+        return PAYMENTS_DB
+    current = st.session_state.get("offline_ledger")
+    path = Path(current) if current else None
+    if path is None or not path.is_file() or is_real_payments_db(path):
+        path = temporary_ledger()
+        st.session_state["offline_ledger"] = str(path)
+    return path
 
 def screen_run(live: bool) -> None:
     st.header("Run or load")
@@ -367,7 +381,7 @@ def _process(paths: list[Path], live: bool, *, single: bool) -> None:
     try:
         for index, path in enumerate(paths, start=1):
             status.write(f"{path.name} ({index}/{len(paths)})")
-            rows.append(run_one(path, live=live))
+            rows.append(run_one(path, live=live, ledger_path=_session_ledger(live)))
             progress.progress(index / len(paths))
     except (MissingAPIKey, Exception) as exc:
         st.error(str(exc))
@@ -458,15 +472,15 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
         st.error(message)
     if missing:
         return False
-    demo = not live
     pipeline = saved_result(entry)
+    ledger = entry.get("ledger_path") or _session_ledger(live)
     result = approve_and_pay(
         pipeline,
         reviewer=reviewer.strip(),
         note=note.strip(),
         amount=extracted_total(pipeline),
-        ledger_path=None if demo else PAYMENTS_DB,
-        demo=demo,
+        ledger_path=ledger,
+        demo=not live,
     )
     st.session_state.setdefault("pay_results", {})[view["file"]] = result
     return True
