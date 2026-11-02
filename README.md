@@ -20,9 +20,11 @@ Live runs the same day matched those scores: samples 20/20 three times, unseen 2
 
 The review screen shows ten sample invoices from that recorded run.
 
-![Demo of the review screen replaying the recorded Grok run](docs/demo.gif)
+[![Demo of the review screen replaying the recorded Grok run](docs/demo.gif)](docs/demo.mp4)
 
-Demo: the review screen replays the recorded Grok run with no API key, shows approve, reject and hold outcomes with their reasons and audit trail, pays held invoice 1012 from the hold queue, and refuses a second payment ([full video](docs/demo.mp4)).
+**[Watch the full demo video (MP4)](docs/demo.mp4)**
+
+Demo: the review screen replays the recorded Grok run with no API key, shows approve, reject and hold outcomes with their reasons and audit trail, pays held invoice 1012 from the hold queue, and refuses a second payment.
 
 ### Business impact
 
