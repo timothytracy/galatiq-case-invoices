@@ -19,6 +19,7 @@ from llm_client import (
     AgentStepFailed,
     GrokClient,
     LLMError,
+    ModeError,
     call_with_retries,
     tool_request,
     tools_enabled,
@@ -826,39 +827,46 @@ def _canon(payload) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def test_zero_rollback_payload_is_byte_identical_to_request(monkeypatch):
+def test_off_values_match_the_plain_request(monkeypatch):
     captured = []
     _install_openai(monkeypatch, captured)
     client = GrokClient(api_key="test-key")
     messages = [{"role": "user", "content": "Return a JSON object."}]
     client.request(messages)
     plain = _canon(captured[0])
-    for value in ("0", " 0 ", "0\n"):
+    for value in ("0", " 0 ", "0\n", "false", "FALSE", " off ", "no", "No"):
         monkeypatch.setenv("XAI_TOOLS", value)
         tool_request(client, example_registry())(
             [{"role": "user", "content": "Return a JSON object."}]
         )
-    assert len(captured) == 4
-    assert _canon(captured[1]) == plain
-    assert _canon(captured[2]) == plain
-    assert _canon(captured[3]) == plain
+    assert len(captured) == 9
     assert "tools" not in captured[0]
     assert "tool_choice" not in captured[0]
     assert captured[0]["temperature"] == 0
     assert captured[0]["messages"] == messages
     assert captured[0]["model"] == DEFAULT_MODEL
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    tool_request(client, example_registry())(
-        [{"role": "user", "content": "Return a JSON object."}]
-    )
-    assert captured[4]["tools"] == example_registry().schemas()
-    assert captured[4]["tool_choice"] == "auto"
-    assert _canon(captured[4]) != plain
+    for sent in captured[1:]:
+        assert _canon(sent) == plain
+    on = []
+    for value in (None, "", "   ", "1", " 1 "):
+        if value is None:
+            monkeypatch.delenv("XAI_TOOLS", raising=False)
+        else:
+            monkeypatch.setenv("XAI_TOOLS", value)
+        tool_request(client, example_registry())(
+            [{"role": "user", "content": "Return a JSON object."}]
+        )
+        on.append(_canon(captured[-1]))
+    assert on[0] == on[1] == on[2] == on[3] == on[4]
+    assert captured[-1]["tools"] == example_registry().schemas()
+    assert captured[-1]["tool_choice"] == "auto"
+    assert on[0] != plain
 
 
-@pytest.mark.parametrize("value", ["0", " 0 ", "0\n"])
+@pytest.mark.parametrize("value", ["0", " 0 ", "false", "FALSE", "off", "OFF", "no", " No "])
 def test_flag_off_sends_no_tools(value, monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", value)
+    assert tools_enabled() is False
     model = ScriptedToolModel([text_step(ANSWER), _echo()])
     log = []
     text = tool_request(model, example_registry(), log)(
@@ -872,18 +880,12 @@ def test_flag_off_sends_no_tools(value, monkeypatch):
     assert model.steps[0]["tool_calls"]
 
 
-@pytest.mark.parametrize("value", ["0", " 0 ", "0\n"])
-def test_only_zero_turns_tools_off(value, monkeypatch):
-    monkeypatch.setenv("XAI_TOOLS", value)
-    assert tools_enabled() is False
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["1", "true", "yes", "on", "TRUE", "false", "no", "off", "", "2", "00", "0.0", "maybe"],
-)
-def test_other_values_leave_tools_on(value, monkeypatch):
-    monkeypatch.setenv("XAI_TOOLS", value)
+@pytest.mark.parametrize("value", [None, "", "   ", "1", " 1 ", "1\n"])
+def test_on_values_leave_tools_on(value, monkeypatch):
+    if value is None:
+        monkeypatch.delenv("XAI_TOOLS", raising=False)
+    else:
+        monkeypatch.setenv("XAI_TOOLS", value)
     assert tools_enabled() is True
     model = ScriptedToolModel([text_step(ANSWER)])
     text = tool_request(model, example_registry())(
@@ -894,12 +896,32 @@ def test_other_values_leave_tools_on(value, monkeypatch):
     assert model.tool_requests[0]["tools"] == example_registry().schemas()
 
 
-def test_unset_xai_tools_leaves_tools_on(monkeypatch):
-    monkeypatch.delenv("XAI_TOOLS", raising=False)
-    assert tools_enabled() is True
+@pytest.mark.parametrize("value", ["true", "yes", "on", "TRUE", "2", "00", "0.0", "maybe"])
+def test_unrecognized_xai_tools_is_an_error(value, monkeypatch):
+    monkeypatch.setenv("XAI_TOOLS", value)
+    with pytest.raises(ModeError) as caught:
+        tools_enabled()
+    message = str(caught.value)
+    assert value.strip().lower() in message
+    assert "0, false, off, and no" in message
 
 
-@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE"])
+def test_unrecognized_xai_tools_stops_before_any_invoice(tmp_path, monkeypatch, capsys):
+    from main import main as process_main
+    from scripts.eval import main as eval_main
+
+    monkeypatch.setenv("XAI_TOOLS", "maybe")
+    invoice = tmp_path / "a.txt"
+    invoice.write_text("Vendor: Widgets Inc.\n", encoding="utf-8")
+    assert process_main(["--invoice_path", str(invoice)]) == 2
+    assert "maybe" in capsys.readouterr().err
+    assert eval_main(["--replay", "recordings/samples.jsonl"]) == 2
+    captured = capsys.readouterr()
+    assert "maybe" in captured.err
+    assert "score" not in captured.out
+
+
+@pytest.mark.parametrize("value", ["1", " 1 "])
 def test_flag_on_sends_tools_on_the_wire(value, monkeypatch):
     monkeypatch.setenv("XAI_TOOLS", value)
     captured = []
