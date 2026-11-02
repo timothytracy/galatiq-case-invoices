@@ -1,6 +1,6 @@
 # Decision policy
 
-**Status:** Approved by the captain on 2026-10-31. The code now matches this policy.
+**Status:** Approved on 2026-10-31. The code now matches this policy.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ Reject means the vendor must send something new. Every reject names that next st
 |---|---|
 | Missing required field (vendor, due date, line items, total) | Resend the invoice with the missing field filled in. |
 | Quantity that is zero, negative, or not a number | Resend with corrected quantities. |
-| Unknown item | Resend with the correct item name. Code adds "Likely meant X." only when exactly one inventory name is one letter away, after case, spaces, and hyphens are removed. The item is still rejected and is never substituted. Approved by the captain on 2026-11-01. |
+| Unknown item | Resend with the correct item name. Code adds "Likely meant X." only when exactly one inventory name is one letter away, after case, spaces, and hyphens are removed. The item is still rejected and is never substituted. Approved on 2026-11-01. |
 | Stock shortfall | Resend for the quantity in stock, or amend the PO. |
 | Total or line-math mismatch | Resend with corrected totals. |
 | Unreadable file | Resend in a readable format. |
@@ -45,9 +45,9 @@ Hold only when a person can do something the system can't. Every hold names that
 | Item name not in source text | Check the item name against the invoice. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
-An extracted item name that is not in the invoice text is a hold (`ITEM_NOT_IN_SOURCE`). The text is the file contents for `.txt`, JSON, CSV, and XML, and the PDF text layer for a PDF. Every supported format has that text. If it is missing or empty, the check fails closed and the invoice is held. A parenthetical descriptor is already split off, so the base name must still appear: "WidgetA (rush order)" is checked as WidgetA. The comparison removes case, spaces, and hyphens, the same way item matching does. The name is not corrected, and nothing is paid. The outcome comes from the code (HOLD_CODES), not the severity field. Severity blocking is kept for rejects, so every hold finding carries warning. Approved by the captain on 2026-11-01.
+An extracted item name that is not in the invoice text is a hold (`ITEM_NOT_IN_SOURCE`). The text is the file contents for `.txt`, JSON, CSV, and XML, and the PDF text layer for a PDF. Every supported format has that text. If it is missing or empty, the check fails closed and the invoice is held. A parenthetical descriptor is already split off, so the base name must still appear: "WidgetA (rush order)" is checked as WidgetA. The comparison removes case, spaces, and hyphens, the same way item matching does. The name is not corrected, and nothing is paid. The outcome comes from the code (HOLD_CODES), not the severity field. Severity blocking is kept for rejects, so every hold finding carries warning. Approved on 2026-11-01.
 
-Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a hold on its own: reason "Unit price 50% or more above reference" (reason code PRICE_SPIKE). That spike is not a fraud signal and does not count toward the two-fraud-signal hold. A smaller difference, including a price below the reference, stays a price-variance warning. A spike line still records its price-variance warning. Non-USD invoices are not price-checked, because nothing is converted. The ratio is `price_spike_ratio` in `policy.toml`. Reject still beats this hold. Approved by the captain on 2026-10-31.
+Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a hold on its own: reason "Unit price 50% or more above reference" (reason code PRICE_SPIKE). That spike is not a fraud signal and does not count toward the two-fraud-signal hold. A smaller difference, including a price below the reference, stays a price-variance warning. A spike line still records its price-variance warning. Non-USD invoices are not price-checked, because nothing is converted. The ratio is `price_spike_ratio` in `policy.toml`. Reject still beats this hold. Approved on 2026-10-31.
 
 ## Warnings
 
@@ -70,7 +70,7 @@ Item names are matched exactly, after normalizing only case, spaces, and hyphens
 - **Duplicates are out of scope.** This is a known limitation. The production fix is a check against a payments ledger.
 - **No payment without an audit PASS.**
 - **Non-USD is never paid.**
-- **Critique and audit can only tighten.** Critique may set aside three things: a stock claim for an item whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit may set aside that same future-date claim. Every other concern is kept, including the audit's notes that the raw text and the extraction disagree. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged. Neither step can loosen a decision. Approved by the captain on 2026-11-01.
+- **Critique and audit can only tighten.** Critique may set aside three things: a stock claim for an item whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit may set aside that same future-date claim. Every other concern is kept, including the audit's notes that the raw text and the extraction disagree. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged. Neither step can loosen a decision. Approved on 2026-11-01.
 
 ## Alignment with the original README
 
@@ -81,9 +81,9 @@ We keep the README's groupings:
 - 1009 is a data-integrity problem.
 - 1001, 1004, and 1006 pass validation.
 
-The captain's call: **1003 is a Reject (stock shortfall).** Its urgency and wire-transfer signals are recorded as findings and named in the reason.
+Decided on 2026-10-31: **1003 is a Reject (stock shortfall).** Its urgency and wire-transfer signals are recorded as findings and named in the reason.
 
-The captain's call: **a non-commercial address flagged on an otherwise clean invoice that the README lists as passing is noted, not held.** So 1004 (742 Evergreen Terrace) is an Approve with the address recorded as a warning.
+Decided on 2026-10-31: **a non-commercial address flagged on an otherwise clean invoice that the README lists as passing is noted, not held.** So 1004 (742 Evergreen Terrace) is an Approve with the address recorded as a warning.
 
 ## Known follow-ups
 
