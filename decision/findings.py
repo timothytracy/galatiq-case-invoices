@@ -196,8 +196,9 @@ def _amount_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
 
     The amount in words must match every printed total and the extracted total.
     A stated amount owed that is above zero and below the total means the total
-    is not what is owed. A zero, a previous balance, or the same amount as the
-    total is not that. Neither amount is paid automatically.
+    is not what is owed. A zero, a previous or account balance, a trailing
+    credit, or the same amount as the total is not that. Neither amount is
+    paid automatically.
     """
 
     findings: list[Finding] = []

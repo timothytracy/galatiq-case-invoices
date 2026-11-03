@@ -15,17 +15,20 @@ _WORDS = re.compile(
     r"""(?imx)(?:amount|total)[\s_]+in[\s_]+words["'>]?\s*[:=>]\s*["']?([^\n"'<]+)"""
 )
 # An amount the page says is owed. The separator is optional, as on a total line,
-# and a CSV row may use a comma. Not a previous or prior balance, and not a
-# balance brought forward. "Total Due" is an amount owed, not only a second total.
+# and a CSV row may use a comma. Not a previous, prior, account, or credit
+# balance, and not a balance brought forward. A trailing "credit" is not owed.
+# "Total Due" and "Please remit" are amounts owed, not only a second total.
 _BALANCE = re.compile(
     rf"""(?imx)
     (?<![a-z_])
     (?<!previous[\s_])(?<!prior[\s_])
+    (?<!account[\s_])(?<!credit[\s_])
     (?:
         balance(?![\s_]+forward)(?:[\s_]+(?:due|owing|payable))?
         | amount[\s_]+(?:due|payable)
         | remaining[\s_]+to[\s_]+pay
         | total[\s_]+due
+        | please[\s_]+remit
     )
     (?:\s*\([^)\n]*\))?
     ["'>]?
@@ -36,6 +39,7 @@ _BALANCE = re.compile(
     \s*({_NUMBER})
     """
 )
+_TRAILING_CREDIT = re.compile(r"(?i)\s*credit\b")
 
 _SMALL = {
     word: value
@@ -77,9 +81,17 @@ def printed_totals(raw_text: str | None) -> list[Decimal]:
 
 
 def balances_due(raw_text: str | None) -> list[Decimal]:
-    """Every amount printed on a balance-due or amount-due line."""
+    """Every amount the page says is owed. A trailing credit is not included."""
 
-    return _amounts(_BALANCE, raw_text)
+    text = raw_text or ""
+    found = []
+    for match in _BALANCE.finditer(text):
+        if _TRAILING_CREDIT.match(text[match.end():]):
+            continue
+        value = _money(match.group(1))
+        if value is not None:
+            found.append(value)
+    return found
 
 
 def _whole(words: list[str]) -> int | None:
