@@ -213,10 +213,13 @@ def test_policy_enum_excludes_process_codes_and_rejects_an_invalid_code(db_path,
     )
     enum = schema["function"]["parameters"]["properties"]["code"]["enum"]
     assert _PROCESS.isdisjoint(enum)
+    # Validation holds these before audit runs, so they stay out of the schema.
+    validation_only = {"AMOUNT_WORDS_MISMATCH", "BALANCE_DUE"}
+    assert validation_only.isdisjoint(enum)
     assert enum == [
         code
         for code in (*REJECT_CODES, *HOLD_CODES, *WARNING_CODES)
-        if code not in _PROCESS and code in RULE_TEXT
+        if code not in _PROCESS and code not in validation_only and code in RULE_TEXT
     ]
     assert "NEAR_THRESHOLD" not in enum
     for code in ("SYSTEM_ERROR", "AUDIT_NOTE", "MADE_UP"):

@@ -19,6 +19,7 @@ from decision.invoice_fields import (
 )
 from decision.outcome import REJECT_CODES
 from decision.policy import APPROVAL_THRESHOLD_USD, POLICY
+from decision.printed_amounts import amount_in_words, balances_due, printed_totals
 from decision.wording import explain
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%d-%B-%Y", "%B %d, %Y", "%b %d, %Y")
@@ -96,12 +97,14 @@ def collect_findings(
         *_stock_findings(invoice, stock),
         *_source_findings(invoice, raw_text),
         *_math_findings(invoice),
+        *_amount_findings(invoice, raw_text),
         *_identity_findings(invoice, raw_text, currency, blob),
         *fraud,
         *_price_findings(invoice, stock, currency),
         *_descriptor_findings(invoice),
         *_note_findings(invoice, raw_text, currency),
     ]
+    findings = _words_explain_total(findings, invoice, raw_text)
     cluster = _cluster_finding(findings, invoice, currency, bool(_NEW_ACCOUNT.search(blob)), fraud)
     if cluster is not None:
         findings.append(cluster)
@@ -185,6 +188,75 @@ def _source_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
         )
         for line in invoice.line_items
         if not name_in_source(line.item, raw_text)
+    ]
+
+
+def _amount_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
+    """Holds read from the page itself, whatever total the extraction chose.
+
+    The amount in words must match every printed total and the extracted total.
+    A stated amount owed that is above zero and below the total means the total
+    is not what is owed. A zero, a previous balance, or the same amount as the
+    total is not that. Neither amount is paid automatically.
+    """
+
+    findings: list[Finding] = []
+    totals = printed_totals(raw_text)
+    if invoice.total is not None:
+        totals.append(invoice.total)
+    words = amount_in_words(raw_text)
+    if words is not None:
+        clash = next((total for total in totals if different(total, words)), None)
+        if clash is not None:
+            findings.append(
+                _finding(
+                    "AMOUNT_WORDS_MISMATCH",
+                    (
+                        f"Printed total {show_money(clash)} does not match the amount "
+                        f"in words ({show_money(words)})."
+                    ),
+                    item="total",
+                )
+            )
+    if totals:
+        billed = max(totals)
+        lower = [
+            balance
+            for balance in balances_due(raw_text)
+            if balance > 0 and balance < billed and different(balance, billed)
+        ]
+        if lower:
+            findings.append(
+                _finding(
+                    "BALANCE_DUE",
+                    (
+                        f"Balance due {show_money(min(lower))} is lower than the invoice "
+                        f"total {show_money(billed)}. The total is not what is owed."
+                    ),
+                    item="total",
+                )
+            )
+    return findings
+
+
+def _words_explain_total(
+    findings: list[Finding], invoice: ExtractedInvoice, raw_text: str
+) -> list[Finding]:
+    """When the words match the lines and only the printed total disagrees,
+    the page states two totals. That is a hold for a person, not a resend:
+    the total-line mismatch stays recorded as a warning. Nothing is paid."""
+
+    words = amount_in_words(raw_text)
+    if words is None or not any(item.code == "AMOUNT_WORDS_MISMATCH" for item in findings):
+        return findings
+    expected = _expected_total(invoice)
+    if expected is None or different(expected, words):
+        return findings
+    return [
+        item.model_copy(update={"severity": "warning"})
+        if item.code == "TOTAL_MISMATCH" and item.item == "total"
+        else item
+        for item in findings
     ]
 
 
@@ -504,6 +576,25 @@ def _raw_has_ocr_o(raw_text: str) -> bool:
         if "O" in token and any(character.isdigit() for character in token):
             return True
     return False
+
+
+def _expected_total(invoice: ExtractedInvoice) -> Decimal | None:
+    """Lines (or the printed subtotal), plus tax and shipping. None when a line has no amount."""
+
+    if not invoice.line_items:
+        return None
+    line_sum = Decimal("0")
+    for line in invoice.line_items:
+        if line.unit_price is not None:
+            line_sum += as_money(line.quantity * line.unit_price)
+        elif line.amount is not None:
+            line_sum += line.amount
+        else:
+            return None
+    base = invoice.subtotal if invoice.subtotal is not None else as_money(line_sum)
+    tax = invoice.tax_amount if invoice.tax_amount is not None else Decimal("0")
+    shipping = invoice.shipping if invoice.shipping is not None else Decimal("0")
+    return as_money(base + tax + shipping)
 
 
 def _math_findings(invoice: ExtractedInvoice) -> list[Finding]:

@@ -656,7 +656,7 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert "MISS" not in replayed_out
 
 
-_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl"}
+_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl"}
 _RECORDING = re.compile(r"recordings/([A-Za-z0-9_.-]+\.jsonl)")
 
 
@@ -691,7 +691,7 @@ def test_documented_replay_commands_match_the_recording():
     for path in docs:
         commands.extend(_eval_commands(path.read_text(encoding="utf-8")))
     ci = _ci_commands((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    assert len(ci) == 3
+    assert len(ci) == 4
     for command, name in commands + ci:
         assert name in _RECORDINGS, command
         assert (ROOT / "recordings" / name).is_file(), command
@@ -722,6 +722,11 @@ def test_every_provided_invoice_is_recorded_once():
     assert all(is_recorded(path, unseen) for path in extra)
     assert not any(is_recorded(path, unseen) for path in provided)
     assert not any(is_recorded(path, samples) for path in extra)
+    loop = GrokClient(mode="replay", recording=ROOT / "recordings" / "loop.jsonl")
+    loop_files = _invoices(ROOT / "data" / "loop_invoices")
+    assert len(loop_files) == 3
+    assert all(is_recorded(path, loop) for path in loop_files)
+    assert not any(is_recorded(path, loop) for path in provided + extra)
     assert samples.usage_summary()["total_tokens"] == 0
 
 

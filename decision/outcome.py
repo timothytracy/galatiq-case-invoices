@@ -23,6 +23,8 @@ REJECT_CODES = (
 # revision is named as a duplicate and the revision finding stays recorded.
 # PRICE_SPIKE follows FRAUD_CLUSTER, so a cluster stays the named reason
 # when a spiked price is present too.
+# AMOUNT_WORDS_MISMATCH and BALANCE_DUE are questions about which amount the
+# vendor bills. They come after the do-not-pay holds and are never payable.
 HOLD_CODES = (
     "SYSTEM_ERROR",
     "BAD_REASONING",
@@ -31,6 +33,8 @@ HOLD_CODES = (
     "CREDIT_NOTE",
     "DUPLICATE_INVOICE",
     "SPLIT_INVOICE",
+    "AMOUNT_WORDS_MISMATCH",
+    "BALANCE_DUE",
     "REVISED_INVOICE",
     "VENDOR_RENAMED",
     "NEW_REMITTANCE",
@@ -54,8 +58,10 @@ HOLD_CODES = (
 #     send-back cap (see SEND_BACK_CAP_MESSAGE), which is rerun-by-hand.
 # Reject codes are not here. The other holds stay unpaid: SYSTEM_ERROR and
 # BAD_REASONING are a failed run, ITEM_NOT_IN_SOURCE is an extraction miss,
-# NON_USD is never converted, CREDIT_NOTE is a credit, and DUPLICATE_INVOICE
-# and SPLIT_INVOICE are already do-not-pay. A new hold code is unpaid until
+# NON_USD is never converted, CREDIT_NOTE is a credit, DUPLICATE_INVOICE
+# and SPLIT_INVOICE are already do-not-pay, and AMOUNT_WORDS_MISMATCH and
+# BALANCE_DUE would pay an amount the page does not settle (a person pays the
+# right amount by hand). A new hold code is unpaid until
 # it is added here.
 PAYABLE_HOLD_CODES = (
     "REVISED_INVOICE",
@@ -218,6 +224,12 @@ def blocks_release(code: str, finding=None) -> bool:
     return True
 
 
+def _severity(finding) -> str:
+    if isinstance(finding, dict):
+        return str(finding.get("severity") or "")
+    return str(getattr(finding, "severity", "") or "")
+
+
 def review_release_block(
     outcome: str | None,
     findings: list,
@@ -235,6 +247,9 @@ def review_release_block(
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
     for finding, code in zip(findings, codes):
+        # A downgraded total-line warning is not the reason release is refused.
+        if _severity(finding) == "warning" and code in REJECT_CODES:
+            continue
         if blocks_release(code, finding):
             return f"{code} is not a review hold and is never paid."
     if reason_code and blocks_release(reason_code):

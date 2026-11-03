@@ -43,6 +43,10 @@ KEY_REASON_TO_CODE = {
     price_spike_reason(): "PRICE_SPIKE",
     "Grok or system failure after retries": "SYSTEM_ERROR",
     "Item name not in source text": "ITEM_NOT_IN_SOURCE",
+    "Printed total and amount in words disagree": "AMOUNT_WORDS_MISMATCH",
+    "Balance due lower than the total": "BALANCE_DUE",
+    "Critique hold": "CRITIQUE_HOLD",
+    "Audit escalation": "AUDIT_ESCALATED",
 }
 
 # What a person does on a hold, or what the vendor must send on a reject.
@@ -69,6 +73,10 @@ ACTION = {
     "ITEM_NOT_IN_SOURCE": "Check the item name against the invoice.",
     "CRITIQUE_HOLD": "Review the critique concern. Nothing is paid.",
     "AUDIT_ESCALATED": "Rerun the invoice or process it by hand.",
+    "AMOUNT_WORDS_MISMATCH": "Confirm the amount with the vendor. Nothing is paid.",
+    "BALANCE_DUE": (
+        "Confirm the deposit or credit, then pay the balance by hand. Nothing is paid here."
+    ),
 }
 
 RULE_TEXT = {
@@ -109,6 +117,13 @@ RULE_TEXT = {
     "AUDIT_ESCALATED": "The audit escalated the invoice to a hold.",
     "UNREADABLE": "The invoice file could not be read.",
     "CRITIQUE_HOLD": "A critique concern other than the dollar threshold is a hold.",
+    "AMOUNT_WORDS_MISMATCH": (
+        "A printed total that disagrees with the amount in words is a hold. Neither is paid."
+    ),
+    "BALANCE_DUE": (
+        "A stated balance or amount due below the invoice total is a hold. "
+        "Neither the total nor the balance is paid automatically."
+    ),
 }
 
 PASSED_RULES = [
