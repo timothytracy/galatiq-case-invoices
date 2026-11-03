@@ -83,6 +83,7 @@ def test_replay_run_exposes_pipeline_fields(db_path, monkeypatch):
     assert [row["stage"] for row in paid_trail["rows"]] == [
         "ingestion",
         "validation",
+        "fraud_review",
         "approval",
         "audit",
         "payment",

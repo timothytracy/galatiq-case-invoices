@@ -8,13 +8,14 @@ How each of Acme's manual steps is replaced, and who owns each kind of hold, is 
 
 ## Agents
 
-`graph.py` wires a LangGraph `StateGraph`. Each agent is a node. Ingestion, approval, critique, and audit call Grok. Validation, payment, and `reject_log` are code. Critique returns to approval. Audit can send the extraction back to ingestion. Holds and rejects both end at `reject_log`. Nothing on that path is paid. Payment runs only after an audit PASS on an approve.
+`graph.py` wires a LangGraph `StateGraph`. Each agent is a node. Ingestion, fraud review, approval, critique, and audit call Grok. Validation, payment, and `reject_log` are code. Fraud review runs once per invoice, after validation passes and before approval. Critique returns to approval. Audit can send the extraction back to ingestion. Holds and rejects both end at `reject_log`. Nothing on that path is paid. Payment runs only after an audit PASS on an approve.
 
 ```mermaid
 flowchart TD
   startNode([Start]) --> ingestion
   ingestion["ingestion (Grok)"]
   validation["validation (code)"]
+  fraudReview["fraud_review (Grok)"]
   approval["approval (Grok)"]
   critique["critique (Grok)"]
   audit["audit (Grok)"]
@@ -23,7 +24,10 @@ flowchart TD
   finishNode([End])
   ingestion -->|"invoice extracted"| validation
   ingestion -->|"unreadable file or model failure"| rejectLog
-  validation -->|"checks pass"| approval
+  validation -->|"checks pass"| fraudReview
+  validation -->|"checks pass after a send-back"| approval
+  fraudReview -->|"pass, or a hold the code drops"| approval
+  fraudReview -->|"quoted hold or model failure"| rejectLog
   validation -->|"reject or hold"| rejectLog
   approval -->|"USD total over 10000 and critique not used"| critique
   approval -->|"otherwise"| audit
@@ -41,7 +45,7 @@ flowchart TD
 
 ### Why code decides
 
-Grok does the reading and the judging: it extracts the fields, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
 
 ### Rules
 
@@ -52,13 +56,14 @@ Grok does the reading and the judging: it extracts the fields, lists the risks, 
 - Replay runs this code on saved replies with no API key and no network, and a miss is a `SYSTEM_ERROR` hold that pays nothing.
 - A non-USD invoice is a hold, and nothing is converted.
 - Invoice 1003 is a stock reject, and its fraud signals stay on the record.
-- Invoice 1004 approves: a non-commercial address on a clean invoice the brief lists as passing is a warning.
+- Invoice 1004 is labeled approve: code records its non-commercial address as a warning. On this branch fraud review holds it, which is the recorded samples miss.
+- Fraud review can only add a hold, and the hold stands only when its quote is on the page. A failed fraud call is a `SYSTEM_ERROR` hold.
 
 ## Extended details
 
 How each agent does its job, and how it fails.
 
-Grok is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the OpenAI SDK at `https://api.x.ai/v1`. Temperature is 0.
+Grok is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the OpenAI SDK at `https://api.x.ai/v1`. Fraud review alone uses `grok-4.20-0309-reasoning`. Temperature is 0.
 
 ### Ingestion
 
@@ -71,6 +76,27 @@ An unreadable file is a reject, `UNREADABLE`. A model failure after the retries 
 Validation is Python. It checks required fields, quantities, unknown items, summed stock, line math within one cent, currency, revisions, credit notes, fraud wording, USD price spikes, and each item name against the source text.
 
 A reject or a hold stops here and never reaches approval, critique, or audit. A ledger it cannot read is a `SYSTEM_ERROR` hold. A missing or empty source text is an `ITEM_NOT_IN_SOURCE` hold. An unknown item stays a reject. The reason adds "Likely meant X." only when exactly one inventory name is one letter away, and the item is never substituted.
+
+### Fraud review
+
+Fraud review runs once per invoice, on an invoice that validation passed, before approval. A send-back does not run it again. It makes one call to `grok-4.20-0309-reasoning`, which has the same published rates as the default model; reasoning tokens are billed as output. Across the five recordings a review averaged $0.0035–$0.0047.
+
+The model sees the raw page text, the extracted vendor, address, invoice number, total, currency, payment terms, and notes, and the code's findings. The findings are context only. The model may hold an invoice with none and pass one with some, and every finding stays on the record as it was. It judges four kinds of red flag by meaning, not by keyword:
+
+- **Redirected payment.** The money would go to someone other than the vendor, or to a payee, account, or method that differs from the vendor's established one, or AP is asked to change its payment records.
+- **Discouraged verification.** The page steers AP away from confirming through contacts it already holds.
+- **Impersonated or unverifiable vendor.** The payee, sender, or contact does not match the vendor, or the vendor cannot be checked: a free email address for business matters, a mailbox-only address, or names that disagree across the page.
+- **Pressure to bypass checks.** Unexplained urgency, secrecy, or a request to skip a purchase order, an approval, or review.
+
+The red flags come from these sources. No phrase from a test invoice is in the prompt, and a test checks every four-word phrase of every invoice in `data/` against it.
+
+- FBI Sacramento, [business email compromise red flags](https://www.fbi.gov/contact-us/field-offices/sacramento/news/press-releases/sacramento-fbi-encourages-business-community-to-guard-against-and-report-business-email-compromise), and IC3 [PSA230609](https://www.ic3.gov/PSA/2023/PSA230609): changed payment instructions, spoofed or look-alike senders, urgency, and verifying through a known contact.
+- ACFE [fraud risk tests for billing schemes](https://legacy.acfe.com/fraudrisktools-tests.aspx), ACFE on [shell companies](https://www.acfe.com/fraud-resources/shell-companies), and the Journal of Accountancy, [Billing Schemes, Part 1](https://www.journalofaccountancy.com/issues/2002/jul/billingschemespart1shellcompaniesthatdontdeliver/): mailbox addresses, vendors that cannot be verified, and invoices without a purchase order.
+- AFP, [2025 Payments Fraud and Control Survey](https://7185359.fs1.hubspotusercontent-na1.net/hubfs/7185359/Research%20Surveys/SURVEYS/2025%20Payments%20Fraud%20and%20Control%20Survey%20Report%20Comprehensive.pdf): vendor impersonation at 60%, and accounts payable as the most vulnerable function at 56%.
+
+The reply is `verdict` (hold or pass), `innocent_reading`, `quote`, and `why`. Code decides what a hold means. It stands only when `innocent_reading` is not empty and the quote, after whitespace and case are normalized, is at least `fraud_quote_min_chars` long and appears in the raw text. A standing hold is `FRAUD_SUSPECTED`, a hold a reviewer can release. Any other hold is dropped and logged as `fraud_note` on the stage record; it is not a finding. A pass changes nothing.
+
+Retries used up, a reply that still fails the schema after the repair turn, or a replay miss is a `SYSTEM_ERROR` hold. Approval and audit do not run, and nothing is paid. An API outage therefore holds every invoice that passed validation, the same as an ingestion or audit failure.
 
 ### Approval
 
@@ -151,6 +177,7 @@ Hold when a person can do something the system cannot. Every hold names that act
 | Revised invoice | Confirm it replaces an unpaid original. If that original was already paid and the revision total is higher, pay only the difference. |
 | Labeled credit note whose math reconciles | Accounting applies the credit. Nothing is paid. |
 | Renamed vendor | Verify it is the same company. |
+| Fraud review held it, quoting the page | Verify payment details with the vendor using contact details already on file. |
 | Two or more fraud signals together (urgency pressure, wire-only payment, a new remittance account) | Verify with the vendor using contact details already on file. |
 | Unit price 50% or more above reference | Verify the price with the vendor. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
@@ -171,7 +198,7 @@ Warnings are recorded and shown. On their own they do not change the outcome.
 - A total within 2% under the $10,000 threshold, and still under it.
 - A unit price that differs from the reference by less than 50%, compared on `abs(unit_price)`.
 - A descriptor on an item name, such as "WidgetA (rush order)". The descriptor is split into a note and the item is matched as WidgetA.
-- A non-commercial vendor address. It is never a hold by itself.
+- A non-commercial vendor address. Code never holds on it by itself. Fraud review can, as it did on 1004.
 
 Item names are matched after normalizing case, spaces, and hyphens.
 
@@ -185,13 +212,13 @@ Item names are matched after normalizing case, spaces, and hyphens.
 - Non-USD is never paid. Nothing is converted.
 - Critique and audit can only tighten. Critique sets aside a stock claim whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit sets aside that same future-date claim. Every other concern is kept, including a disagreement between the raw text and the extraction. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
 
-Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 approves. A non-commercial address on a clean invoice the brief lists as passing is a warning. The revised file stays a hold because it is a revision.
+Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 is labeled approve. A non-commercial address on a clean invoice the brief lists as passing is a warning. On this branch fraud review holds it. The revised file stays a hold because it is a revision.
 
 ## Releasing a hold
 
 `approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
 
-`PAYABLE_HOLD_CODES` in `decision/outcome.py` lists the holds a person may release: `REVISED_INVOICE`, `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `PRICE_SPIKE`, `CRITIQUE_HOLD`, and `AUDIT_ESCALATED`. A hold is payable only when every saved finding and every fresh finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. `AUDIT_ESCALATED` is not payable when `send_back_cap` is set or the recorded message is the send-back cap sentence.
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` lists the holds a person may release: `REVISED_INVOICE`, `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, `PRICE_SPIKE`, `CRITIQUE_HOLD`, and `AUDIT_ESCALATED`. A hold is payable only when every saved finding and every fresh finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. `AUDIT_ESCALATED` is not payable when `send_back_cap` is set or the recorded message is the send-back cap sentence.
 
 A reject is never paid. Neither is a hold with a reject-class finding, or a closed hold: `ITEM_NOT_IN_SOURCE`, `NON_USD`, `CREDIT_NOTE`, `DUPLICATE_INVOICE`, `SPLIT_INVOICE`, `SYSTEM_ERROR`, or `BAD_REASONING`. The total must be greater than zero and the currency must be USD. The amount must equal the recorded total, or the unpaid difference when a higher revision arrives after that invoice was paid. An OCR number such as `INV 1O12` stays held.
 
@@ -213,6 +240,7 @@ The split and same-text checks run at validation, and the payment write checks t
 | `price_spike_ratio` | 0.50 | `abs(unit_price)` at least 50% above the USD reference is a `PRICE_SPIKE` hold. |
 | `reference_prices` | WidgetA 250, WidgetB 500, GadgetX 750 | USD references. A smaller gap stays a price-variance warning. |
 | `split_window_days` | 30 | Same vendor, printed dates inside this window. |
+| `fraud_quote_min_chars` | 12 | A fraud-review hold needs a quote at least this long, after normalizing, found in the raw text. |
 
 Retries back off 1, 2, 4, 8, then 16 seconds, plus up to 25% jitter. After those attempts, or on HTTP 400, 401, or 403, the invoice is a `SYSTEM_ERROR` hold and nothing is paid.
 
@@ -224,8 +252,11 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 
 - The fact guard trusts the category on the model's claim. A stock sentence labeled `other` is kept.
 - A `failed` ledger row blocks that invoice until a person removes it. There is no tool for that yet; it is a manual edit of `payments.db` after checking with the bank. A process killed between the reserve and the settle leaves a `pending` row, which blocks the same way.
-- One reviewer can release `FRAUD_CLUSTER` or `NEW_REMITTANCE`. A second approver for vendor-risk holds is the production next step.
+- One reviewer can release `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, or `NEW_REMITTANCE`. A second approver for vendor-risk holds is the production next step.
 - `logs/` is trusted the same way `payments.db` is. Anyone who can edit those files can edit the ledger.
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
+- Fraud review held 1004, a labeled approve, on its address. The quote check proves the text is on the page, not that it is fraud. The prompt says one routine detail such as an address is not enough, and the model held anyway. The prompt was not tuned after the runs.
+- The fraud set is five invoices written by the author. A 5/5 score there is a regression check, not a measured detection rate.
+- Fraud review cannot see a vendor master or the bank account on file, so "differs from the vendor's established payee" is judged from the page alone.
