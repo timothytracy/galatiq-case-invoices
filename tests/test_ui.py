@@ -20,8 +20,10 @@ from ui.pay import (
 from ui.present import (
     INVOICE_FIELDS,
     LINE_FIELDS,
+    shared_ledger_note,
     action_text,
     agent_trail,
+    already_paid_notice,
     blank,
     can_pay,
     concern_text,
@@ -32,6 +34,7 @@ from ui.present import (
     not_required,
     pay_block,
     pay_message,
+    payment_detail_text,
     payment_text,
     reason_code_text,
     show_text,
@@ -41,8 +44,8 @@ from ui.present import (
 )
 from ui.reviews import load_reviews, record_review
 from ui.runner import (
-    PAYMENTS_DB, ensure_db, grok_key_set, is_real_payments_db, load_run, recording_files,
-    run_one, save_run, temporary_ledger,
+    PAYMENTS_DB, ensure_db, grok_key_set, invoice_files, is_real_payments_db, load_run,
+    paid_ledger_row, recording_files, run_one, save_run, stage_upload, temporary_ledger,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -829,6 +832,10 @@ def test_replay_process_writes_a_release_record_and_can_pay(db_path, monkeypatch
     )
     assert paid["result"] == "paid"
     assert paid["payment_status"] == "paid"
+    assert paid["payment"]["reviewer"] == "Ada"
+    assert paid["payment"]["time"]
+    assert paid["payment"]["amount"]
+    assert paid["payment"]["currency"] == "USD"
     again = approve_and_pay(
         state, reviewer="Ada", note="Same company.", amount=extracted_total(state),
         ledger_path=ledger, demo=True,
@@ -1035,6 +1042,275 @@ def test_paid_status_after_approve_and_pay(monkeypatch):
     assert "Not paid" not in detail
     assert "Payment did not happen" not in detail
     assert "Payment happened." in detail
+    view = invoice_view(_session_entry(app, "invoice_1012.txt"))
+    text = payment_detail_text(view)
+    assert view["reason"]
+    assert view["reason"] not in text
+    assert "formerly" not in text
+    assert "Reviewer Ada" in text
+    assert "Amount 9,975.00 USD" in text
+    assert "Time " in text
+    assert "Authorization " in text
+    assert "detail" not in (view.get("payment") or {})
+    assert "Reviewer Ada" in detail
+    assert "Authorization " in detail
+
+
+def test_payment_detail_uses_facts_and_skips_the_hold_reason():
+    entry = _review_hold(
+        "northwind.txt", "500.00", "USD", "VENDOR_RENAMED", "The vendor name says formerly.",
+    )
+    entry["state"]["payment"]["detail"] = "The vendor name says formerly."
+    unpaid = invoice_view(entry)
+    assert unpaid["payment_status"] == "not_paid"
+    assert payment_detail_text(unpaid) == ""
+    entry["state"]["payment"] = {
+        "status": "paid",
+        "detail": "The vendor name says formerly.",
+        "amount": "500.00",
+        "currency": "USD",
+        "reviewer": "Ada",
+        "time": "2026-11-02T00:00:00Z",
+        "authorization": "data/invoices/northwind.txt:abc",
+    }
+    paid = invoice_view(entry)
+    text = payment_detail_text(paid)
+    assert "formerly" not in text
+    assert text == (
+        "Amount 500.00 USD. Reviewer Ada. Time 2026-11-02T00:00:00Z. "
+        "Authorization data/invoices/northwind.txt:abc."
+    )
+
+
+def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
+    """One ledger for the folder. Each invoice alone is the README sample score."""
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    ledger = temporary_ledger()
+    shared = [
+        run_one(path, db_path, replay=SAMPLES, ledger_path=ledger) for path in invoice_files()
+    ]
+    assert summarize(shared)["counts"] == {"approve": 6, "reject": 9, "hold": 5}
+    duplicate = invoice_view(next(
+        entry for entry in shared if entry["state"]["filename"] == "invoice_1011.txt"
+    ))
+    assert duplicate["outcome"] == "hold"
+    assert duplicate["reason_code"] == "DUPLICATE_INVOICE"
+    alone = invoice_view(run_one(
+        ROOT / "data" / "invoices" / "invoice_1011.txt", db_path, replay=SAMPLES,
+    ))
+    assert alone["outcome"] == "approve"
+    assert alone["payment_status"] == "paid"
+    revised = invoice_view(next(
+        entry for entry in shared if entry["state"]["filename"] == "invoice_1004_revised.json"
+    ))
+    assert revised["outcome"] == "hold"
+    assert revised["reason_code"] == "DUPLICATE_INVOICE"
+    revised_alone = invoice_view(run_one(
+        ROOT / "data" / "invoices" / "invoice_1004_revised.json", db_path, replay=SAMPLES,
+    ))
+    assert revised_alone["reason_code"] == "REVISED_INVOICE"
+    paid = invoice_view(next(
+        entry for entry in shared if entry["state"]["filename"] == "invoice_1001.txt"
+    ))
+    facts = payment_detail_text(paid)
+    assert "Amount 5,000.00 USD" in facts
+    assert "Time " in facts
+    assert "Authorization data/invoices/invoice_1001.txt:" in facts
+    assert "Authorization /" not in facts
+    assert "mock payment accepted" not in facts
+    assert paid["reason"] not in facts
+    held = invoice_view(next(
+        entry for entry in shared if entry["state"]["filename"] == "invoice_1012.txt"
+    ))
+    assert held["payment_status"] == "not_paid"
+    assert payment_detail_text(held) == ""
+    assert held["reason"] in held["payment"]["detail"]
+    note = shared_ledger_note()
+    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in note
+    assert "7 approve, 9 reject, and 4 hold" in note
+    paid_note = shared_ledger_note(
+        {"approve": 6, "reject": 9, "hold": 4}, released=1,
+    )
+    assert "The counts are 6 approve, 9 reject, 4 hold, and released after review 1" in paid_note
+    assert "6 approve" not in (ROOT / "ui" / "present.py").read_text(encoding="utf-8")
+    ledger.unlink(missing_ok=True)
+
+
+def test_pay_form_hides_when_the_ledger_already_paid_the_invoice(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    assert os.environ.get("INVOICE_RELEASE_DIR")
+    ledger = temporary_ledger()
+    pdf = run_one(
+        ROOT / "data" / "invoices" / "invoice_1012.pdf",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    text = run_one(
+        ROOT / "data" / "invoices" / "invoice_1012.txt",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    assert invoice_view(pdf)["outcome"] == "hold"
+    assert invoice_view(text)["outcome"] == "hold"
+    before = ledger.read_bytes()
+    assert paid_ledger_row(ledger, invoice_view(pdf)) is None
+    assert ledger.read_bytes() == before
+    app.session_state["entries"] = [pdf, text]
+    app.run()
+    _show(app, "Hold queue")
+    assert len(_pay_buttons(app)) == 2
+    app.text_input(key="pay-reviewer-0-invoice_1012.pdf").set_value("Ada")
+    app.text_area(key="pay-note-0-invoice_1012.pdf").set_value("Same company.")
+    app.checkbox(key="pay-confirm-0-invoice_1012.pdf").set_value(True)
+    _submit_pay(app, "invoice_1012.pdf", 0)
+    queued = _visible(app)
+    assert "Paid invoice_1012.pdf." in queued
+    assert "Already paid after review." in queued
+    assert not _pay_buttons(app)
+    other = invoice_view(next(
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1012.txt"
+    ))
+    row = paid_ledger_row(ledger, other)
+    assert row is not None
+    assert row["source_file"] == "invoice_1012.pdf"
+    assert row["status"] == "paid"
+    assert already_paid_notice(other, row) in queued
+    assert can_pay(other) is True
+    ledger.unlink(missing_ok=True)
+
+
+def test_upload_uses_the_existing_run_path(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    known = (ROOT / "data" / "invoices" / "invoice_1001.txt").read_bytes()
+    assert stage_upload("invoice_1001.txt", known) == ROOT / "data" / "invoices" / "invoice_1001.txt"
+    assert stage_upload("../../invoice_1001.txt", known) == ROOT / "data" / "invoices" / "invoice_1001.txt"
+    staged = stage_upload("../invoice_9001.txt", b"not a recorded invoice\n")
+    assert staged.name == "invoice_9001.txt"
+    assert staged.is_file()
+    assert not str(staged.resolve()).startswith(str((ROOT / "data").resolve()))
+
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("invoice_9001.txt", b"not a recorded invoice\n").run()
+    assert not app.exception, app.exception
+    missing = _visible(app)
+    assert "invoice_9001.txt is not in the recordings. Processing a new invoice needs XAI_API_KEY." in missing
+    assert not app.session_state["entries"]
+
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("invoice_1001.txt", known).run()
+    assert not app.exception, app.exception
+    entry = _session_entry(app, "invoice_1001.txt")
+    assert entry["state"]["outcome"] == "approve"
+    assert entry["state"]["payment"]["status"] == "paid"
+    assert entry["llm"] == "replay"
+    shown = _visible(app)
+    assert "Processed invoice_1001.txt." in shown
+    assert "A batch run is expected to give" not in shown
+
+
+def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    assert not app.exception, app.exception
+    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in _visible(app)
+    next(button for button in app.button if button.label == "Process data/invoices").click().run()
+    assert not app.exception, app.exception
+    shown = _visible(app)
+    assert "Processed 20 invoices." in shown
+    assert "approve 6, reject 9, hold 5" in shown
+    assert "The counts are 6 approve, 9 reject, and 5 hold" in shown
+    assert "A batch run is expected to give" not in shown
+    assert "7 approve, 9 reject, and 4 hold" in shown
+
+
+def _pay_1012(app, filename: str) -> None:
+    _show(app, "Hold queue")
+    app.text_input(key=f"pay-reviewer-0-{filename}").set_value("Ada")
+    app.text_area(key=f"pay-note-0-{filename}").set_value("Same company.")
+    app.checkbox(key=f"pay-confirm-0-{filename}").set_value(True)
+    _submit_pay(app, filename, 0)
+
+
+def _released_metrics(app) -> dict:
+    _show(app, "Metrics")
+    return {metric.label: metric.value for metric in app.metric}
+
+
+def test_pay_then_upload_copy_pays_once(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    _pay_1012(app, "invoice_1012.pdf")
+    _show(app, "Run or load")
+    original = (ROOT / "data" / "invoices" / "invoice_1012.txt").read_bytes()
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("renamed-1012.txt", original).run()
+    assert not app.exception, app.exception
+    shown = _visible(app)
+    assert "Processed renamed-1012.txt." in shown
+    assert "renamed-1012.txt" in shown
+    assert "A batch run is expected to give" not in shown
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    assert paid[0]["state"]["filename"] == "invoice_1012.pdf"
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    assert "already paid" in _visible(app)
+    again = (ROOT / "data" / "invoices" / "invoice_1012.pdf").read_bytes()
+    _show(app, "Run or load")
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("invoice_1012.pdf", again).run()
+    assert not app.exception, app.exception
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+
+
+def test_pay_then_rerun_keeps_the_payment(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    _pay_1012(app, "invoice_1012.pdf")
+    _show(app, "Run or load")
+    assert "A batch run is expected to give" not in _visible(app)
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    copies = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1012.pdf"
+    ]
+    assert len(copies) == 2
+    assert sum(invoice_view(entry)["payment_status"] == "paid" for entry in copies) == 1
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+
+
+def test_upload_directory_is_reused(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    first = stage_upload("fresh-one.txt", b"not a recorded invoice\n")
+    second = stage_upload("fresh-two.txt", b"still not recorded\n")
+    assert first.parent == second.parent
+    assert first.name == "fresh-one.txt"
+    assert second.name == "fresh-two.txt"
+    assert "review-upload-" in first.parent.name
 
 
 def test_processing_the_same_invoice_twice_matches(monkeypatch):

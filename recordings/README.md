@@ -2,11 +2,13 @@
 
 These JSONL files are saved model replies. Replay reads them and does not call the network, so a score can be checked with no API key.
 
-Three sets are committed. They were recorded on 2026-11-01 PT.
+Four sets are committed. Samples, unseen, and the ordered ledger were recorded on 2026-11-01 PT.
 
 - `recordings/samples.jsonl` scores `data/invoices/`
 - `recordings/unseen.jsonl` scores `data/extra_invoices/`
 - `recordings/ordered.jsonl` scores `data/ordered_scenario.json` on one shared ledger
+
+`recordings/loop.jsonl` scores the loop set, `data/loop_invoices/` against `data/loop_answer_key.json`. It is one live run, recorded on 2026-11-02 PT with `--as-of 2026-11-01`.
 
 A missing recording fails the run. A file that is present still exits 1 when the score is short of perfect.
 
@@ -27,6 +29,7 @@ Run these from the repo root, with `XAI_API_KEY` set in the environment. Do not 
 python3 scripts/eval.py --as-of 2026-11-01 --record recordings/samples.jsonl
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --as-of 2026-11-01 --record recordings/unseen.jsonl
 python3 scripts/eval.py --ordered --as-of 2026-11-01 --record recordings/ordered.jsonl
+python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --as-of 2026-11-01 --record recordings/loop.jsonl
 ```
 
 Replay a file with `--replay` in place of `--record`.

@@ -4,15 +4,16 @@
 
 **Grok reads and questions every invoice, and written rules decide whether it is paid, so no money moves without an audit PASS or a named person's release.**
 
-The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
+The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The loop set adds 3 more: one approved and two held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
 
-Replay of the three committed recordings, no API key, on 2026-11-01 PT:
+Replay of the four committed recordings, no API key, on 2026-11-01 PT:
 
 | Set | Score |
 |---|---|
 | 20 samples | 20/20 |
 | 21 unseen | 21/21 |
 | Ordered ledger | 11 steps ok, ledger matches |
+| Loop set | 3/3 |
 
 Live runs the same day matched those scores: samples 20/20 three times, unseen 21/21 three times, and the ordered ledger ok. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
 
@@ -111,7 +112,9 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs the same three after the tests and does not set an API key.
+Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs these three and the loop replay below, four in all, and does not set an API key.
+
+**Loops in action.** Critique and audit are defense in depth behind validation: code decides first, and the loops can only tighten what it passed. In one live run of the loop set in `data/loop_invoices/`, 2117 was approved after critique and audit passed, and 2118 and 2120 were held at validation and not paid. The model read 2118's total from the words ($10,250, not the printed $10,520); a fake-model test covers the faithful printed-total read. Replay it with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too). If Grok reads 2120's $8,000 balance as the total, it is rejected for TOTAL_MISMATCH instead, still unpaid, and a fake-model test covers that.
 
 ### Reviewer quick path
 
@@ -152,4 +155,4 @@ python3 scripts/approve_hold_demo.py --demo
 - [docs/METRICS.md](docs/METRICS.md) — replay and live-run numbers
 - [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md) and [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md) — the labeled outcomes
 - [docs/graph.md](docs/graph.md) — the generated graph
-- [recordings/README.md](recordings/README.md) — how the three recordings were made
+- [recordings/README.md](recordings/README.md) — how the four recordings were made

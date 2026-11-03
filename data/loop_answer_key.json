@@ -1,0 +1,33 @@
+{
+  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "notes": "Loop set: a clean invoice over $10,000 that goes through critique and audit, and two pages that state an amount other than the one a reader would pay.",
+  "invoices": {
+    "data/loop_invoices/invoice_2117.txt": {
+      "invoice_number": "INV-2117",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 14 (stock 15), WidgetB 8 (stock 10) and GadgetX 4 (stock 5) are in stock at the reference prices, and $10,500.00 + $0.00 tax + $125.00 shipping = $10,625.00. The total is over $10,000, so critique and audit run; being over the threshold is not a risk by itself.",
+      "next_step": "None (paid).",
+      "source": "loop set"
+    },
+    "data/loop_invoices/invoice_2118.txt": {
+      "invoice_number": "INV-2118",
+      "outcome": "HOLD",
+      "primary_reason": "Printed total and amount in words disagree",
+      "warnings": [],
+      "reason": "The printed total is $10,520.00 and the amount in words is $10,250.00, which is what the lines add up to. The page states two totals, so a person confirms the amount with the vendor. Neither amount is paid, whichever one the extraction reads.",
+      "next_step": "Confirm the amount with the vendor. Nothing is paid.",
+      "source": "loop set"
+    },
+    "data/loop_invoices/invoice_2120.txt": {
+      "invoice_number": "INV-2120",
+      "outcome": "HOLD",
+      "primary_reason": "Balance due lower than the total",
+      "warnings": [],
+      "reason": "The lines and the printed total are $10,500.00, but a $2,500.00 deposit was already received and the balance due is $8,000.00. Paying the total would pay the deposit twice, and the balance is not paid automatically either.",
+      "next_step": "Confirm the deposit or credit, then pay the balance by hand. Nothing is paid here.",
+      "source": "loop set"
+    }
+  }
+}

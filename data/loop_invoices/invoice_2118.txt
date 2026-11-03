@@ -1,0 +1,18 @@
+INVOICE
+
+Vendor: Coldwater Assembly Co.
+Invoice Number: INV-2118
+Date: 2026-09-22
+Due Date: 2026-10-22
+
+Items:
+  WidgetA    qty: 10    unit price: $250.00
+  WidgetB    qty: 8     unit price: $500.00
+  GadgetX    qty: 5     unit price: $750.00
+
+Tax (0%): $0.00
+Total Amount: $10,520.00
+Amount in words: Ten thousand two hundred fifty dollars and 00/100
+
+Payment Terms: Net 30
+Notes: PO-7740. Pay the amount shown.
