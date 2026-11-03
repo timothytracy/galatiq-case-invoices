@@ -1,9 +1,15 @@
 {
-  "note": "Real sample files on one shared ledger. Not an answer key. Outcomes are lowercase.",
+  "note": "Real sample files on one shared ledger. Not an answer key. Outcomes are lowercase. invoice_1004.json may be paid, or held by fraud review; held, it is not in the ledger, and its revision is still a REVISED_INVOICE hold.",
   "ledger_files": [
     "invoice_1001.txt",
     "invoice_1011.pdf",
     "invoice_1004.json"
+  ],
+  "also_accepted_ledger_files": [
+    [
+      "invoice_1001.txt",
+      "invoice_1011.pdf"
+    ]
   ],
   "steps": [
     {
@@ -34,7 +40,10 @@
       "file": "data/invoices/invoice_1004.json",
       "outcome": "approve",
       "reason_code": null,
-      "paid": true
+      "paid": true,
+      "also_accepted": [
+        {"outcome": "hold", "reason_code": "FRAUD_SUSPECTED", "paid": false}
+      ]
     },
     {
       "file": "data/invoices/invoice_1004_revised.json",

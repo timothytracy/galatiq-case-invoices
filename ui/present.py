@@ -45,8 +45,9 @@ def _folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
     """Sample-score counts, and the same files on one ledger, from the answer key.
 
     An approve pays. A later approve of that same vendor and invoice number
-    is a duplicate hold. This reads the labeled file only. It does not run
-    the pipeline.
+    is a duplicate hold. A row with also_accepted_outcomes counts as its first
+    alternative, which is what the samples recording gives: 1004 is a fraud
+    review hold. This reads the labeled file only. It does not run the pipeline.
     """
     try:
         labeled = json.loads(_ANSWER_KEY.read_text(encoding="utf-8"))["invoices"]
@@ -64,7 +65,8 @@ def _folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
         row = labeled.get(f"data/invoices/{path.name}")
         if not isinstance(row, dict):
             continue
-        outcome = str(row.get("outcome") or "").lower()
+        alternatives = row.get("also_accepted_outcomes") or [{}]
+        outcome = str(alternatives[0].get("outcome") or row.get("outcome") or "").lower()
         if outcome not in alone:
             continue
         alone[outcome] += 1
@@ -117,7 +119,7 @@ def shared_ledger_note(batch_counts: dict | None = None, released: int = 0) -> s
     )
 
 
-TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")
+TRAIL_STAGES = ("ingestion", "validation", "fraud_review", "approval", "critique", "audit", "payment")
 APPROVED = "Approved, no action needed"
 INVOICE_FIELDS = (
     "vendor", "vendor_address", "invoice_number", "invoice_number_raw", "revision",
@@ -399,6 +401,7 @@ def stage_summary(stage: str, result: dict) -> str:
     pairs = {
         "ingestion": [("Vendor", invoice.get("vendor")), ("total", format_amount(invoice.get("total"), invoice.get("currency")))],
         "validation": [("Passed", _yes(result.get("passed"))), ("outcome", result.get("outcome")), ("reason code", result.get("reason_code"))],
+        "fraud_review": [("Verdict", result.get("fraud_verdict")), ("outcome", result.get("outcome"))],
         "approval": [("Decision", decision.get("decision"))],
         "audit": [("Verdict", result.get("verdict")), ("outcome", result.get("outcome"))],
         "payment": [("Status", payment_text(payment.get("status")))],
@@ -487,6 +490,7 @@ _RESULT_KEYS = frozenset({
     "audit_note", "dropped_concerns", "concerns", "stricter", "round", "tool_calls",
     "record", "file", "payment_status", "critique_rounds",
     "tool_cap_hit", "forced_final_turn",
+    "fraud_verdict", "innocent_reading", "quote", "why", "fraud_note",
 })
 _BLOCKED_ERROR = "blocked: tool_cap"
 

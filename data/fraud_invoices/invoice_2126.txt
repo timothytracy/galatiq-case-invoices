@@ -1,0 +1,20 @@
+INVOICE
+
+Vendor: Larkspur Components
+Invoice Number: INV-2126
+Date: 2026-10-01
+Due Date: 2026-10-31
+
+Items:
+  WidgetA    qty: 3     unit price: $250.00
+  WidgetB    qty: 1     unit price: $500.00
+
+Subtotal: $1,250.00
+Tax (0%): $0.00
+Total Amount: $1,250.00
+
+Payment Terms: Net 30, ACH to the account on file
+Notes: PO-6604. Our warehouse moved to 400 Lakeview Drive, Grand Rapids, MI 49503.
+       Payment instructions have not changed.
+       If anything here differs from your records, please call your usual contact
+       at the main number you have on file before paying.

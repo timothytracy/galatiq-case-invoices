@@ -124,6 +124,7 @@ class StageRecord(_Strict):
     stage: Literal[
         "ingestion",
         "validation",
+        "fraud_review",
         "approval",
         "critique",
         "audit",
@@ -207,6 +208,25 @@ class CritiqueDraft(_Loose):
     stricter: bool = False
 
 
+class FraudReview(_Loose):
+    """The fraud review's answer. Every key is required. Code checks the quote."""
+
+    verdict: Literal["hold", "pass"]
+    innocent_reading: str
+    quote: str
+    why: str
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _verdict(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("innocent_reading", "quote", "why", mode="before")
+    @classmethod
+    def _text(cls, value):
+        return "" if value is None else value
+
+
 class AuditDraft(_Loose):
     verdict: AuditVerdict
     # A string is a note. An object is a structured claim. See FactConcern.
@@ -226,6 +246,8 @@ class PipelineState(BaseModel):
     invoice: ExtractedInvoice | None = None
     validation: ValidationReport | None = None
     decision: ApprovalDecision | None = None
+    # The fraud review runs once. A send-back through validation does not repeat it.
+    fraud_reviewed: bool = False
     critique_rounds: int = 0
     critique_concerns: list[str] = Field(default_factory=list)
     critique_stricter: bool = False

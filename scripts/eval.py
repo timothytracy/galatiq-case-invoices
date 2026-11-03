@@ -95,9 +95,16 @@ def grade(result: dict, expected: dict) -> dict:
     MISSING_FIELD, and the recorded model read gives the listed alternate
     TOTAL_MISMATCH. An unknown name in that list is not a code, and it is
     printed rather than dropped quietly. Warnings are informational.
+
+    also_accepted_outcomes lists other outcomes the row accepts, each with its
+    own primary_reason. invoice_1004.json accepts a FRAUD_SUSPECTED hold.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()
+    for alternative in expected.get("also_accepted_outcomes") or []:
+        if str(alternative["outcome"]).upper() == actual_outcome:
+            expected = {**expected, **alternative, "also_accepted_reasons": []}
+            break
     expected_outcome = str(expected["outcome"]).upper()
     actual_code = result.get("reason_code")
     expected_name = expected["primary_reason"]

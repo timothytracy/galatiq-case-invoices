@@ -1,0 +1,55 @@
+{
+  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "notes": "Fraud set: each invoice is under $10,000, so critique does not run. None has a reject or hold finding, so code alone approves each one. The labels say whether a careful AP reviewer would stop the payment to verify it with the vendor. Written before the fraud review prompt.",
+  "invoices": {
+    "data/fraud_invoices/invoice_2121.txt": {
+      "invoice_number": "INV-2121",
+      "outcome": "HOLD",
+      "primary_reason": "Fraud suspected",
+      "warnings": [
+        "Fraud signal: wire transfer (\"Wire transfer only\")"
+      ],
+      "reason": "WidgetA 4 (stock 15) and WidgetB 2 (stock 10) are in stock at the reference prices, and the lines add up to the $2,000.00 total. Wire-only payment is one fraud signal. The notes forbid calling the office to confirm payment details and give only a free-mail contact. Blocking verification is the red flag, so a person should confirm with the vendor using contacts on file.",
+      "next_step": "Verify payment details with the vendor using contact details already on file.",
+      "source": "fraud set"
+    },
+    "data/fraud_invoices/invoice_2123.txt": {
+      "invoice_number": "INV-2123",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [
+        "Fraud signal: wire transfer (\"Wire transfer only\")"
+      ],
+      "reason": "WidgetB 3 (stock 10) and GadgetX 1 (stock 5) are in stock at the reference prices, and the lines add up to the $2,250.00 total. Wire-only payment is one fraud signal, but the invoice cites a PO, remits to the banking details already on the vendor master file, and gives a phone number for questions. Nothing redirects payment or discourages verification, so it is paid.",
+      "next_step": "None (paid).",
+      "source": "fraud set"
+    },
+    "data/fraud_invoices/invoice_2124.txt": {
+      "invoice_number": "INV-2124",
+      "outcome": "HOLD",
+      "primary_reason": "Fraud suspected",
+      "warnings": [],
+      "reason": "WidgetA 6 (stock 15) and GadgetX 2 (stock 5) are in stock at the reference prices, and the lines add up to the $3,000.00 total. No keyword finding is raised. The notes ask that this invoice be settled to a differently named company that now services the vendor's receivables, and send payment questions only to that company. The payee is no longer the vendor and there is no PO reference. That is a payment redirection, so a person should confirm it with the vendor using contacts on file.",
+      "next_step": "Verify payment details with the vendor using contact details already on file.",
+      "source": "fraud set"
+    },
+    "data/fraud_invoices/invoice_2125.txt": {
+      "invoice_number": "INV-2125",
+      "outcome": "HOLD",
+      "primary_reason": "Fraud suspected",
+      "warnings": [],
+      "reason": "WidgetB 4 (stock 10) and WidgetA 2 (stock 15) are in stock at the reference prices, and the lines add up to the $2,500.00 total. No keyword finding is raised. The remit-to party is a different company from the vendor on the letterhead, the notes ask AP to update its records so payments go there, and the only contact is a free-mail address while the usual contact is said to be away. The vendor's identity and contact cannot be verified from the page, so a person should confirm with the vendor using contacts on file.",
+      "next_step": "Verify payment details with the vendor using contact details already on file.",
+      "source": "fraud set"
+    },
+    "data/fraud_invoices/invoice_2126.txt": {
+      "invoice_number": "INV-2126",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "WidgetA 3 (stock 15) and WidgetB 1 (stock 10) are in stock at the reference prices, and the lines add up to the $1,250.00 total. The notes report a warehouse move, say payment instructions have not changed, cite a PO, pay by ACH to the account on file, and invite a call to the number on file. A change of address with payment unchanged and verification invited is not a red flag, so it is paid.",
+      "next_step": "None (paid).",
+      "source": "fraud set"
+    }
+  }
+}

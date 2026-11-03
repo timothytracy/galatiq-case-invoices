@@ -24,7 +24,7 @@ from pipeline.ingestion import is_recorded
 
 RECORDINGS = Path(__file__).resolve().parent / "recordings"
 # ordered.jsonl is left out: its later answers depend on the ledger order of that scenario.
-FALLBACK_RECORDINGS = ("samples.jsonl", "unseen.jsonl", "loop.jsonl")
+FALLBACK_RECORDINGS = ("samples.jsonl", "unseen.jsonl", "loop.jsonl", "fraud.jsonl")
 
 
 def main(argv: list[str] | None = None) -> int:

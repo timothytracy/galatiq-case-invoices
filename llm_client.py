@@ -45,6 +45,8 @@ from tool_loop import (  # noqa: F401  re-exported for callers that import them 
 )
 
 DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
+# The fraud review alone uses the reasoning model. Same published token rates.
+FRAUD_REVIEW_MODEL = "grok-4.20-0309-reasoning"
 BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2
@@ -344,11 +346,23 @@ def _usage_dict(usage) -> dict:
     total = grab("total_tokens")
     if not total:
         total = prompt + completion
-    return {
+    details = None
+    if isinstance(usage, dict):
+        details = usage.get("completion_tokens_details")
+    elif usage is not None:
+        details = getattr(usage, "completion_tokens_details", None)
+    if isinstance(details, dict):
+        reasoning = int(details.get("reasoning_tokens") or 0)
+    else:
+        reasoning = int(getattr(details, "reasoning_tokens", 0) or 0)
+    row = {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": total,
     }
+    if reasoning:
+        row["reasoning_tokens"] = reasoning
+    return row
 
 
 def _answer_from_message(message) -> dict:
@@ -434,6 +448,11 @@ class GrokClient:
 
         return self._exchange(messages, timeout, tools=None)
 
+    def request_with_model(self, messages: list[dict], model: str, timeout: float = 60) -> str:
+        """One completion, no tools, on a named model. The fraud review calls this."""
+
+        return self._exchange(messages, timeout, tools=None, model=model)
+
     def request_tools(self, messages: list[dict], tools: list[dict], timeout: float = 60) -> dict:
         """One completion that may ask for tools. Audit calls this.
 
@@ -443,7 +462,7 @@ class GrokClient:
 
         return self._exchange(messages, timeout, tools=tools)
 
-    def _exchange(self, messages, timeout, *, tools):
+    def _exchange(self, messages, timeout, *, tools, model=None):
         """The one seam that sends a model request.
 
         Record writes the reply after this call. Replay returns before it
@@ -452,14 +471,15 @@ class GrokClient:
         temperature, and nothing else.
         """
 
+        model = model or self.model
         tool_choice = None if tools is None else "auto"
         if self.mode == "replay":
-            return self._replay_answer(messages, tools, tool_choice, as_text=tools is None)
+            return self._replay_answer(messages, tools, tool_choice, as_text=tools is None, model=model)
 
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=BASE_URL, timeout=timeout)
-        payload = {"model": self.model, "messages": messages, "temperature": 0}
+        payload = {"model": model, "messages": messages, "temperature": 0}
         if tools is not None:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -477,6 +497,7 @@ class GrokClient:
                 tool_choice,
                 message,
                 getattr(response, "usage", None),
+                model,
             )
         if tools is None:
             return _message_text(message.content)
@@ -491,9 +512,9 @@ class GrokClient:
         fingerprint = self._fingerprint(messages, None, None)
         return self._replay.has(fingerprint)
 
-    def _fingerprint(self, messages, tools, tool_choice) -> str:
+    def _fingerprint(self, messages, tools, tool_choice, model=None) -> str:
         return request_fingerprint(
-            model=self.model,
+            model=model or self.model,
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -501,8 +522,8 @@ class GrokClient:
             temperature=0,
         )
 
-    def _replay_answer(self, messages, tools, tool_choice, as_text: bool):
-        fingerprint = self._fingerprint(messages, tools, tool_choice)
+    def _replay_answer(self, messages, tools, tool_choice, as_text: bool, model=None):
+        fingerprint = self._fingerprint(messages, tools, tool_choice, model)
         answer = self._replay.take(fingerprint) if self._replay is not None else None
         if answer is None:
             short = fingerprint[:12]
@@ -515,14 +536,15 @@ class GrokClient:
             "tool_calls": list(answer.get("tool_calls") or []),
         }
 
-    def _record_message(self, messages, tools, tool_choice, message, usage) -> None:
+    def _record_message(self, messages, tools, tool_choice, message, usage, model=None) -> None:
         if self._record is None:
             return
-        fingerprint = self._fingerprint(messages, tools, tool_choice)
+        model = model or self.model
+        fingerprint = self._fingerprint(messages, tools, tool_choice, model)
         self._record.append(
             {
                 "fingerprint": fingerprint,
-                "model": self.model,
+                "model": model,
                 "answer": _answer_from_message(message),
                 "usage": _usage_dict(usage),
             }

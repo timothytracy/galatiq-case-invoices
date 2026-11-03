@@ -124,7 +124,14 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
     assert status(result) == "paid"
-    assert stages(result) == ["ingestion", "validation", "approval", "audit", "payment"]
+    assert stages(result) == [
+        "ingestion",
+        "validation",
+        "fraud_review",
+        "approval",
+        "audit",
+        "payment",
+    ]
     assert counts["critique"] == 0
     reasoning = result["decision"].reasoning
     assert reasoning.rules_applied
@@ -822,7 +829,16 @@ def test_committed_diagram_matches_the_graph():
     diagram = mermaid_text()
     saved = (ROOT / "docs" / "graph.md").read_text(encoding="utf-8")
     assert diagram in saved
-    for name in ("ingestion", "validation", "approval", "critique", "audit", "payment", "reject_log"):
+    for name in (
+        "ingestion",
+        "validation",
+        "fraud_review",
+        "approval",
+        "critique",
+        "audit",
+        "payment",
+        "reject_log",
+    ):
         assert name in saved
 
 
