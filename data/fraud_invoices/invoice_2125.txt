@@ -1,0 +1,22 @@
+INVOICE
+
+Vendor: Ridgeline Fasteners
+Invoice Number: INV-2125
+Date: 2026-09-30
+Due Date: 2026-10-30
+
+Remit To: RL Fastening Services, Inc.
+          PO Box 7781, Henderson, NV 89011
+
+Items:
+  WidgetB    qty: 4     unit price: $500.00
+  WidgetA    qty: 2     unit price: $250.00
+
+Subtotal: $2,500.00
+Tax (0%): $0.00
+Total Amount: $2,500.00
+
+Payment Terms: Net 30
+Notes: Please update your records so that payments go to the remit-to party shown above.
+       Our regular account manager is out this month; for anything about this invoice,
+       reply only to ridgeline.ap.desk@outlook.com.

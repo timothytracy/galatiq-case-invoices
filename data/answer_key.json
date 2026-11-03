@@ -100,6 +100,7 @@
       "invoice_number": "INV-1009",
       "outcome": "REJECT",
       "primary_reason": "Quantity that is zero, negative, or not a number",
+      "also_accepted_reasons": ["Missing required field"],
       "warnings": [
         "Also reject findings: missing vendor, missing due date, line sum -250.00 vs printed subtotal 1,000.00, negative total -250.00 not labeled a credit note"
       ],
@@ -214,6 +215,7 @@
     }
   },
   "notes": [
-    "The policy names findings (for example 'Stock shortfall') but defines no reason-code identifiers. The primary reason column uses the policy's finding names."
+    "The policy names findings (for example 'Stock shortfall') but defines no reason-code identifiers. The primary reason column uses the policy's finding names.",
+    "invoice_1009.json has also_accepted_reasons: its vendor and due date are blank and its WidgetA quantity is negative, so Missing required field and the bad quantity are both genuinely present. The outcome must still be REJECT."
   ]
 }
