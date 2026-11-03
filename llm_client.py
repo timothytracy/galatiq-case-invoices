@@ -45,8 +45,21 @@ from tool_loop import (  # noqa: F401  re-exported for callers that import them 
 )
 
 DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
-# The fraud review alone uses the reasoning model. Same published token rates.
-FRAUD_REVIEW_MODEL = "grok-4.20-0309-reasoning"
+# The judgment steps, fraud review and critique, use the reasoning model. Same published token rates.
+REASONING_MODEL = "grok-4.20-0309-reasoning"
+FRAUD_REVIEW_MODEL = REASONING_MODEL
+CRITIQUE_MODEL = REASONING_MODEL
+# A reasoning model can take longer than the default 60 seconds.
+REASONING_TIMEOUT_SECONDS = 120
+
+
+def named_requester(llm, model: str, timeout: float = REASONING_TIMEOUT_SECONDS):
+    """The client's named-model call when it has one. Test doubles use request()."""
+
+    named = getattr(llm, "request_with_model", None)
+    if named is None:
+        return llm.request
+    return lambda messages: named(messages, model, timeout)
 BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2

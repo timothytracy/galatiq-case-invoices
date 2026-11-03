@@ -360,7 +360,13 @@ def test_critique_and_audit_holds_have_key_names(tmp_path, db_path):
     assert KEY_REASON_TO_CODE["Critique hold"] == "CRITIQUE_HOLD"
     assert KEY_REASON_TO_CODE["Audit escalation"] == "AUDIT_ESCALATED"
     path = LOOP / "invoice_2117.txt"
-    concern = {"concerns": [{"category": "other", "text": "PO-7716 is not on file"}], "stricter": True}
+    concern = {
+        "concerns": [
+            {"category": "other", "text": "PO-7716 is not on file", "quote": "PO-7716. Quarterly restock"}
+        ],
+        "stricter": True,
+        "innocent_reading": "A routine quarterly restock against a real PO.",
+    }
     handler, _ = scripted(_read("invoice_2117.txt"), critique=concern)
     held = _run(db_path, path, handler)
     assert held["reason_code"] == "CRITIQUE_HOLD"

@@ -19,7 +19,7 @@ from models import (
 )
 from pipeline.audit import audit
 from pipeline.critique import critique
-from pipeline.fact_guard import apply_concern_guard, partition_concerns
+from pipeline.fact_guard import apply_concern_guard, partition_concerns, quote_gate
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 pytestmark = pytest.mark.usefixtures("no_network")
@@ -205,29 +205,45 @@ def test_real_stock_concern_is_not_dropped(db_path):
 
 
 def test_new_concern_still_holds(tmp_path, db_path):
-    path, body = _big_invoice(tmp_path)
+    path, body = _big_invoice(tmp_path, notes="Notes: Same lot as INV-8, already settled.\n")
     text = "Possible duplicate of an invoice already paid"
-    result = _run(
-        path,
-        db_path,
-        _scripted(body, critique={"concerns": [{"category": "other", "text": text}], "stricter": True}),
-    )
+    concern = {"category": "other", "text": text, "quote": "Same lot as INV-8, already settled"}
+    critique_body = {"concerns": [concern], "stricter": True, "innocent_reading": "A repeat order."}
+    result = _run(path, db_path, _scripted(body, critique=critique_body))
     assert result["outcome"] == "hold"
     assert result["reason_code"] == "CRITIQUE_HOLD"
     assert _stage(result, "critique")["dropped_concerns"] == []
+    message = next(f.message for f in result["findings"] if f.code == "CRITIQUE_HOLD")
+    assert message.startswith('Critique: "Same lot as INV-8, already settled".')
+
+
+def test_unquoted_concern_is_dropped_and_invoice_approves(tmp_path, db_path):
+    path, body = _big_invoice(tmp_path)
+    concern = {"category": "other", "text": "Possible duplicate of an invoice already paid"}
+    critique_body = {"concerns": [concern], "stricter": True, "innocent_reading": "A repeat order."}
+    result = _run(path, db_path, _scripted(body, critique=critique_body))
+    assert result["outcome"] == "approve"
+    assert _stage(result, "critique")["dropped_concerns"][0]["rule"] == "quote_too_short"
 
 
 def test_tax_rate_concern_holds_and_a_mismatch_claim_is_logged(db_path):
     state = _approved(_covered())
+    state = state.model_copy(update={"raw_text": state.raw_text + "Tax (9%): $360.00\n"})
 
     def handler(_messages):
         return json.dumps(
             {
                 "concerns": [
                     {"category": "totals_mismatch", "field": "total", "text": "totals do not reconcile"},
-                    {"category": "totals", "field": "tax_rate", "text": "tax rate is not the usual rate"},
+                    {
+                        "category": "totals",
+                        "field": "tax_rate",
+                        "text": "tax rate is not the usual rate",
+                        "quote": "Tax (9%): $360.00",
+                    },
                 ],
                 "stricter": True,
+                "innocent_reading": "A local sales tax.",
             }
         )
 
@@ -366,11 +382,12 @@ def _extraction(**overrides) -> str:
     return json.dumps(payload)
 
 
-def _big_invoice(directory: Path):
+def _big_invoice(directory: Path, notes: str = ""):
     path = _write(
         directory,
         "big.txt",
-        "Vendor: Widgets Inc.\nWidgetA WidgetB GadgetX\nDate: 2026-04-16\nDue Date: 2026-05-16\nTotal: 11500.00\n",
+        "Vendor: Widgets Inc.\nWidgetA WidgetB GadgetX\nDate: 2026-04-16\nDue Date: 2026-05-16\nTotal: 11500.00\n"
+        + notes,
     )
     body = _extraction(
         line_items=[
@@ -420,6 +437,84 @@ def _run(path, db_path, handler, as_of=AS_OF):
         max_attempts=3,
         as_of=as_of,
     )
+
+
+PAGE = (
+    "Vendor: Widgets Inc.\n"
+    "Date: 2026-04-16\n"
+    "Due Date: 2026-05-16\n"
+    "  WidgetB    qty: 8     unit price: $500.00\n"
+    "Total Amount: $4,000.00\n"
+    "Notes: Partial shipment, 4 of 8 WidgetB delivered.\n"
+)
+
+
+@pytest.mark.parametrize(
+    "quote, innocent, rule",
+    [
+        ("Partial shipment, 4 of 8 WidgetB delivered", "", "no_innocent_reading"),
+        ("4 of 8", "restock", "quote_too_short"),
+        ("Partial shipment, 6 of 8 WidgetB delivered", "restock", "quote_not_on_page"),
+        ("Date: 2026-04-16", "restock", "quote_structured_only"),
+        ("WidgetB    qty: 8     unit price: $500.00", "restock", "quote_structured_only"),
+        ("Total Amount: $4,000.00", "restock", "quote_structured_only"),
+    ],
+)
+def test_quote_gate_drops(quote, innocent, rule):
+    claim = FactConcern(text="billed for undelivered goods", quote=quote)
+    kept, dropped = quote_gate([claim], _covered(), STOCK, AS_OF, PAGE, innocent)
+    assert kept == []
+    assert dropped[0]["rule"] == rule
+    assert dropped[0]["quote"] == quote
+
+
+@pytest.mark.parametrize("text", ["", "Partial shipment, 4 of 8 WidgetB delivered.", "4 of 8 widgetb"])
+def test_quote_gate_drops_a_concern_that_only_repeats_the_page(text):
+    claim = FactConcern(text=text, quote="Partial shipment, 4 of 8 WidgetB delivered")
+    kept, dropped = quote_gate([claim], _covered(), STOCK, AS_OF, PAGE, "restock")
+    assert kept == []
+    assert dropped[0]["rule"] == "concern_restates_quote"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "PARTIAL SHIPMENT,   4 of 8\nWidgetB delivered",
+        "$4,000.00 Notes: Partial shipment",
+        "Notes: Partial shipment, 4 of 8 WidgetB",
+    ],
+)
+def test_quote_gate_keeps_prose(quote):
+    claim = FactConcern(text="billed for undelivered goods", quote=quote)
+    kept, dropped = quote_gate([claim], _covered(), STOCK, AS_OF, PAGE, "restock")
+    assert kept == [claim]
+    assert dropped == []
+
+
+def test_quote_gate_keeps_a_claim_code_confirms_without_a_quote():
+    claims = [
+        FactConcern(category="stock", item="GadgetX", text="GadgetX requested 8 vs available 5"),
+        FactConcern(category="future_date", field="due_date", text="due date is in the future"),
+    ]
+    kept, dropped = quote_gate(claims[:1], _short(), STOCK, AS_OF, "Total", "")
+    assert kept == claims[:1] and dropped == []
+    kept, dropped = quote_gate(claims[1:], _covered(), STOCK, date(2026, 4, 1), "Total", "")
+    assert kept == claims[1:] and dropped == []
+
+
+def test_quote_gate_on_other_formats_needs_the_notes():
+    invoice = _covered().model_copy(
+        update={
+            "notes": "Partial shipment, 4 of 8 WidgetB delivered.",
+            "source": SourceInfo(path="x.json", filename="x.json", format="json"),
+        }
+    )
+    raw = json.dumps({"due_date": "2026-05-16", "notes": invoice.notes})
+    note = FactConcern(text="undelivered", quote="Partial shipment, 4 of 8 WidgetB delivered")
+    field = FactConcern(text="future", quote='"due_date": "2026-05-16"')
+    kept, dropped = quote_gate([note, field], invoice, STOCK, AS_OF, raw, "restock")
+    assert kept == [note]
+    assert dropped[0]["rule"] == "quote_structured_only"
 
 
 def test_critique_sees_the_page_as_read(tmp_path, db_path):

@@ -5,6 +5,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 
 from db import SEED
 from decision.findings import assess, injection_phrase
@@ -724,11 +726,11 @@ def _audit_reply(cited, notes, verdict="ESCALATE"):
     )
 
 
-def _clean_handler(audit_body: str):
+def _clean_handler(audit_body: str, **fields):
     def handler(messages):
         name = task_of(messages)
         if name == "extract":
-            return extraction()
+            return extraction(**fields)
         if name == "reason":
             return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
         if name == "audit":
@@ -738,22 +740,39 @@ def _clean_handler(audit_body: str):
     return handler
 
 
+WIRE_PAGE = "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\nPayment Terms: Wire transfer only\n"
+
+
 def test_warning_only_audit_citation_is_suppressed(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
-    body = _audit_reply(
-        ["NONCOMMERCIAL_ADDRESS", "FRAUD_SIGNAL"],
-        "one fraud signal on a residential address",
-    )
-    result = run(path, db_path, _clean_handler(body))
+    path = write_invoice(tmp_path, "wire.txt", WIRE_PAGE)
+    body = _audit_reply(["FRAUD_SIGNAL"], "one fraud signal")
+    result = run(path, db_path, _clean_handler(body, payment_terms="Wire transfer only"))
     assert result["outcome"] == "approve"
     assert result["payment"].status == "paid"
     assert "AUDIT_NOTE" in codes(result)
     assert "AUDIT_ESCALATED" not in codes(result)
     logged = next(row for row in result["logs"] if row["stage"] == "audit")
-    assert logged["result"]["cited_codes"] == ["NONCOMMERCIAL_ADDRESS", "FRAUD_SIGNAL"]
+    assert logged["result"]["cited_codes"] == ["FRAUD_SIGNAL"]
     assert logged["result"]["audit_note"] == next(
         finding.message for finding in result["findings"] if finding.code == "AUDIT_NOTE"
     )
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [["NONCOMMERCIAL_ADDRESS", "UNKNOWN_ITEM"], ["FRAUD_CLUSTER"], ["REVISED_INVOICE"], ["FUTURE_DATE"]],
+)
+def test_a_cited_code_the_invoice_does_not_have_is_dropped(tmp_path, db_path, cited):
+    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
+    result = run(path, db_path, _clean_handler(_audit_reply(cited, "a code the page does not have")))
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert "AUDIT_ESCALATED" not in codes(result)
+    logged = next(row for row in result["logs"] if row["stage"] == "audit")["result"]
+    assert logged["model_verdict"] == "ESCALATE"
+    assert logged["verdict"] == "PASS"
+    rules = [row["rule"] for row in logged["dropped_concerns"]]
+    assert rules.count("cited_code_not_found") == len(cited)
 
 
 def test_warning_only_suppression_is_noted_on_a_hold(db_path):
@@ -763,6 +782,7 @@ def test_warning_only_suppression_is_noted_on_a_hold(db_path):
         ApprovalDecision,
         ApprovalReasoning,
         ExtractedInvoice,
+        Finding,
         LineItem,
         PipelineState,
         SourceInfo,
@@ -805,6 +825,7 @@ def test_warning_only_suppression_is_noted_on_a_hold(db_path):
         invoice=invoice,
         validation=ValidationReport(passed=True, findings=[]),
         decision=decision,
+        findings=[Finding(code="FRAUD_SIGNAL", message="Wire transfer is a fraud signal.", severity="warning")],
     )
 
     def handler(_messages):
@@ -815,38 +836,50 @@ def test_warning_only_suppression_is_noted_on_a_hold(db_path):
     assert any(finding.code == "AUDIT_NOTE" for finding in out["findings"])
 
 
-def test_mixed_warning_and_reject_citation_is_kept(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
-    body = _audit_reply(
-        ["NONCOMMERCIAL_ADDRESS", "UNKNOWN_ITEM"],
-        "UNKNOWN_ITEM: WidgetZ, and a warning on the address",
-    )
-    result = run(path, db_path, _clean_handler(body))
-    assert result["outcome"] == "hold"
-    assert result["payment"].status == "not_paid"
-    assert "AUDIT_ESCALATED" in codes(result)
-    assert "AUDIT_NOTE" not in codes(result)
+def test_a_real_warning_with_an_unfounded_reject_code_is_only_a_note(tmp_path, db_path):
+    path = write_invoice(tmp_path, "wire.txt", WIRE_PAGE)
+    body = _audit_reply(["FRAUD_SIGNAL", "UNKNOWN_ITEM"], "UNKNOWN_ITEM: WidgetZ, and a wire transfer")
+    result = run(path, db_path, _clean_handler(body, payment_terms="Wire transfer only"))
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert "AUDIT_ESCALATED" not in codes(result)
+    assert "AUDIT_NOTE" in codes(result)
+    logged = next(row for row in result["logs"] if row["stage"] == "audit")["result"]
+    assert [row["text"] for row in logged["dropped_concerns"]] == ["UNKNOWN_ITEM"]
 
 
-def test_hold_code_citation_is_kept(tmp_path, db_path):
-    path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
-    body = _audit_reply(["FRAUD_CLUSTER"], "Two or more fraud signals")
-    result = run(path, db_path, _clean_handler(body))
-    assert result["outcome"] == "hold"
-    assert "AUDIT_ESCALATED" in codes(result)
-    assert "AUDIT_NOTE" not in codes(result)
-
-
-def test_free_text_with_no_cited_codes_is_kept(tmp_path, db_path):
+def test_free_text_with_no_cited_codes_and_no_quote_passes(tmp_path, db_path):
     path = write_invoice(tmp_path, "clean.txt", "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\n")
     body = _audit_reply(
         [],
         "duplicate of a previously paid invoice; possible phishing",
     )
     result = run(path, db_path, _clean_handler(body))
+    assert result["outcome"] == "approve"
+    assert "AUDIT_ESCALATED" not in codes(result)
+    logged = next(row for row in result["logs"] if row["stage"] == "audit")
+    assert logged["result"]["dropped_concerns"][0]["rule"] == "no_quoted_concern"
+
+
+def test_quoted_free_text_with_no_cited_codes_is_kept(tmp_path, db_path):
+    page = "Vendor: Widgets Inc.\nWidgetA\nTotal: 500.00\nNotes: Same order as INV-8 paid last week.\n"
+    path = write_invoice(tmp_path, "clean.txt", page)
+    body = json.dumps(
+        {
+            "verdict": "ESCALATE",
+            "feedback": [
+                {"text": "possible duplicate", "quote": "Same order as INV-8 paid last week"}
+            ],
+            "notes": "possible duplicate",
+            "cited_codes": [],
+            "innocent_reading": "A repeat order of the same goods.",
+        }
+    )
+    result = run(path, db_path, _clean_handler(body))
     assert result["outcome"] == "hold"
     assert "AUDIT_ESCALATED" in codes(result)
-    assert "AUDIT_NOTE" not in codes(result)
+    message = next(f.message for f in result["findings"] if f.code == "AUDIT_ESCALATED")
+    assert "Same order as INV-8 paid last week" in message
 
 
 def test_residential_unit_is_a_note_and_a_business_street_is_not():

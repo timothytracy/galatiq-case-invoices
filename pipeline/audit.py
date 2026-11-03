@@ -18,7 +18,9 @@ from pipeline.fact_guard import (
     AUDIT_CLAIMS,
     VERIFIED_FACTS,
     apply_concern_guard,
+    concern_text,
     partition_concerns,
+    quote_gate,
     verified_payload,
 )
 from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
@@ -104,17 +106,26 @@ def audit(
         return agent_stop(state, "audit", step_attempts, exc, note=_cap_note(step))
 
     fresh = assess(invoice, state.raw_text, stock)
+    # A tool hit can only add a hold. A miss adds nothing.
+    ledger_holds = _ledger_holds(step)
+    found = {item.code for item in list(fresh.findings) + list(state.findings) + ledger_holds}
+    cited, dropped = _founded_citations(draft.cited_codes, found)
     # Stock and totals are not checked here: a note may be about the raw text.
-    kept_feedback, dropped = partition_concerns(draft.feedback, invoice, stock, as_of, "audit")
-    verdict, feedback = apply_concern_guard(
-        draft.verdict, kept_feedback, dropped, list(draft.cited_codes)
-    )
-    ignored = _ignored_audit_note(verdict, list(draft.cited_codes), feedback, draft.notes)
+    kept_feedback, guarded_out = partition_concerns(draft.feedback, invoice, stock, as_of, "audit")
+    dropped = dropped + guarded_out
+    escalation_quote = None
+    if draft.verdict == "ESCALATE" and not cited:
+        kept_feedback, unquoted, escalation_quote = _gate_escalation(
+            kept_feedback, invoice, stock, as_of, state.raw_text or "", draft.innocent_reading
+        )
+        dropped = dropped + unquoted
+    verdict, feedback = apply_concern_guard(draft.verdict, kept_feedback, dropped, cited)
+    if draft.verdict == "ESCALATE" and not cited and not kept_feedback:
+        verdict, feedback = "PASS", []
+    ignored = _ignored_audit_note(verdict, cited, feedback, draft.notes)
     if ignored is not None:
         verdict = "PASS"
         feedback = []
-    # A tool hit can only add a hold. A miss adds nothing.
-    ledger_holds = _ledger_holds(step)
     guarded = _guard_audit(
         state, decision, list(fresh.findings) + ledger_holds, verdict, feedback
     )
@@ -122,7 +133,9 @@ def audit(
     if guarded.verdict != "SEND_BACK" and guarded.outcome not in (None, decision.decision):
         new_decision = tighten(decision, guarded.outcome, guarded.conclusion, guarded.evidence)
 
-    findings, note_text = _merge_findings(state, fresh.findings, ledger_holds, ignored, guarded)
+    findings, note_text = _merge_findings(
+        state, fresh.findings, ledger_holds, ignored, guarded, escalation_quote
+    )
     if guarded.verdict == "SEND_BACK":
         kept = []
     else:
@@ -138,6 +151,7 @@ def audit(
         "feedback": guarded.feedback,
         "notes": draft.notes,
         "cited_codes": [str(code).strip().upper() for code in draft.cited_codes if str(code).strip()],
+        "innocent_reading": draft.innocent_reading,
         "audit_note": note_text,
         "dropped_concerns": dropped,
         "attempts": step_attempts,
@@ -159,6 +173,7 @@ def _merge_findings(
     ledger_holds: list[Finding],
     ignored: str | None,
     guarded: AuditResult,
+    quoted: str | None = None,
 ) -> tuple[list[Finding], str | None]:
     """Findings after audit, and the audit note text when a note was not an escalation."""
 
@@ -172,7 +187,7 @@ def _merge_findings(
         findings = findings + [
             Finding(code="AUDIT_NOTE", message=note_text, severity="info")
         ]
-    extra = _audit_finding(guarded, findings)
+    extra = _audit_finding(guarded, findings, quoted)
     if extra is not None:
         findings = findings + [extra]
     return findings, note_text
@@ -252,7 +267,9 @@ def issue_authorization(
     )
 
 
-def _audit_finding(guarded: AuditResult, findings: list[Finding]) -> Finding | None:
+def _audit_finding(
+    guarded: AuditResult, findings: list[Finding], quoted: str | None = None
+) -> Finding | None:
     """A hold the audit itself added, when the rules did not already record one."""
 
     if guarded.verdict != "ESCALATE" or guarded.outcome != "hold":
@@ -265,7 +282,7 @@ def _audit_finding(guarded: AuditResult, findings: list[Finding]) -> Finding | N
     }
     message = guarded.conclusion
     if message not in authored:
-        message = "Audit escalated the invoice to a hold."
+        message = quoted or "Audit escalated the invoice to a hold."
     return Finding(
         code="AUDIT_ESCALATED",
         message=message,
@@ -294,9 +311,16 @@ def _audit_messages(state, invoice, decision, as_of, facts) -> list[dict]:
                 f"{today_line(as_of)}\n"
                 "Compare the extracted fields with the raw text. Check the decision against the "
                 "findings. Re-check the line math and any fraud signals. Check that critique "
-                "concerns were addressed. Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
+                "concerns were addressed. Compare what is billed with what the page itself says "
+                "was ordered, delivered, priced, or returned; the numbers can reconcile while the "
+                "wording says the bill should not be paid as printed. "
+                "SEND_BACK only when the extraction misread the page and a fresh read would fix it. "
+                "When the page is read correctly but its own wording contradicts the bill, "
+                "ESCALATE with a feedback object that quotes that wording. "
+                "Return JSON with verdict (PASS, SEND_BACK, or ESCALATE), "
                 "feedback (list of strings or objects, required for SEND_BACK), "
-                "notes (string), and cited_codes (list of finding codes this verdict relies on). "
+                "notes (string), cited_codes (list of finding codes this verdict relies on), "
+                "and innocent_reading (string). "
                 f"{VERIFIED_FACTS} {AUDIT_CLAIMS} "
                 "You can only make the outcome stricter. Never turn a hard failure or a non-USD "
                 "invoice into a payment.\n"
@@ -383,6 +407,60 @@ def _ignored_audit_note(
     codes = ", ".join(str(code).strip().upper() for code in cited_codes if str(code).strip())
     text = " ".join(part for part in [*(feedback or []), notes or ""] if part).strip()
     return f"{codes}. {text}".strip() if text else codes
+
+
+def _founded_citations(cited_codes, found: set[str]) -> tuple[list[str], list[dict]]:
+    """Cited codes code actually found on this invoice, and a log row for each one it did not."""
+
+    cited = []
+    dropped = []
+    for raw in cited_codes:
+        code = str(raw).strip().upper()
+        if not code:
+            continue
+        if code in found:
+            cited.append(code)
+            continue
+        dropped.append(
+            {
+                "rule": "cited_code_not_found",
+                "category": "citation",
+                "item": "",
+                "field": "",
+                "text": code,
+                "quote": "",
+                "detail": f"{code} is not a finding on this invoice.",
+            }
+        )
+    return cited, dropped
+
+
+def _gate_escalation(feedback, invoice, stock, as_of, raw_text, innocent_reading):
+    """An escalation that cites no code stands only on feedback that passes the quote gate.
+
+    Returns the kept feedback, the dropped rows, and the hold message built from the
+    first quote, or None.
+    """
+
+    kept, dropped = quote_gate(feedback, invoice, stock, as_of, raw_text, innocent_reading)
+    if not kept and not dropped:
+        dropped = [
+            {
+                "rule": "no_quoted_concern",
+                "category": "other",
+                "item": "",
+                "field": "",
+                "text": "",
+                "quote": "",
+                "detail": "The escalation cites no finding code and quotes nothing from the page.",
+            }
+        ]
+    quoted = next((item for item in kept if item.quote.strip()), None)
+    message = None
+    if quoted is not None:
+        quote = re.sub(r"\s+", " ", quoted.quote).strip()
+        message = f'Audit: "{quote}". {concern_text(quoted)}'.strip()
+    return kept, dropped, message
 
 
 def _ledger_holds(step) -> list[Finding]:

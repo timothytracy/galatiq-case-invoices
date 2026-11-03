@@ -691,7 +691,15 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert "MISS" not in replayed_out
 
 
-_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl", "fraud.jsonl", "passlist.jsonl"}
+_RECORDINGS = {
+    "samples.jsonl",
+    "unseen.jsonl",
+    "ordered.jsonl",
+    "loop.jsonl",
+    "fraud.jsonl",
+    "passlist.jsonl",
+    "judgment.jsonl",
+}
 _RECORDING = re.compile(r"recordings/([A-Za-z0-9_.-]+\.jsonl)")
 
 
@@ -737,7 +745,7 @@ def test_documented_replay_commands_match_the_recording():
         assert command in readme_replay[start:], command
         start = readme_replay.index(command, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
-    assert "These six were recorded on 2026-11-02 PT." in recorded
+    assert "These seven were recorded on 2026-11-02 PT." in recorded
 
 
 def _invoices(folder: Path) -> list[Path]:
@@ -766,6 +774,10 @@ def test_every_provided_invoice_is_recorded_once():
     passlist_files = _invoices(ROOT / "data" / "passlist_invoices")
     assert len(passlist_files) == 5
     assert all(is_recorded(path, passlist) for path in passlist_files)
+    judgment = GrokClient(mode="replay", recording=ROOT / "recordings" / "judgment.jsonl")
+    judgment_files = _invoices(ROOT / "data" / "judgment_invoices")
+    assert len(judgment_files) == 7
+    assert all(is_recorded(path, judgment) for path in judgment_files)
     assert samples.usage_summary()["total_tokens"] == 0
 
 

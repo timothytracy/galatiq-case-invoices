@@ -5,14 +5,12 @@ import re
 from datetime import date
 
 from interfaces import LLM, Clock, Rng
-from llm_client import FRAUD_REVIEW_MODEL, AgentStepFailed, call_with_retries
+from llm_client import FRAUD_REVIEW_MODEL, AgentStepFailed, call_with_retries, named_requester
 from models import Finding, FraudReview, PipelineState
 from pipeline.stage_log import agent_stop, stage_log, stopped
+from decision.findings import normalize_quote
 from decision.policy import FRAUD_QUOTE_MIN_CHARS
 from decision.wording import resolve_as_of, today_line
-
-# A reasoning model can take longer than the default 60 seconds.
-FRAUD_TIMEOUT_SECONDS = 120
 
 FRAUD_PROMPT = (
     "You review one vendor invoice for accounts payable, before it is approved, and look "
@@ -57,7 +55,7 @@ def fraud_review(
     step_attempts: list[dict] = []
     try:
         review = call_with_retries(
-            _requester(llm),
+            named_requester(llm, FRAUD_REVIEW_MODEL),
             fraud_messages(state, raw_text, as_of),
             FraudReview,
             max_attempts=max_attempts,
@@ -104,10 +102,6 @@ def fraud_review(
         "attempts": state.attempts + step_attempts,
         "logs": state.logs + [stage_log(state.filename, "fraud_review", result)],
     }
-
-
-def normalize_quote(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip().casefold()
 
 
 def hold_dropped_reason(review: FraudReview, raw_text: str) -> str | None:
@@ -167,12 +161,3 @@ def _raw_text(state: PipelineState) -> str:
     if state.invoice is not None and state.invoice.source.raw_text:
         return state.invoice.source.raw_text
     return ""
-
-
-def _requester(llm: LLM):
-    """The client's named-model call when it has one. Test doubles use request()."""
-
-    named = getattr(llm, "request_with_model", None)
-    if named is None:
-        return llm.request
-    return lambda messages: named(messages, FRAUD_REVIEW_MODEL, FRAUD_TIMEOUT_SECONDS)

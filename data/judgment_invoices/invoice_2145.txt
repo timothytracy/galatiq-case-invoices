@@ -1,0 +1,18 @@
+INVOICE
+
+Vendor: Fieldstone Components
+Invoice Number: INV-2145
+Date: 2026-09-16
+Due Date: 2026-10-16
+
+Items:
+  WidgetA    qty: 15    unit price: $250.00
+  WidgetB    qty: 9     unit price: $500.00
+  GadgetX    qty: 4     unit price: $750.00
+
+Subtotal: $11,250.00
+Tax (0%): $0.00
+Total Amount: $11,250.00
+
+Payment Terms: Net 30
+Notes: PO-8861. RMA-112, for GadgetX damaged on an earlier order, is closed and settled. The 4 GadgetX on this invoice are a new order and were delivered in full on 2026-09-12.

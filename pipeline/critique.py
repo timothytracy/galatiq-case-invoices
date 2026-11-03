@@ -1,19 +1,22 @@
 """Critique may only make an approval stricter. The graph caps the loop at one round."""
 
 import json
+import re
 
 from datetime import date
 from pathlib import Path
 
 from db import load_stock
 from interfaces import LLM, Clock, Rng
-from llm_client import AgentStepFailed, call_with_retries
+from llm_client import CRITIQUE_MODEL, AgentStepFailed, call_with_retries, named_requester
 from models import ApprovalDecision, CritiqueDraft, Finding, PipelineState
 from pipeline.fact_guard import (
     CRITIQUE_CLAIMS,
+    QUOTE_RULE,
     VERIFIED_FACTS,
     concern_text,
     partition_concerns,
+    quote_gate,
     verified_payload,
 )
 from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
@@ -43,7 +46,7 @@ def critique(
     step_attempts: list[dict] = []
     try:
         draft = call_with_retries(
-            llm.request,
+            named_requester(llm, CRITIQUE_MODEL),
             _critique_messages(decision, as_of, facts, state.raw_text or ""),
             CritiqueDraft,
             max_attempts=max_attempts,
@@ -61,10 +64,16 @@ def critique(
         kept = checkable
     else:
         kept, dropped = partition_concerns(checkable, state.invoice, stock, as_of, "critique")
+    kept, unquoted = quote_gate(
+        kept, state.invoice, stock, as_of, state.raw_text or "", draft.innocent_reading
+    )
+    dropped = dropped + unquoted
     concerns = [concern_text(item) for item in kept if concern_text(item)]
     stricter = bool(draft.stricter) and decision.decision == "approve" and bool(concerns)
     result = {
         "concerns": concerns,
+        "quotes": [item.quote for item in kept if item.quote],
+        "innocent_reading": draft.innocent_reading,
         "dropped_concerns": dropped,
         "stricter": stricter,
         "round": state.critique_rounds + 1,
@@ -82,11 +91,20 @@ def critique(
         update["findings"] = list(state.findings) + [
             Finding(
                 code="CRITIQUE_HOLD",
-                message="Critique raised a concern other than the dollar threshold.",
+                message=hold_message(kept),
                 severity="warning",
             )
         ]
     return update
+
+
+def hold_message(kept) -> str:
+    quoted = [item for item in kept if item.quote.strip()]
+    if not quoted:
+        return "Critique raised a concern other than the dollar threshold."
+    first = quoted[0]
+    quote = re.sub(r"\s+", " ", first.quote).strip()
+    return f'Critique: "{quote}". {concern_text(first)}'.strip()
 
 
 def _critique_messages(decision: ApprovalDecision, as_of, facts, invoice_text: str) -> list[dict]:
@@ -96,14 +114,21 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts, invoice_text: s
             "content": (
                 "TASK critique\n"
                 f"{today_line(as_of)}\n"
-                "Review this approval. Return JSON with keys concerns (list of objects) and "
-                "stricter (boolean). You may only make the decision stricter. "
+                "Review this approval. Return JSON with keys concerns (list of objects), "
+                "stricter (boolean), and innocent_reading (string). You may only make the "
+                "decision stricter. "
                 "Being over the scrutiny threshold is not a risk. Do not set stricter only "
                 "because the total is over it. "
                 "You cannot approve a failure and you cannot clear a non-USD hold. "
                 "invoice_text is the page as read. Compare it with the decision and "
                 "verified_by_code, and raise a concern for anything the extraction missed or misread. "
-                f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Return JSON only."
+                "Also compare what is billed with what the page itself says was ordered, "
+                "delivered, priced, or returned; the numbers can all reconcile while the "
+                "wording says the bill should not be paid as printed. Start from the most "
+                "plausible innocent reading, and hold only when the page's wording makes it "
+                "unlikely. "
+                f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Each concern also has quote. {QUOTE_RULE} "
+                "Return JSON only."
             ),
         },
         {
