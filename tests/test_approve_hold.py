@@ -588,3 +588,18 @@ def test_demo_pays_one_hold_and_refuses_one_reject(capsys):
     assert records[1]["reason"] == "A reject is never paid."
     after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     assert after == before
+
+
+def test_an_amount_that_cannot_be_read_is_refused_and_logged(tmp_path):
+    class Unreadable:
+        def __str__(self):
+            raise RuntimeError("no text")
+
+    result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
+    refused = _pay(result, tmp_path, amount=Unreadable())
+    assert refused["result"] == "held"
+    assert refused["reason_code"] == "AMOUNT_MISMATCH"
+    rows = [json.loads(line) for line in (tmp_path / "approve.jsonl").read_text().splitlines()]
+    assert rows[-1] == refused["record"]
+    assert rows[-1]["reason_code"] == "AMOUNT_MISMATCH"
+    assert "paid" not in [row["decision"] for row in rows]
