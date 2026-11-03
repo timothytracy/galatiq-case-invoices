@@ -161,11 +161,17 @@ _PROCESS_CODES = {
     "AUDIT_NOTE",
 }
 
+# Read from the page by validation, which holds before audit runs, so the
+# audit never meets them. Leaving them out keeps the tool schema unchanged.
+_VALIDATION_ONLY_CODES = {"AMOUNT_WORDS_MISMATCH", "BALANCE_DUE"}
+
 # Reject, then hold, then warning. Skip process codes and codes with no rule text.
 _POLICY_CODES = [
     code
     for code in (*REJECT_CODES, *HOLD_CODES, *WARNING_CODES)
-    if code not in _PROCESS_CODES and code in RULE_TEXT
+    if code not in _PROCESS_CODES
+    and code not in _VALIDATION_ONLY_CODES
+    and code in RULE_TEXT
 ]
 
 _CODE = {
