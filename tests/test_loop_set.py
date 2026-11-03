@@ -212,7 +212,17 @@ _2120 = (LOOP / "invoice_2120.txt").read_text(encoding="utf-8")
         "Amount Due (USD): $8,000.00",
         "Remaining to pay: $8,000.00",
         "Please remit: $8,000.00",
+        "Please remit $8,000.00",
         "Total Due: $8,000.00",
+        "Amount owing: $8,000.00",
+        "Amount to pay: $8,000.00",
+        "Balance outstanding: $8,000.00",
+        "Account Balance Due: $8,000.00",
+        "Balance Due: USD8,000.00",
+        "Balance Due: US$8,000.00",
+        "Balance Due - $8,000.00",
+        "Balance Due ........ $8,000.00",
+        "Balance Due: $8,000.00 Credit card accepted",
     ],
 )
 def test_an_amount_owed_below_the_total_holds(tmp_path, db_path, owed):
@@ -276,6 +286,18 @@ def _clean(extra: str) -> str:
     )
 
 
+def test_please_remit_address_on_2117_is_still_paid(tmp_path, db_path):
+    text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip()
+    text += "\nPlease remit\n4500 Industrial Way, Dayton, OH 45401\n"
+    path = write_invoice(tmp_path, "r.txt", text)
+    handler, _ = scripted(_read("invoice_2117.txt"), critique={"concerns": [], "stricter": False})
+    result = _run(db_path, path, handler)
+    assert balances_due(text) == []
+    assert "BALANCE_DUE" not in _codes(result)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+
+
 def test_account_balance_credit_on_2117_is_still_paid(tmp_path, db_path):
     text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip()
     text += "\nAccount balance: $500.00 credit\n"
@@ -319,7 +341,12 @@ def test_balance_due_equal_to_the_2117_total_is_still_paid(tmp_path, db_path):
         "Balance forward: $40.00",
         "Account balance: $40.00",
         "Balance Due: $40.00 credit",
+        "Balance Due: $40.00 CR",
         "Credit balance: $40.00",
+        "balance due 30 days after delivery",
+        "Amount due 15 days from invoice date",
+        "Remaining balance 2 shipments",
+        "balance 2 of 6",
     ],
 )
 def test_a_zero_or_carried_balance_on_a_clean_invoice_is_paid(tmp_path, db_path, extra):
@@ -337,6 +364,108 @@ def test_balance_due_equal_to_the_total_is_not_a_hold(tmp_path, db_path):
     handler, _ = scripted(_read("invoice_2118.txt", line_items=[_line(2, 250)], total="500.00"))
     result = _run(db_path, path, handler)
     assert result["outcome"] == "approve"
+
+
+def test_csv_amount_owing_below_the_total_holds(tmp_path, db_path):
+    text = "\n".join(
+        [
+            "field,value",
+            "vendor,Ironbridge Components Inc.",
+            "item,WidgetA",
+            "item,WidgetB",
+            "item,GadgetX",
+            "total,10500.00",
+            "amount_owing,8000.00",
+            "",
+        ]
+    )
+    path = write_invoice(tmp_path, "owing.csv", text)
+    handler, _ = scripted(_read("invoice_2120.txt", total="10500.00"))
+    result = _run(db_path, path, handler)
+    assert balances_due(text) == [Decimal("8000.00")]
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BALANCE_DUE"
+    assert result["payment"].status == "not_paid"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"amountDue": "8,000.00"},
+        {"amount_owing": 8000},
+    ],
+)
+def test_json_owed_amount_below_the_total_holds(tmp_path, db_path, payload):
+    body = {
+        "vendor": "Ironbridge Components Inc.",
+        "items": ["WidgetA", "WidgetB", "GadgetX"],
+        "total": 10500.0,
+    }
+    body.update(payload)
+    text = json.dumps(body)
+    path = write_invoice(tmp_path, "owed.json", text)
+    handler, _ = scripted(_read("invoice_2120.txt", total="10500.00"))
+    result = _run(db_path, path, handler)
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BALANCE_DUE"
+    assert result["payment"].status == "not_paid"
+
+
+def test_pdf_amount_owing_holds(tmp_path, db_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "generate_pdf", ROOT / "data" / "extra_invoices" / "generate_pdf.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    text = _2120.replace("Balance Due: $8,000.00", "Amount owing: $8,000.00")
+    path = tmp_path / "owing.pdf"
+    path.write_bytes(module.build_pdf(text.splitlines()))
+    handler, _ = scripted(_read("invoice_2120.txt", total="10500.00"))
+    result = _run(db_path, path, handler)
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BALANCE_DUE"
+    assert result["payment"].status == "not_paid"
+
+
+def test_release_refuses_a_warning_reject_next_to_a_payable_hold():
+    """A downgraded total warning is skipped only beside the words mismatch."""
+
+    from models import Finding
+
+    from decision.outcome import SEND_BACK_CAP_MESSAGE
+
+    payable = "AUDIT_ESCALATED"
+    for code in ("TOTAL_MISMATCH", "NEGATIVE_AMOUNT", "UNKNOWN_ITEM"):
+        findings = [
+            Finding(code=code, message="x", severity="warning"),
+            Finding(code=payable, message="y", severity="warning"),
+        ]
+        assert review_release_block("hold", findings, payable) == (
+            f"{code} is not a review hold and is never paid."
+        )
+    blocking = [
+        Finding(code="TOTAL_MISMATCH", message="x", severity="blocking"),
+        Finding(code=payable, message="y", severity="warning"),
+    ]
+    assert review_release_block("hold", blocking, payable) == (
+        "TOTAL_MISMATCH is not a review hold and is never paid."
+    )
+    words = [
+        Finding(code="TOTAL_MISMATCH", message="x", severity="warning", item="total"),
+        Finding(code="AMOUNT_WORDS_MISMATCH", message="y", severity="warning"),
+    ]
+    assert review_release_block("hold", words, payable) == (
+        "AMOUNT_WORDS_MISMATCH is not a review hold and is never paid."
+    )
+    capped = [
+        Finding(code="TOTAL_MISMATCH", message=SEND_BACK_CAP_MESSAGE, severity="warning", item="total"),
+        Finding(code="AMOUNT_WORDS_MISMATCH", message="y", severity="warning"),
+    ]
+    assert review_release_block("hold", capped, payable) == (
+        "TOTAL_MISMATCH is not a review hold and is never paid."
+    )
 
 
 def test_balance_due_in_a_json_field_is_held(tmp_path, db_path):

@@ -246,9 +246,18 @@ def review_release_block(
     if outcome != "hold":
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
+    words = "AMOUNT_WORDS_MISMATCH" in codes
     for finding, code in zip(findings, codes):
-        # A downgraded total-line warning is not the reason release is refused.
-        if _severity(finding) == "warning" and code in REJECT_CODES:
+        # The total-line mismatch that the words already explain is a warning.
+        # It is not the reason release is refused. Any other warning reject,
+        # and a capped finding, still is.
+        downgraded_total = (
+            code == "TOTAL_MISMATCH"
+            and _severity(finding) == "warning"
+            and words
+            and not _capped(finding)
+        )
+        if downgraded_total:
             continue
         if blocks_release(code, finding):
             return f"{code} is not a review hold and is never paid."

@@ -14,32 +14,49 @@ _TOTAL = re.compile(
 _WORDS = re.compile(
     r"""(?imx)(?:amount|total)[\s_]+in[\s_]+words["'>]?\s*[:=>]\s*["']?([^\n"'<]+)"""
 )
-# An amount the page says is owed. The separator is optional, as on a total line,
-# and a CSV row may use a comma. Not a previous, prior, account, or credit
-# balance, and not a balance brought forward. A trailing "credit" is not owed.
-# "Total Due" and "Please remit" are amounts owed, not only a second total.
-_BALANCE = re.compile(
-    rf"""(?imx)
+# An amount the page says is owed. A plain "Account balance:" line is not.
+# "Account Balance Due" still is. "credit" or "CR" marks a credit only when it
+# sits against the amount, not in "Credit card".
+_LABEL = re.compile(
+    r"""(?ix)
     (?<![a-z_])
-    (?<!previous[\s_])(?<!prior[\s_])
-    (?<!account[\s_])(?<!credit[\s_])
+    (?<!previous[ \t_])(?<!prior[ \t_])(?<!credit[ \t_])
     (?:
-        balance(?![\s_]+forward)(?:[\s_]+(?:due|owing|payable))?
-        | amount[\s_]+(?:due|payable)
-        | remaining[\s_]+to[\s_]+pay
-        | total[\s_]+due
-        | please[\s_]+remit
+        balance(?:[ \t_]+|\n[ \t]*)(?:due|owing|payable|outstanding)
+        | (?<!account[ \t_])balance(?![ \t_]+forward)
+        | amount[ \t_]*due
+        | amount\n[ \t]*due
+        | amount(?:[ \t_]+|\n[ \t]*)owing
+        | amount(?:[ \t_]+|\n[ \t]*)(?:payable|to[ \t_]+pay)
+        | remaining(?:[ \t_]+|\n[ \t]*)(?:to[ \t_]+pay|balance)
+        | total(?:[ \t_]+|\n[ \t]*)due
+        | please[ \t_]+remit
     )
-    (?:\s*\([^)\n]*\))?
-    ["'>]?
-    \s*[:,=>]?
-    \s*(?:usd\s+)?
-    ["']?
-    \s*\$?
-    \s*({_NUMBER})
     """
 )
-_TRAILING_CREDIT = re.compile(r"(?i)\s*credit\b")
+# Right next to the amount: "$40.00 credit" or "CR". Not "Credit card".
+_TRAILING_CREDIT = re.compile(r"(?i)\s*(?:credit\b(?!\s+card\b)|cr\b)")
+_AFTER_COUNT = re.compile(r"(?i)\s*(?:days?|shipments?|items?|units?|of)\b")
+_SAME_LINE = re.compile(
+    rf"""(?ix)
+    [ \t]*
+    (?:\([^)\n]{{0,40}}\)[ \t]*)?
+    ["'>]*[ \t]*
+    (?:[:,=>]|-|\.{{2,}})?[ \t]*
+    ["'>]*[ \t]*
+    (?:(?:usd|us\$)[ \t]*)?
+    \$?[ \t]*
+    (?P<num>{_NUMBER})
+    """
+)
+_NEXT_LINE_MONEY = re.compile(
+    rf"""(?ix)
+    [ \t]*\n[ \t]*
+    (?:(?:usd|us\$)[ \t]*)?
+    \$?[ \t]*
+    (?P<num>{_NUMBER})
+    """
+)
 
 _SMALL = {
     word: value
@@ -80,15 +97,50 @@ def printed_totals(raw_text: str | None) -> list[Decimal]:
     return _amounts(_TOTAL, raw_text)
 
 
+def _money_shaped(gap: str, number: str) -> bool:
+    """A currency sign or code, or cents. A bare integer is not money."""
+
+    return "$" in gap or "." in number or re.search(r"(?i)usd|us\$", gap) is not None
+
+
+def _separator(gap: str) -> bool:
+    return re.search(r"[:,=>]|-|\.{2,}", gap) is not None
+
+
+def _accept(gap: str, number: str, tail: str) -> Decimal | None:
+    if _TRAILING_CREDIT.match(tail) or _AFTER_COUNT.match(tail):
+        return None
+    if not (_money_shaped(gap, number) or _separator(gap)):
+        return None
+    return _money(number)
+
+
 def balances_due(raw_text: str | None) -> list[Decimal]:
-    """Every amount the page says is owed. A trailing credit is not included."""
+    """Every amount the page says is owed.
+
+    The gap between the label and the number stays on one line, unless the
+    number looks like money. A bare count (days, shipments, "2 of 6") is not
+    an amount owed. A credit marker sitting on the amount is not either.
+    """
 
     text = raw_text or ""
     found = []
-    for match in _BALANCE.finditer(text):
-        if _TRAILING_CREDIT.match(text[match.end():]):
+    for label in _LABEL.finditer(text):
+        rest = text[label.end():]
+        same = _SAME_LINE.match(rest)
+        if same:
+            value = _accept(same.group(0)[: same.start("num")], same.group("num"), rest[same.end():])
+            if value is not None:
+                found.append(value)
             continue
-        value = _money(match.group(1))
+        nxt = _NEXT_LINE_MONEY.match(rest)
+        if nxt is None:
+            continue
+        gap = nxt.group(0)[: nxt.start("num")]
+        number = nxt.group("num")
+        if not _money_shaped(gap, number):
+            continue
+        value = _accept(gap, number, rest[nxt.end():])
         if value is not None:
             found.append(value)
     return found
