@@ -28,16 +28,21 @@ from ui.present import (
     can_pay,
     concern_text,
     confirm_label,
+    display_action,
+    document_authorization,
     format_amount,
     holds,
+    invoice_field_pairs,
     invoice_view,
     not_required,
+    pass_list_rows,
     pay_block,
     pay_message,
     payment_detail_text,
     payment_text,
     reason_code_text,
     show_text,
+    shown_missing_stages,
     summarize,
     table_rows,
     tool_call_view,
@@ -311,7 +316,7 @@ def test_review_app_starts(monkeypatch):
     next(button for button in app.button if button.label == "Process this invoice").click().run()
     assert not app.exception, app.exception
     rendered = _visible(app)
-    assert "This run used Replay (recorded Grok)." in rendered
+    assert "Replay mode: recorded Grok answers, no live calls." in rendered
     assert "null" not in rendered.lower()
     assert "None" not in rendered
     assert "[]" not in rendered
@@ -697,7 +702,7 @@ def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch):
         {"file": "held.txt", "amount": "500.00", "currency": "USD"}, paid,
     )
     assert kind == "success"
-    assert text == "Paid held.txt. Payment status: Paid. 500.00 USD."
+    assert text == "Paid held.txt. Payment status: Paid. $500.00."
     error_kind, error_text = pay_message({"file": "rejected.txt"}, refused)
     assert error_kind == "error"
     assert error_text == "NOT_PAYABLE. A reject is never paid."
@@ -881,7 +886,7 @@ def test_pay_action_is_only_for_review_holds():
     assert pay_block(blocked) == "NON_USD is not a review hold and is never paid."
     assert can_pay(reject) is False
     assert can_pay(approved) is False
-    assert confirm_label(payable) == "Confirm payment of 1,500.00 USD for held.txt"
+    assert confirm_label(payable) == "Confirm payment of $1,500.00 for held.txt"
     queued = holds(
         [
             _review_hold("held.txt", "1500.00", "USD", "VENDOR_RENAMED", "formerly"),
@@ -958,12 +963,12 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     assert "harbor.txt" in visible
     assert "blocked.txt" in visible
     assert "rejected.txt" not in visible
-    assert "NON_USD is not a review hold and is never paid." in visible
+    assert "Finance confirms the currency and amount. Nothing is converted and nothing is paid." in visible
     assert len(_pay_buttons(app)) == 2
     assert app.radio(key="choice-0-northwind.txt").value is None
     confirm = app.checkbox(key="pay-confirm-0-northwind.txt")
     assert confirm.value is False
-    assert confirm.label == "Confirm payment of 500.00 USD for northwind.txt"
+    assert confirm.label == "Confirm payment of $500.00 for northwind.txt"
     assert not app.text_input(key="pay-reviewer-0-northwind.txt").value
     assert not any(box.label.startswith("Confirm payment") and "blocked.txt" in box.label for box in app.checkbox)
 
@@ -980,7 +985,7 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     missing = _visible(app)
     assert "A reviewer name is required." in missing
     assert "A note is required." in missing
-    assert "Confirm payment of 500.00 USD for northwind.txt before paying." in missing
+    assert "Confirm payment of $500.00 for northwind.txt before paying." in missing
 
     app.text_input(key="pay-reviewer-0-northwind.txt").set_value("A")
     app.text_area(key="pay-note-0-northwind.txt").set_value("x")
@@ -996,7 +1001,7 @@ def test_hold_queue_pay_requires_reviewer_note_and_confirm(monkeypatch, tmp_path
     app.checkbox(key="pay-confirm-0-northwind.txt").set_value(False)
     _submit_pay(app, "northwind.txt", 0)
     unconfirmed = _visible(app)
-    assert "Confirm payment of 500.00 USD for northwind.txt before paying." in unconfirmed
+    assert "Confirm payment of $500.00 for northwind.txt before paying." in unconfirmed
     assert "A reviewer name is required." not in unconfirmed
     assert "A note is required." not in unconfirmed
     assert "Payment status:" not in unconfirmed
@@ -1050,7 +1055,7 @@ def test_paid_status_after_approve_and_pay(monkeypatch):
     assert view["reason"] not in text
     assert "formerly" not in text
     assert "Reviewer Ada" in text
-    assert "Amount 9,975.00 USD" in text
+    assert "Amount $9,975.00" in text
     assert "Time " in text
     assert "Authorization " in text
     assert "detail" not in (view.get("payment") or {})
@@ -1079,7 +1084,7 @@ def test_payment_detail_uses_facts_and_skips_the_hold_reason():
     text = payment_detail_text(paid)
     assert "formerly" not in text
     assert text == (
-        "Amount 500.00 USD. Reviewer Ada. Time 2026-11-02T00:00:00Z. "
+        "Amount $500.00. Reviewer Ada. Time 2026-11-02T00:00:00Z. "
         "Authorization data/invoices/northwind.txt:abc."
     )
 
@@ -1116,7 +1121,7 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
         entry for entry in shared if entry["state"]["filename"] == "invoice_1001.txt"
     ))
     facts = payment_detail_text(paid)
-    assert "Amount 5,000.00 USD" in facts
+    assert "Amount $5,000.00" in facts
     assert "Time " in facts
     assert "Authorization data/invoices/invoice_1001.txt:" in facts
     assert "Authorization /" not in facts
@@ -1331,14 +1336,14 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     _process_path(app, "data/invoices/invoice_1004_revised.json")
     _show(app, "Hold queue")
     box = next(item for item in app.checkbox if "1004_revised" in (item.key or ""))
-    assert box.label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
+    assert box.label == "Confirm payment of $4,050.00 for invoice_1004_revised.json"
     copy = (ROOT / "data" / "invoices" / "invoice_1004_revised.json").read_bytes()
     _show(app, "Run or load")
     uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
     uploader.upload("early_copy_of_1004_revised.json", copy).run()
     assert not app.exception, app.exception
     _show(app, "Hold queue")
-    boxes = [item for item in app.checkbox if "4,050.00 USD" in (item.label or "") and "1004" in (item.label or "")]
+    boxes = [item for item in app.checkbox if "$4,050.00" in (item.label or "") and "1004" in (item.label or "")]
     assert len(boxes) == 1
     boxes[0].set_value(True)
     key = boxes[0].key
@@ -1349,7 +1354,7 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     _submit_pay(app, filename, int(index))
     assert "Paid 4050.00 to Precision Parts Ltd." in capsys.readouterr().out
     _show(app, "Hold queue")
-    assert not any("4,050.00 USD" in (item.label or "") for item in app.checkbox)
+    assert not any("$4,050.00" in (item.label or "") for item in app.checkbox)
     _show(app, "Run or load")
     _process_path(app, "data/invoices/invoice_1004.json")
     originals = [
@@ -1360,6 +1365,19 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     assert len(app.session_state["entries"]) == 2
     metrics = _released_metrics(app)
     assert metrics["Dollars released after review"] == "5,940.00 USD"
+    _show(app, "Invoice detail")
+    invoice = next(item for item in app.selectbox if item.label == "Invoice")
+    revised_name = next(option for option in invoice.options if "1004_revised" in option or "early_copy" in option)
+    invoice.set_value(revised_name).run()
+    revised_detail = _visible(app)
+    assert "Authorization data/invoices/invoice_1004_revised.json:" in revised_detail
+    assert "Authorization data/invoices/invoice_1004.json:" not in revised_detail
+    _show(app, "Invoice detail")
+    next(item for item in app.selectbox if item.label == "Invoice").set_value(
+        "invoice_1004.json"
+    ).run()
+    original_detail = _visible(app)
+    assert "Not in the logs: Approval, Audit, Payment" not in original_detail
 
 
 def test_a_revision_run_first_offers_the_difference_after_the_original_is_released(monkeypatch, capsys):
@@ -1377,8 +1395,11 @@ def test_a_revision_run_first_offers_the_difference_after_the_original_is_releas
     _submit_pay(app, "invoice_1004.json", int(index))
     assert "Paid 1890.00 to Precision Parts Ltd." in capsys.readouterr().out
     _show(app, "Hold queue")
+    queued = _visible(app)
+    assert "Pay only the difference of 4050.00 USD" in queued
+    assert "Confirm it replaces the original and that the original was not paid." not in queued
     boxes = [item for item in app.checkbox if "1004_revised" in (item.key or "")]
-    assert [item.label for item in boxes] == ["Confirm payment of 4,050.00 USD for invoice_1004_revised.json"]
+    assert [item.label for item in boxes] == ["Confirm payment of $4,050.00 for invoice_1004_revised.json"]
 
 
 def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
@@ -1464,8 +1485,7 @@ def test_replay_mode_lists_recordings_and_runs_without_a_key(monkeypatch):
     mode.set_value("Replay (recorded Grok)").run()
     assert not app.exception, app.exception
     visible = _visible(app)
-    assert "Replay of a recorded Grok run" in visible
-    assert "no live model calls" in visible
+    assert "Replay mode: recorded Grok answers, no live calls." in visible
     recording = next(item for item in app.selectbox if item.label == "Recording")
     assert "samples.jsonl" in recording.options
     assert "ordered.jsonl" in recording.options
@@ -1478,7 +1498,7 @@ def test_replay_mode_lists_recordings_and_runs_without_a_key(monkeypatch):
     assert not is_real_payments_db(played["ledger_path"])
     assert os.environ.get("XAI_MODE") != "replay"
     assert not os.environ.get("XAI_API_KEY", "").strip()
-    assert "No XAI_API_KEY set. Using replay" in visible
+    assert "No XAI_API_KEY set. Using replay" not in visible
 
 
 def test_replay_stops_before_running_an_unrecorded_invoice(monkeypatch):
@@ -1565,7 +1585,7 @@ def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys
     state = saved_result(revised)
     assert Decimal(str(payable_amount(state, ledger))) == Decimal("4050.00")
     label = confirm_label({**invoice_view(revised), "amount": payable_amount(state, ledger)})
-    assert label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
+    assert label == "Confirm payment of $4,050.00 for invoice_1004_revised.json"
 
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
     app.run()
@@ -1580,7 +1600,7 @@ def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys
     _submit_pay(app, "invoice_1004_revised.json", 0)
     shown = _visible(app)
     assert "Paid invoice_1004_revised.json." in shown
-    assert "4,050.00 USD" in shown
+    assert "$4,050.00" in shown
     output = capsys.readouterr().out
     assert "Paid 4050.00 to Precision Parts Ltd." in output
     assert "Paid 5940.00" not in output
@@ -1590,6 +1610,194 @@ def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys
     from ledger.payments import paid_rows, supplement_rows
     assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
     assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "paid")]
+
+
+def test_results_show_a_plain_reason_instead_of_only_the_code(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1002.txt")
+    _show(app, "Results")
+    shown = _visible(app)
+    assert "<div>Stock shortfall</div>" in shown
+    assert "<div class='code'>STOCK_SHORTFALL</div>" in shown
+    assert shown.index("Stock shortfall") < shown.index("STOCK_SHORTFALL")
+    _show(app, "Invoice detail")
+    detail = _visible(app)
+    assert "<div>Stock shortfall</div>" in detail
+    assert "<div class='code'>STOCK_SHORTFALL</div>" in detail
+
+
+def test_fraud_hold_pass_list_names_fraud_review(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    entry = run_one(
+        ROOT / "data" / "fraud_invoices" / "invoice_2124.txt",
+        db_path,
+        replay=ROOT / "recordings" / "fraud.jsonl",
+    )
+    rows = pass_list_rows(invoice_view(entry))
+    audit = next(row for row in rows if row["Check"] == "Audit passed")
+    assert audit["Result"] == "Fail"
+    assert audit["Detail"] == "Fraud review held it."
+
+
+def test_paid_hold_does_not_list_skipped_stages(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    entry = run_one(ROOT / "data" / "invoices" / "invoice_1004.json", db_path, replay=SAMPLES)
+    view = invoice_view(entry)
+    missing = agent_trail(view["logs"], view["amount"])["missing"]
+    assert [label for label in ("approval", "audit", "payment") if label in missing] == [
+        "approval", "audit", "payment",
+    ]
+    assert "approval" in shown_missing_stages(view, missing)
+    paid = {**view, "payment_status": "paid"}
+    assert shown_missing_stages(paid, missing) == []
+
+
+def test_revised_next_action_changes_after_the_original_is_paid(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    ledger = temporary_ledger()
+    revised = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004_revised.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    view = invoice_view(revised)
+    assert "Confirm it replaces the original" in display_action(view)
+    original = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    release_hold(
+        saved_result(original), reviewer="Ada", note="Vendor verified by phone.",
+        amount="1890.00", ledger_path=ledger,
+    )
+    payable = payable_amount(saved_result(revised), ledger)
+    sentence = "Pay only the difference of 4050.00 USD. Do not pay the revised total again."
+    assert display_action(view, payable) == sentence
+    assert display_action({**view, "amount": payable}) == sentence
+    assert "Confirm it replaces the original" in action_text(view)
+    ledger.unlink(missing_ok=True)
+
+
+def test_revised_authorization_is_not_the_originals(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    ledger = temporary_ledger()
+    original = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    release_hold(
+        saved_result(original), reviewer="Ada", note="Vendor verified by phone.",
+        amount="1890.00", ledger_path=ledger,
+    )
+    revised = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004_revised.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    owed = payable_amount(saved_result(revised), ledger)
+    release_hold(
+        saved_result(revised), reviewer="Ada", note="Pay the added lines.",
+        amount=str(owed), ledger_path=ledger,
+    )
+    view = invoice_view(revised)
+    view["payment_status"] = "paid"
+    key = document_authorization(ledger, view)
+    assert key.startswith("data/invoices/invoice_1004_revised.json:")
+    assert "invoice_1004.json:" not in key
+    text = payment_detail_text({
+        **view,
+        "authorization": key,
+        "payment": {
+            "status": "paid",
+            "authorization": key,
+            "amount": owed,
+            "currency": "USD",
+            "reviewer": "Ada",
+            "time": "2026-11-03T00:00:00Z",
+        },
+    })
+    assert "Authorization data/invoices/invoice_1004_revised.json:" in text
+    assert "Authorization data/invoices/invoice_1004.json:" not in text
+    ledger.unlink(missing_ok=True)
+
+
+def test_dollars_held_skip_a_copy_that_was_already_paid(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    ledger = temporary_ledger()
+    pdf = run_one(
+        ROOT / "data" / "invoices" / "invoice_1012.pdf",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    txt = run_one(
+        ROOT / "data" / "invoices" / "invoice_1012.txt",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    before = summarize([pdf, txt])
+    assert before["dollars"]["hold"] == Decimal("19950.00")
+    state = saved_result(pdf)
+    release_hold(
+        state, reviewer="Ada", note="Same company.",
+        amount=str(payable_amount(state, ledger)), ledger_path=ledger,
+    )
+    pdf["state"]["payment"] = {"status": "paid", "amount": "9975.00", "currency": "USD"}
+    after = summarize([pdf, txt])
+    assert after["counts"]["hold"] == 1
+    assert after["dollars"]["hold"] == Decimal("0")
+    assert after["released"]["count"] == 1
+    assert after["released"]["dollars"] == Decimal("9975.00")
+    still_due = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    release_hold(
+        saved_result(still_due), reviewer="Ada", note="Vendor verified by phone.",
+        amount="1890.00", ledger_path=ledger,
+    )
+    revised = run_one(
+        ROOT / "data" / "invoices" / "invoice_1004_revised.json",
+        db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    mixed = summarize([pdf, txt, revised])
+    assert mixed["dollars"]["hold"] == Decimal(str(invoice_view(revised)["amount"]))
+    ledger.unlink(missing_ok=True)
+
+
+def test_duplicate_invoice_number_raw_is_hidden(db_path, monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    same = invoice_view(run_one(
+        ROOT / "data" / "invoices" / "invoice_1001.txt", db_path, replay=SAMPLES,
+    ))
+    names = [name for name, _ in invoice_field_pairs(same["invoice"])]
+    assert "invoice_number" in names
+    assert "invoice_number_raw" not in names
+    different = invoice_view(run_one(
+        ROOT / "data" / "invoices" / "invoice_1002.txt", db_path, replay=SAMPLES,
+    ))
+    pairs = dict(invoice_field_pairs(different["invoice"]))
+    assert pairs["invoice_number_raw"] == "1002"
+    assert pairs["invoice_number"] == "INV-1002"
+
+
+def test_agent_trail_table_sits_with_its_heading(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    next(item for item in app.selectbox if item.label == "Recording").set_value("fraud.jsonl").run()
+    _process_path(app, "data/fraud_invoices/invoice_2124.txt")
+    _show(app, "Invoice detail")
+    order = []
+    for node in app.main:
+        name = type(node).__name__
+        if name == "Subheader":
+            order.append(node.value)
+        elif name == "Dataframe" and order and order[-1] == "Agent trail":
+            order.append("trail")
+        elif name == "Markdown" and "Fraud review held it" in (getattr(node, "value", "") or ""):
+            order.append("checks")
+    assert order.index("Agent trail") < order.index("trail") < order.index("Pass list")
+    assert order.index("Pass list") < order.index("checks")
+    assert "The audit verdict is missing" not in _visible(app)
+    assert "Fraud review held it." in _visible(app)
 
 
 def _process_path(app, path: str) -> None:
