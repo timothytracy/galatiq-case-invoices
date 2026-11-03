@@ -10,6 +10,14 @@ from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
 
 OUTCOMES = ("approve", "reject", "hold")
+# Process data/invoices keeps one ledger. Eval and the README sample score
+# give each invoice its own ledger, so the same 20 files land on different counts.
+SHARED_LEDGER_NOTE = (
+    "Process data/invoices shares one ledger, so an earlier payment changes a later invoice. "
+    "invoice_1011.pdf is paid first, and invoice_1011.txt is then held as a duplicate instead of approved. "
+    "The counts are 6 approve, 9 reject, and 5 hold. "
+    "The README sample score runs each invoice on its own ledger: 7 approve, 9 reject, and 4 hold."
+)
 TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")
 APPROVED = "Approved, no action needed"
 INVOICE_FIELDS = (
@@ -54,6 +62,7 @@ def invoice_view(entry: dict) -> dict:
         "raw_text": state.get("raw_text") or "", "llm": entry.get("llm"),
         "critique_concerns": concern_list(state.get("critique_concerns")),
         "tool_calls": tool_call_view(logs, entry.get("result_line"), state.get("attempts")),
+        "authorization": _authorization_key(state),
     }
 def _place(view: dict, key: str) -> str:
     if view.get("outcome") == "approve" and blank(view.get(key)):
@@ -63,6 +72,64 @@ def reason_code_text(view: dict) -> str:
     return _place(view, "reason_code")
 def action_text(view: dict) -> str:
     return _place(view, "action")
+def payment_detail_text(view: dict) -> str:
+    """Amount, reviewer, time, and authorization for a payment that happened.
+
+    Empty when nothing was paid. The hold reason is never used. On a hold,
+    payment.detail is that reason, so this does not read it.
+    """
+    if view.get("payment_status") != "paid":
+        return ""
+    payment = view.get("payment") if isinstance(view.get("payment"), dict) else {}
+    parts = []
+    amount = payment.get("amount")
+    if blank(amount):
+        amount = view.get("amount")
+    currency = payment.get("currency") or view.get("currency")
+    shown = format_amount(amount, currency)
+    if shown:
+        parts.append(f"Amount {shown}")
+    if not blank(payment.get("reviewer")):
+        parts.append(f"Reviewer {payment['reviewer']}")
+    when = payment.get("time") or payment.get("paid_at") or _payment_logged_at(view)
+    if not blank(when):
+        parts.append(f"Time {when}")
+    auth = view.get("authorization") or payment.get("authorization")
+    if not blank(auth):
+        parts.append(f"Authorization {auth}")
+    if not parts:
+        return ""
+    return ". ".join(parts) + "."
+
+
+def already_paid_notice(view: dict, row: dict) -> str:
+    """Why the pay form is hidden: the ledger already has this invoice paid."""
+    number = view.get("invoice_number")
+    if blank(number):
+        number = "this invoice"
+    source = "" if not isinstance(row, dict) else row.get("source_file")
+    if blank(source):
+        return f"Invoice {number} from this vendor is already paid."
+    return f"Invoice {number} from this vendor is already paid as {source}."
+
+
+def _authorization_key(state: dict) -> str:
+    payment = state.get("payment") if isinstance(state.get("payment"), dict) else {}
+    if not blank(payment.get("authorization")):
+        return str(payment["authorization"])
+    auth = state.get("authorization")
+    if isinstance(auth, dict) and not blank(auth.get("key")):
+        return str(auth["key"])
+    return ""
+
+
+def _payment_logged_at(view: dict) -> str:
+    for row in reversed(view.get("logs") or []):
+        if isinstance(row, dict) and row.get("stage") == "payment" and not blank(row.get("timestamp")):
+            return str(row["timestamp"])
+    return ""
+
+
 def payment_text(status: str | None) -> str:
     names = {"paid": "Paid", "not_paid": "Not paid"}
     if not status:

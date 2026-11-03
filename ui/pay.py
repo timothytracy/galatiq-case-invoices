@@ -12,7 +12,9 @@ currency, amounts, or the ledger, and it does not pay.
 
 The shaped result is ``status`` "paid" or "refused", plus ``result``,
 ``reason_code``, ``reason``, and ``payment_status`` from the pipeline.
-A missing pipeline function returns a refusal whose reason is "backend not available".
+A paid result also keeps amount, currency, reviewer, and time when the
+pipeline record has them. A missing pipeline function returns a refusal
+whose reason is "backend not available".
 """
 
 import importlib
@@ -92,13 +94,20 @@ def shape_pay_result(raw) -> dict:
     code = body.get("reason_code")
     if not isinstance(code, str) or not code.strip():
         code = None
+    payment = {"status": payment_status}
+    if status == "paid":
+        record = body.get("record") if isinstance(body.get("record"), dict) else {}
+        for key in ("amount", "currency", "reviewer", "time"):
+            value = record.get(key)
+            if value is not None and value != "":
+                payment[key] = value
     return {
         "status": status,
         "result": result,
         "reason_code": code,
         "reason": reason,
         "payment_status": payment_status,
-        "payment": {"status": payment_status},
+        "payment": payment,
         "critique_concerns": _concerns(body.get("critique_concerns")),
     }
 

@@ -16,15 +16,16 @@ import streamlit as st
 from llm_client import NEEDS_KEY, REPLAY_NOTICE, MissingAPIKey
 from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
-    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
-    detail_index, format_amount, format_money, invoice_view, label, pay_block, pay_message,
-    payment_text, reason_code_text, released, show_text, summarize, table_rows, concern_text,
+    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, SHARED_LEDGER_NOTE, action_text, agent_trail,
+    already_paid_notice, blank, can_pay, concern_text, confirm_label, detail_index, format_amount,
+    format_money, invoice_view, label, pay_block, pay_message, payment_detail_text, payment_text,
+    reason_code_text, released, show_text, summarize, table_rows,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
     DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
-    mode_label, parse_payload, recording_files, resolve_path, run_one, save_run, temporary_ledger,
-    unrecorded,
+    mode_label, paid_ledger_row, parse_payload, recording_files, resolve_path, run_one, save_run,
+    stage_upload, temporary_ledger, unrecorded,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
@@ -132,7 +133,14 @@ def screen_run(mode: str) -> None:
         one, folder = st.columns(2)
         process_one = one.button("Process this invoice", type="primary")
         process_folder = folder.button("Process data/invoices")
+        uploaded_invoice = st.file_uploader(
+            "Upload an invoice",
+            type=["txt", "pdf", "json", "csv", "xml"],
+            key="invoice_upload",
+        )
         st.caption("Each replay run keeps the temporary ledger that run wrote.")
+        if not st.session_state.get("shared_ledger_batch"):
+            st.caption(SHARED_LEDGER_NOTE)
     with right:
         st.subheader("Load")
         st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
@@ -148,6 +156,11 @@ def screen_run(mode: str) -> None:
     if token is not None and st.session_state.get("upload_id") != token:
         st.session_state["upload_id"] = token
         _load_text(uploaded.getvalue().decode("utf-8"), uploaded.name)
+    invoice_token = None if uploaded_invoice is None else getattr(uploaded_invoice, "file_id", uploaded_invoice.name)
+    if invoice_token is not None and st.session_state.get("invoice_upload_id") != invoice_token:
+        st.session_state["invoice_upload_id"] = invoice_token
+        staged = stage_upload(uploaded_invoice.name, uploaded_invoice.getvalue())
+        _process([staged], mode, replay, single=True)
     _flash()
     entries = st.session_state.get("entries") or []
     if not entries:
@@ -158,6 +171,8 @@ def screen_run(mode: str) -> None:
     if summary["released"]["count"]:
         tally = f"{tally}, released after review {summary['released']['count']}"
     st.write(f"This session has {len(entries)} invoices ({tally}).")
+    if st.session_state.get("shared_ledger_batch"):
+        st.caption(SHARED_LEDGER_NOTE)
     if st.button("Save run file"):
         st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
 
@@ -220,11 +235,14 @@ def screen_detail(entries: list[dict]) -> None:
     for caption, value in (
         ("Reason", view["reason"]),
         ("Next action", action_text(view)),
-        ("Payment detail", (view.get("payment") or {}).get("detail")),
     ):
         if not blank(value):
             st.caption(caption)
             st.write(value)
+    paid_detail = payment_detail_text(view)
+    if paid_detail:
+        st.caption("Payment detail")
+        st.write(paid_detail)
     st.write("Payment happened." if paid else "Payment did not happen.")
     for title, block in (
         ("Extracted invoice", lambda: _invoice_block(view.get("invoice") or {})),
@@ -283,8 +301,11 @@ def screen_holds(entries: list[dict], live: bool) -> None:
             note = st.text_area("Note", key=f"note-{index}-{view['file']}")
             if st.form_submit_button("Save review"):
                 _save_hold(view, choice, note)
-        if can_pay(view):
+        paid_row = paid_ledger_row(entry.get("ledger_path"), view)
+        if can_pay(view) and paid_row is None:
             _pay_form(index, entry, view, live)
+        elif paid_row is not None and not released(view):
+            st.caption(already_paid_notice(view, paid_row))
         else:
             st.caption(pay_block(view) or "This hold cannot be paid.")
 
@@ -448,6 +469,7 @@ def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool)
         _replace_entry(rows[0])
     else:
         st.session_state["entries"] = rows
+    st.session_state["shared_ledger_batch"] = not single
     notice = f"Processed {paths[0].name}." if single else f"Processed {len(rows)} invoices."
     _notice(notice, error=_replay_errors(rows) if mode == "replay" else None)
 
@@ -461,6 +483,7 @@ def _load_path(text: str) -> None:
     except (OSError, ValueError) as exc:
         st.error(str(exc))
         return
+    st.session_state["shared_ledger_batch"] = False
     _notice(f"Loaded {len(entries)} invoices from {path.name}.", entries)
 
 def _load_text(text: str, name: str) -> None:
@@ -469,6 +492,7 @@ def _load_text(text: str, name: str) -> None:
     except (json.JSONDecodeError, ValueError) as exc:
         st.error(str(exc))
         return
+    st.session_state["shared_ledger_batch"] = False
     _notice(f"Loaded {len(entries)} invoices from {name}.", entries)
 
 def _replay_errors(rows: list[dict]) -> str | None:
@@ -567,11 +591,20 @@ def _remember_payment(entry: dict, result: dict) -> None:
     incoming = result.get("payment") if isinstance(result.get("payment"), dict) else {}
     payment.update({key: value for key, value in incoming.items() if value is not None})
     payment["status"] = "paid"
+    # payment.detail on a hold is the hold reason. A payment shows facts instead.
+    payment.pop("detail", None)
     invoice = state.get("invoice") if isinstance(state.get("invoice"), dict) else {}
     if payment.get("amount") in (None, ""):
         payment["amount"] = invoice.get("total")
     if not payment.get("currency"):
         payment["currency"] = invoice.get("currency")
+    view = invoice_view({**entry, "state": {**state, "payment": payment}})
+    row = paid_ledger_row(entry.get("ledger_path"), view)
+    if row:
+        if row.get("authorization_key") and not payment.get("authorization"):
+            payment["authorization"] = row["authorization_key"]
+        if row.get("paid_at") and not payment.get("time"):
+            payment["time"] = row["paid_at"]
     state["payment"] = payment
 
 def _save_hold(view: dict, reviewer_outcome: str | None, note: str) -> None:
