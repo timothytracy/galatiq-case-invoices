@@ -1,6 +1,7 @@
 """Release uses the pipeline record, then re-checks the live file and stock."""
 
 import hashlib
+import importlib
 import json
 import os
 import sqlite3
@@ -112,20 +113,142 @@ def test_second_approval_does_not_pay_again(tmp_path, capsys):
     assert capsys.readouterr().out.count("Paid ") == 1
 
 
-def test_paid_original_blocks_the_revision_without_saying_this_bill_was_paid(tmp_path):
+def test_reviewer_pays_only_the_difference_of_a_paid_revision(tmp_path, monkeypatch, capsys):
+    """The original is paid first. The revision is held, then released for 4050.00."""
+
+    from ledger.payments import paid_rows, supplement_rows
+
     ledger = tmp_path / "payments.db"
-    revised = _run(ROOT / "data/invoices/invoice_1004_revised.json", tmp_path, ledger=ledger)
-    assert revised["outcome"] == "hold"
-    assert revised["reason_code"] == "REVISED_INVOICE"
-    assert str(revised["invoice"].total) == "5940.00"
     original = _run(ROOT / "data/invoices/invoice_1004.json", tmp_path, ledger=ledger)
     assert original["outcome"] == "approve"
     assert str(original["invoice"].total) == "1890.00"
+    revised = _run(ROOT / "data/invoices/invoice_1004_revised.json", tmp_path, ledger=ledger)
+    assert revised["outcome"] == "hold"
+    assert revised["reason_code"] == "REVISED_INVOICE"
+    assert "DUPLICATE_INVOICE" not in [item.code for item in revised["findings"]]
+    assert str(revised["invoice"].total) == "5940.00"
+
+    full = _pay(revised, tmp_path)
+    assert full["result"] == "held"
+    assert full["reason_code"] == "AMOUNT_MISMATCH"
+    assert full["reason"] == "Amount 5940.00 does not equal the unpaid difference 4050.00."
+    assert supplement_rows(ledger) == []
+
+    seen = {}
+    payment_module = importlib.import_module("pipeline.payment")
+    real_pay = payment_module.mock_payment
+
+    def spy(vendor, amount):
+        rows = supplement_rows(ledger)
+        seen["during"] = (rows[0].status, rows[0].amount, str(amount))
+        return real_pay(vendor, amount)
+
+    monkeypatch.setattr(payment_module, "mock_payment", spy)
+    paid = _pay(revised, tmp_path, amount=Decimal("4050.00"))
+    assert paid["result"] == "paid", paid["reason"]
+    assert paid["record"]["amount"] == "4050.00"
+    assert seen["during"] == ("pending", "4050.00", "4050.00")
+    output = capsys.readouterr().out
+    assert "Paid 1890.00 to Precision Parts Ltd." in output
+    assert "Paid 4050.00 to Precision Parts Ltd." in output
+    assert "Paid 5940.00" not in output
+    assert [row.source_file for row in paid_rows(ledger)] == ["invoice_1004.json"]
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert [(row.source_file, row.amount, row.status) for row in supplement_rows(ledger)] == [
+        ("invoice_1004_revised.json", "4050.00", "paid")
+    ]
+
+    again = _pay(revised, tmp_path, amount=Decimal("4050.00"))
+    assert again["result"] == "held"
+    assert again["reason_code"] == "NOT_PAYABLE"
+    assert again["reason"] == "Invoice INV-1004 from this vendor is already paid."
+    assert len(supplement_rows(ledger)) == 1
+
+
+def test_difference_is_required_when_the_original_is_paid_after_the_hold(tmp_path, capsys):
+    ledger = tmp_path / "payments.db"
+    revised = _run(ROOT / "data/invoices/invoice_1004_revised.json", tmp_path, ledger=ledger)
+    assert revised["reason_code"] == "REVISED_INVOICE"
+    assert "original was not paid" in (revised.get("action") or "")
+    original = _run(ROOT / "data/invoices/invoice_1004.json", tmp_path, ledger=ledger)
+    assert original["outcome"] == "approve"
     refused = _pay(revised, tmp_path)
     assert refused["result"] == "held"
-    assert refused["reason_code"] == "NOT_PAYABLE"
-    assert refused["reason"] == "Invoice INV-1004 from this vendor is already paid."
-    assert "this bill" not in refused["reason"].lower()
+    assert refused["reason_code"] == "AMOUNT_MISMATCH"
+    assert "5940.00" in refused["reason"]
+    assert "4050.00" in refused["reason"]
+    paid = _pay(revised, tmp_path, amount="4050.00")
+    assert paid["result"] == "paid", paid["reason"]
+    assert paid["record"]["amount"] == "4050.00"
+    assert "Paid 5940.00" not in capsys.readouterr().out
+
+
+def test_a_failed_difference_payment_is_not_paid_again(tmp_path, monkeypatch):
+    from ledger.payments import paid_rows, supplement_rows
+
+    ledger = tmp_path / "payments.db"
+    _run(ROOT / "data/invoices/invoice_1004.json", tmp_path, ledger=ledger)
+    revised = _run(ROOT / "data/invoices/invoice_1004_revised.json", tmp_path, ledger=ledger)
+
+    def broken(vendor, amount):
+        raise ConnectionError("gateway timed out")
+
+    payment_module = importlib.import_module("pipeline.payment")
+    monkeypatch.setattr(payment_module, "mock_payment", broken)
+    failed = _pay(revised, tmp_path, amount="4050.00")
+    assert failed["result"] == "held"
+    assert failed["reason_code"] == "SYSTEM_ERROR"
+    assert [row.status for row in paid_rows(ledger)] == ["paid"]
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "failed")]
+
+    monkeypatch.setattr(payment_module, "mock_payment", lambda *_args: {"status": "success"})
+    retry = _pay(revised, tmp_path, amount="4050.00")
+    assert retry["result"] == "held"
+    assert retry["reason_code"] == "NOT_PAYABLE"
+    assert retry["reason"] == "Invoice INV-1004 from this vendor is already paid."
+    assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "failed")]
+
+
+def test_pending_or_failed_original_is_not_a_payable_difference(tmp_path):
+    from ledger.payments import record_payment, settle_payment
+
+    revised_path = ROOT / "data/invoices/invoice_1004_revised.json"
+    for status in ("pending", "failed"):
+        ledger = tmp_path / "payments.db"
+        ledger.unlink(missing_ok=True)
+        held = _run(revised_path, tmp_path, ledger=ledger)
+        assert held["reason_code"] == "REVISED_INVOICE"
+        assert record_payment(
+            ledger,
+            vendor="Precision Parts Ltd.",
+            invoice_number="INV-1004",
+            revision=None,
+            total=Decimal("1890.00"),
+            currency="USD",
+            invoice_date="2026-01-22",
+            source_file="invoice_1004.json",
+            raw_text="original text is not the revision",
+            authorization_key=f"orig-{status}",
+            status="pending",
+        ) is True
+        if status == "failed":
+            assert settle_payment(ledger, f"orig-{status}", "failed") is True
+        for amount in ("5940.00", "4050.00"):
+            refused = _pay(held, tmp_path, amount=amount)
+            assert refused["result"] == "held", refused
+            assert refused["payment_status"] == "not_paid"
+        second = _run(revised_path, tmp_path, ledger=ledger)
+        assert second["reason_code"] == "DUPLICATE_INVOICE"
+        assert "Pay only the difference" not in (second.get("action") or "")
+        assert "already paid" not in (second.get("action") or "").lower()
+        assert "not confirmed" in (second.get("action") or "")
+        text = " ".join(
+            item.message if not isinstance(item, dict) else item.get("message") or ""
+            for item in second["findings"]
+        )
+        assert "was already paid" not in text
+        assert "unpaid difference" not in text
 
 
 def test_prior_payment_and_split_block_release(tmp_path):

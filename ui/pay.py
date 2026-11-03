@@ -5,10 +5,10 @@ The pipeline function is ``pipeline.approve_hold.approve_and_pay``:
     approve_and_pay(result, *, reviewer, note, amount, ledger_path=None, log_path=None, demo=False)
 
 ``result`` is the pipeline result dict, the same object the run loaded or
-``run_one`` stored. It is not a display row. ``amount`` is that invoice's
-extracted total, unchanged. ``demo=True`` still receives ``ledger_path``: that must be the ledger the
-pipeline run wrote. Dropping it is refused. This module does not check
-currency, amounts, or the ledger, and it does not pay.
+``run_one`` stored. It is not a display row. ``amount`` is the extracted
+total, or the unpaid difference when the ledger shows one. ``demo=True``
+still receives ``ledger_path``: that must be the ledger the pipeline run
+wrote. Dropping it is refused. This module does not pay.
 
 The shaped result is ``status`` "paid" or "refused", plus ``result``,
 ``reason_code``, ``reason``, and ``payment_status`` from the pipeline.
@@ -18,6 +18,9 @@ whose reason is "backend not available".
 """
 
 import importlib
+import sqlite3
+
+from models import ExtractedInvoice
 
 BACKEND_UNAVAILABLE = "backend not available"
 _BACKEND_MODULE = "pipeline.approve_hold"
@@ -46,6 +49,32 @@ def extracted_total(result: dict):
     if isinstance(invoice, dict) and "total" in invoice:
         return invoice["total"]
     return None
+
+
+def payable_amount(result: dict, ledger_path=None):
+    """What the review screen may pay.
+
+    A higher revision of a confirmed paid invoice pays the unpaid difference
+    from the ledger. Every other invoice pays the extracted total.
+    """
+
+    total = extracted_total(result)
+    if ledger_path is None or not isinstance(result, dict):
+        return total
+    invoice = result.get("invoice")
+    if not isinstance(invoice, dict):
+        return total
+    try:
+        parsed = ExtractedInvoice.model_validate(invoice)
+    except Exception:
+        return total
+    try:
+        from ledger.payments import revision_difference
+
+        owed = revision_difference(ledger_path, parsed, result.get("raw_text") or "")
+    except sqlite3.Error:
+        return total
+    return total if owed is None else owed
 
 
 def approve_and_pay(
@@ -94,14 +123,14 @@ def shape_pay_result(raw) -> dict:
     code = body.get("reason_code")
     if not isinstance(code, str) or not code.strip():
         code = None
+    record = body.get("record") if isinstance(body.get("record"), dict) else {}
     payment = {"status": payment_status}
     if status == "paid":
-        record = body.get("record") if isinstance(body.get("record"), dict) else {}
         for key in ("amount", "currency", "reviewer", "time"):
             value = record.get(key)
             if value is not None and value != "":
                 payment[key] = value
-    return {
+    shaped = {
         "status": status,
         "result": result,
         "reason_code": code,
@@ -110,6 +139,11 @@ def shape_pay_result(raw) -> dict:
         "payment": payment,
         "critique_concerns": _concerns(body.get("critique_concerns")),
     }
+    if record.get("amount") not in (None, ""):
+        shaped["amount"] = record["amount"]
+    if record.get("currency"):
+        shaped["currency"] = record["currency"]
+    return shaped
 
 
 def _unavailable() -> dict:

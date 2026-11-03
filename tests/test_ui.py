@@ -14,6 +14,7 @@ from ui.pay import (
     BACKEND_UNAVAILABLE,
     approve_and_pay,
     extracted_total,
+    payable_amount,
     saved_result,
 )
 from ui.present import (
@@ -1103,7 +1104,12 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
         entry for entry in shared if entry["state"]["filename"] == "invoice_1004_revised.json"
     ))
     assert revised["outcome"] == "hold"
-    assert revised["reason_code"] == "DUPLICATE_INVOICE"
+    assert revised["reason_code"] == "REVISED_INVOICE"
+    assert any(
+        Decimal(str(item.get("owed"))) == Decimal("4050.00")
+        for item in revised["findings"]
+        if isinstance(item, dict) and item.get("owed") not in (None, "")
+    )
     revised_alone = invoice_view(run_one(
         ROOT / "data" / "invoices" / "invoice_1004_revised.json", db_path, replay=SAMPLES,
     ))
@@ -1293,13 +1299,103 @@ def test_pay_then_rerun_keeps_the_payment(monkeypatch):
         entry for entry in app.session_state["entries"]
         if entry["state"]["filename"] == "invoice_1012.pdf"
     ]
-    assert len(copies) == 2
-    assert sum(invoice_view(entry)["payment_status"] == "paid" for entry in copies) == 1
+    assert len(copies) == 1
+    assert invoice_view(copies[0])["payment_status"] == "paid"
     _show(app, "Hold queue")
     assert not _pay_buttons(app)
     metrics = _released_metrics(app)
     assert metrics["Released after review"] == "1"
     assert metrics["Dollars released after review"] == "9,975.00 USD"
+    assert metrics["Dollars held"] == "0.00 USD"
+
+
+def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1004.json")
+    _process_path(app, "data/invoices/invoice_1004.json")
+    paid_originals = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1004.json"
+    ]
+    assert len(paid_originals) == 1
+    assert invoice_view(paid_originals[0])["outcome"] == "approve"
+    assert invoice_view(paid_originals[0])["payment_status"] == "paid"
+    metrics = _released_metrics(app)
+    assert metrics["Approve"] == "1"
+    assert metrics["Dollars approved"] == "1,890.00 USD"
+    _show(app, "Run or load")
+    _process_path(app, "data/invoices/invoice_1004_revised.json")
+    _show(app, "Hold queue")
+    box = next(item for item in app.checkbox if "1004_revised" in (item.key or ""))
+    assert box.label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
+    copy = (ROOT / "data" / "invoices" / "invoice_1004_revised.json").read_bytes()
+    _show(app, "Run or load")
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("early_copy_of_1004_revised.json", copy).run()
+    assert not app.exception, app.exception
+    _show(app, "Hold queue")
+    boxes = [item for item in app.checkbox if "4,050.00 USD" in (item.label or "") and "1004" in (item.label or "")]
+    assert len(boxes) == 1
+    boxes[0].set_value(True)
+    key = boxes[0].key
+    index = key.split("-", 3)[2]
+    filename = key.split("-", 3)[3]
+    app.text_input(key=f"pay-reviewer-{index}-{filename}").set_value("Ada")
+    app.text_area(key=f"pay-note-{index}-{filename}").set_value("Pay the added lines.")
+    _submit_pay(app, filename, int(index))
+    assert "Paid 4050.00 to Precision Parts Ltd." in capsys.readouterr().out
+    _show(app, "Hold queue")
+    assert not any("4,050.00 USD" in (item.label or "") for item in app.checkbox)
+    _show(app, "Run or load")
+    _process_path(app, "data/invoices/invoice_1004.json")
+    paid_originals = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1004.json"
+    ]
+    assert len(paid_originals) == 1
+    assert len(app.session_state["entries"]) == 2
+    metrics = _released_metrics(app)
+    assert metrics["Approve"] == "1"
+    assert metrics["Dollars approved"] == "1,890.00 USD"
+    assert metrics["Dollars released after review"] == "4,050.00 USD"
+
+
+def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=180)
+    app.run()
+    next(button for button in app.button if button.label == "Process data/invoices").click().run()
+    assert not app.exception, app.exception
+    _show(app, "Hold queue")
+    box = next(item for item in app.checkbox if (item.key or "").endswith("invoice_1012.pdf"))
+    index = box.key.split("-", 3)[2]
+    app.text_input(key=f"pay-reviewer-{index}-invoice_1012.pdf").set_value("Ada")
+    app.text_area(key=f"pay-note-{index}-invoice_1012.pdf").set_value("Same company.")
+    box.set_value(True)
+    _submit_pay(app, "invoice_1012.pdf", int(index))
+    before = _released_metrics(app)
+    _show(app, "Run or load")
+    next(button for button in app.button if button.label == "Process data/invoices").click().run()
+    assert not app.exception, app.exception
+    shown = _visible(app)
+    assert "This session has 20 invoices (approve 6, reject 9, hold 4, released after review 1)" in shown
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1012.pdf" and invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    _show(app, "Hold queue")
+    assert not any("1012" in (getattr(box, "key", "") or "") for box in app.checkbox)
+    assert not any("1012" in (getattr(button, "key", "") or "") for button in _pay_buttons(app))
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == before["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+    assert metrics["Dollars approved"] == "26,325.00 USD"
+    assert metrics["Approve"] == "6"
+    assert metrics["Reject"] == "9"
+    assert metrics["Hold"] == "4"
 
 
 def test_upload_directory_is_reused(monkeypatch):
@@ -1324,14 +1420,18 @@ def test_processing_the_same_invoice_twice_matches(monkeypatch):
     shown = _visible(app)
     assert "PAYMENT_REFUSED" not in shown
     assert "already used" not in shown
-    second = _session_entry(app, "invoice_1001.txt")
-    assert second["state"]["outcome"] == first["state"]["outcome"]
-    assert second["state"]["payment"]["status"] == first["state"]["payment"]["status"]
-    assert second["ledger_path"] != first["ledger_path"]
-    assert not is_real_payments_db(second["ledger_path"])
-    body = json.dumps(second["state"])
-    assert "PAYMENT_REFUSED" not in body
-    assert "authorization key was already used" not in body
+    copies = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1001.txt"
+    ]
+    assert len(copies) == 1
+    assert copies[0]["state"]["outcome"] == "approve"
+    assert copies[0]["state"]["payment"]["status"] == "paid"
+    assert copies[0]["ledger_path"] == first["ledger_path"]
+    assert not is_real_payments_db(copies[0]["ledger_path"])
+    metrics = _released_metrics(app)
+    assert metrics["Approve"] == "1"
+    assert metrics["Dollars approved"] == "5,000.00 USD"
 
 
 def test_replay_mode_lists_recordings_and_runs_without_a_key(monkeypatch):
@@ -1424,6 +1524,47 @@ def test_ensure_db_honors_inventory_db(monkeypatch, tmp_path):
     found = ensure_db()
     assert found == target
     assert target.is_file()
+
+
+def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    release_dir = os.environ["INVOICE_RELEASE_DIR"]
+    ledger = temporary_ledger()
+    original = run_one(
+        ROOT / "data/invoices/invoice_1004.json", db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    revised = run_one(
+        ROOT / "data/invoices/invoice_1004_revised.json", db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    state = saved_result(revised)
+    assert Decimal(str(payable_amount(state, ledger))) == Decimal("4050.00")
+    assert Decimal(str(payable_amount(saved_result(original), ledger))) == Decimal("1890.00")
+    label = confirm_label({**invoice_view(revised), "amount": payable_amount(state, ledger)})
+    assert label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
+
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    app.session_state["release_dir"] = release_dir
+    app.session_state["entries"] = [original, revised]
+    _show(app, "Hold queue")
+    confirm = app.checkbox(key="pay-confirm-0-invoice_1004_revised.json")
+    assert confirm.label == label
+    app.text_input(key="pay-reviewer-0-invoice_1004_revised.json").set_value("Ada")
+    app.text_area(key="pay-note-0-invoice_1004_revised.json").set_value("Pay the added lines.")
+    confirm.set_value(True)
+    _submit_pay(app, "invoice_1004_revised.json", 0)
+    shown = _visible(app)
+    assert "Paid invoice_1004_revised.json." in shown
+    assert "4,050.00 USD" in shown
+    output = capsys.readouterr().out
+    assert "Paid 4050.00 to Precision Parts Ltd." in output
+    assert "Paid 5940.00" not in output
+    metrics = _released_metrics(app)
+    assert metrics["Dollars released after review"] == "4,050.00 USD"
+    assert metrics["Released after review"] == "1"
+    from ledger.payments import paid_rows, supplement_rows
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "paid")]
 
 
 def _process_path(app, path: str) -> None:

@@ -73,6 +73,9 @@ class Finding(_Strict):
     message: str
     severity: Literal["info", "warning", "blocking"] = "blocking"
     item: str | None = None
+    # Unpaid difference on a revision of a paid invoice. Excluded from dumps
+    # so a model request that includes findings stays the same bytes.
+    owed: Decimal | None = Field(default=None, exclude=True)
     # Set when the audit hit the send-back cap. Excluded from dumps so a
     # model request that includes findings stays the same bytes.
     send_back_cap: bool = Field(default=False, exclude=True)

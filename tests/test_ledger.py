@@ -17,6 +17,12 @@ import pytest
 
 from graph import run_invoice
 from ledger import arrival_findings, paid_rows, record_payment, vendor_key
+from ledger.payments import (
+    record_revision_difference,
+    revision_difference,
+    settle_payment,
+    supplement_rows,
+)
 from ledger.scenario import run_scenario
 from decision.outcome import payment_status
 from main import main
@@ -318,6 +324,16 @@ def test_two_split_payments_cannot_both_land(tmp_path):
     assert len(paid_rows(ledger)) == 1
 
 
+def test_revision_difference_is_only_written_from_the_payment_step():
+    callers = []
+    for path in ROOT.rglob("*.py"):
+        if "tests" in path.parts or "ledger" in path.parts:
+            continue
+        if "record_revision_difference" in path.read_text(encoding="utf-8"):
+            callers.append(path.relative_to(ROOT).as_posix())
+    assert callers == ["pipeline/payment.py"]
+
+
 def test_record_payment_is_only_called_from_the_payment_step():
     callers = []
     for path in ROOT.rglob("*.py"):
@@ -371,11 +387,11 @@ def test_shared_ledger_holds_the_second_copy(db_path, tmp_path):
     assert len(paid_rows(ledger)) == 1
 
 
-def test_1004_revision_is_not_a_duplicate_until_the_original_is_paid(db_path, tmp_path):
+def test_1004_revision_after_payment_is_a_difference_hold(db_path, tmp_path):
     """A fresh ledger leaves the revision as REVISED_INVOICE.
 
-    After invoice_1004.json is paid, the revision is DUPLICATE_INVOICE and
-    REVISED_INVOICE stays on the finding list. Nothing is paid the second time.
+    After invoice_1004.json is paid, the revision stays REVISED_INVOICE.
+    It is not a duplicate. The pipeline does not pay the revised total.
     """
 
     revised = INVOICES / "invoice_1004_revised.json"
@@ -385,6 +401,7 @@ def test_1004_revision_is_not_a_duplicate_until_the_original_is_paid(db_path, tm
     assert fresh["reason_code"] == "REVISED_INVOICE"
     assert "DUPLICATE_INVOICE" not in _codes(fresh)
     assert payment_status(fresh) == "not_paid"
+    assert "original was not paid" in (fresh.get("action") or "")
 
     ledger = tmp_path / "payments.db"
     paid = _run(original, db_path, ledger)
@@ -392,14 +409,151 @@ def test_1004_revision_is_not_a_duplicate_until_the_original_is_paid(db_path, tm
     assert payment_status(paid) == "paid"
     again = _run(revised, db_path, ledger)
     assert again["outcome"] == "hold"
-    assert again["reason_code"] == "DUPLICATE_INVOICE"
-    assert "REVISED_INVOICE" in _codes(again)
+    assert again["reason_code"] == "REVISED_INVOICE"
+    assert "DUPLICATE_INVOICE" not in _codes(again)
     assert payment_status(again) == "not_paid"
-    assert "invoice_1004.json" in " ".join(
-        finding["message"] if isinstance(finding, dict) else finding.message
-        for finding in again["findings"]
+    assert again["action"] == (
+        "Pay only the difference of 4050.00 USD. Do not pay the revised total again."
     )
+    messages = " ".join(_finding_messages(again))
+    assert "invoice_1004.json" in messages
+    assert "1890.00" in messages
+    assert "The unpaid difference is 4050.00 USD." in messages
     assert [row.source_file for row in paid_rows(ledger)] == ["invoice_1004.json"]
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert supplement_rows(ledger) == []
+
+
+def test_revision_edges_stay_duplicates_and_non_usd_is_not_a_difference(tmp_path):
+    """Only a higher USD revision of a paid invoice opens a difference."""
+
+    ledger = tmp_path / "payments.db"
+    _seed(
+        ledger,
+        vendor="Widgets Inc.",
+        invoice_number="INV-9",
+        total=Decimal("100.00"),
+        invoice_date="2026-04-01",
+        source_file="paid.txt",
+        raw_text="original usd text",
+    )
+
+    def arrived(total, raw, revision="R1", currency="USD"):
+        bill = _bill("Widgets Inc.", "INV-9", total, "2026-04-02", raw, revision=revision)
+        if currency != "USD":
+            bill = bill.model_copy(update={"currency": currency})
+        return arrival_findings(ledger, bill, raw), revision_difference(ledger, bill, raw)
+
+    lower, lower_owed = arrived("40.00", "Revised invoice lower")
+    same, same_owed = arrived("100.00", "Revised invoice same total")
+    unmarked, unmarked_owed = arrived("250.00", "different bill, not a revision", revision=None)
+    euro, euro_owed = arrived("250.00", "Revised invoice in euros", currency="EUR")
+    same_bytes = "Revised invoice\nidentical bytes"
+    _seed(
+        ledger,
+        vendor="Widgets Inc.",
+        invoice_number="INV-8",
+        total=Decimal("80.00"),
+        invoice_date="2026-04-01",
+        source_file="same-bytes.txt",
+        raw_text=same_bytes,
+    )
+    copied = _bill("Widgets Inc.", "INV-8", "200.00", "2026-04-02", same_bytes, revision="R1")
+
+    assert lower_owed is None and _codes_of(lower) == ["DUPLICATE_INVOICE"]
+    assert same_owed is None and _codes_of(same) == ["DUPLICATE_INVOICE"]
+    assert unmarked_owed is None and _codes_of(unmarked) == ["DUPLICATE_INVOICE"]
+    assert "total differs" in unmarked[0].message
+    assert euro_owed is None and _codes_of(euro) == ["DUPLICATE_INVOICE"]
+    assert revision_difference(ledger, copied, same_bytes) is None
+    copied_findings = arrival_findings(ledger, copied, same_bytes)
+    assert copied_findings[0].code == "DUPLICATE_INVOICE"
+    assert "This document was already paid" in copied_findings[0].message
+
+
+def test_two_writers_cannot_both_pay_the_revision_difference(tmp_path):
+    ledger = tmp_path / "payments.db"
+    _seed(
+        ledger,
+        vendor="Widgets Inc.",
+        invoice_number="INV-1004",
+        total=Decimal("1890.00"),
+        invoice_date="2026-01-22",
+        source_file="invoice_1004.json",
+        raw_text="original 1004",
+    )
+    raw = "Revised invoice additional items"
+    invoice = _bill("Widgets Inc.", "INV-1004", "5940.00", "2026-01-22", raw, revision="R1")
+    assert revision_difference(ledger, invoice, raw) == Decimal("4050.00")
+    barrier = threading.Barrier(2)
+    results = []
+
+    def write(key):
+        barrier.wait()
+        results.append(
+            record_revision_difference(
+                ledger, invoice, raw, Decimal("4050.00"), key, "invoice_1004_revised.json"
+            )
+        )
+
+    threads = [threading.Thread(target=write, args=(key,)) for key in ("key-a", "key-b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results, key=lambda item: str(item)) == [False, True]
+    assert len(paid_rows(ledger)) == 1
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert len(supplement_rows(ledger)) == 1
+    assert supplement_rows(ledger)[0].amount == "4050.00"
+
+
+def test_a_paid_difference_counts_toward_the_split_window(tmp_path):
+    ledger = tmp_path / "payments.db"
+    _seed(
+        ledger,
+        vendor="Split Synthetic Co.",
+        invoice_number="INV-1",
+        total=Decimal("2000.00"),
+        invoice_date="2026-04-01",
+        source_file="original.json",
+        raw_text="original split bill",
+    )
+    raw = "Revised invoice more items"
+    revised = _bill("Split Synthetic Co.", "INV-1", "3500.00", "2026-04-01", raw, revision="R1")
+    assert revision_difference(ledger, revised, raw) == Decimal("1500.00")
+    assert (
+        record_revision_difference(
+            ledger, revised, raw, Decimal("1500.00"), "diff-key", "revised.json"
+        )
+        is True
+    )
+    assert settle_payment(ledger, "diff-key", "paid") is True
+    later = _bill("Split Synthetic Co.", "INV-2", "7000.00", "2026-04-15", "another bill")
+    assert _codes_of(arrival_findings(ledger, later, "another bill")) == ["SPLIT_INVOICE"]
+    assert len(paid_rows(ledger)) == 1
+
+
+def test_a_higher_revision_is_not_a_split_of_its_own_invoice(tmp_path):
+    """5,000 already paid plus a revision of 8,750 is a 3,750 difference, not a split."""
+
+    ledger = tmp_path / "payments.db"
+    _seed(
+        ledger,
+        vendor="Split Synthetic Co.",
+        invoice_number="INV-44",
+        total=Decimal("5000.00"),
+        invoice_date="2026-04-01",
+        source_file="original.json",
+        raw_text="original goods",
+    )
+    raw = "Revised invoice additional goods"
+    revised = _bill("Split Synthetic Co.", "INV-44", "8750.00", "2026-04-01", raw, revision="R1")
+    assert revision_difference(ledger, revised, raw) == Decimal("3750.00")
+    assert _codes_of(arrival_findings(ledger, revised, raw)) == ["REVISED_INVOICE"]
+    copy = _bill("Split Synthetic Co.", "INV-44", "5000.00", "2026-04-01", "another copy of the same bill")
+    assert "SPLIT_INVOICE" not in _codes_of(arrival_findings(ledger, copy, "another copy of the same bill"))
+    assert _codes_of(arrival_findings(ledger, copy, "another copy of the same bill")) == ["DUPLICATE_INVOICE"]
 
 
 def test_ordered_scenario_holds_duplicate_then_split_cases_in_order(db_path, tmp_path):
@@ -514,10 +668,10 @@ def test_synthetic_split_holds_only_when_the_window_sum_crosses(tmp_path):
         "2026-04-01",
         raw="a different file body",
     )
-    # 6000 + 6000 also crosses the threshold, so the split hold is recorded too.
+    # The same invoice number is not part of its own split window.
     duplicate = next(item for item in same_total if item.code == "DUPLICATE_INVOICE")
     assert "file text differs" in duplicate.message
-    assert "SPLIT_INVOICE" in _codes_of(same_total)
+    assert "SPLIT_INVOICE" not in _codes_of(same_total)
 
     exact = findings(
         "Split Synthetic Co.",

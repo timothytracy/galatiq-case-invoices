@@ -310,7 +310,12 @@ def pay_message(view: dict, result: dict) -> tuple[str, str]:
     if result.get("result") == "paid" or result.get("status") == "paid":
         status = payment_text(result.get("payment_status") or "paid") or "Paid"
         text = f"Paid {view.get('file') or 'invoice'}. Payment status: {status}."
-        amount = format_amount(view.get("amount"), view.get("currency"))
+        paid_amount = result.get("amount")
+        currency = result.get("currency") or view.get("currency")
+        amount = format_amount(
+            view.get("amount") if paid_amount in (None, "") else paid_amount,
+            currency,
+        )
         if amount:
             text = f"{text} {amount}."
         if concerns:
@@ -336,10 +341,13 @@ def summarize(entries: list[dict]) -> dict:
         amount, currency = _decimal(view["amount"]), view["currency"]
         if released(view):
             paid_holds["count"] += 1
-            if amount is not None and currency == "USD":
-                paid_holds["dollars"] += amount
-            elif amount is not None and currency:
-                paid_holds["other"][currency] = paid_holds["other"].get(currency, Decimal("0")) + amount
+            paid_amount = _decimal((view.get("payment") or {}).get("amount"))
+            if paid_amount is None:
+                paid_amount = amount
+            if paid_amount is not None and currency == "USD":
+                paid_holds["dollars"] += paid_amount
+            elif paid_amount is not None and currency:
+                paid_holds["other"][currency] = paid_holds["other"].get(currency, Decimal("0")) + paid_amount
         else:
             if outcome in counts:
                 counts[outcome] += 1

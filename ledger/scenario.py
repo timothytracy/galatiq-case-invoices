@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from graph import run_invoice
-from ledger.payments import paid_rows
+from ledger.payments import paid_rows, supplement_rows
 from decision.outcome import payment_status, tool_calls_of
 from decision.outcome import result_codes
 
@@ -40,6 +40,7 @@ def run_scenario(
         )
         steps.append(_grade(path.name, result, expected))
     found = [row.source_file for row in paid_rows(ledger_path)]
+    found.extend(row.source_file for row in supplement_rows(ledger_path))
     expected_files = list(scenario["ledger_files"])
     ledger_ok = found == expected_files and len(found) == len(set(found))
     return {

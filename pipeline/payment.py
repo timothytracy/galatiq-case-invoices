@@ -1,5 +1,6 @@
 """Payment. The mock gateway runs only with an unused PASS-audit authorization."""
 
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_
 from decision.policy import POLICY
 from decision.wording import explain
 from ledger import arrival_findings, record_payment, settle_payment
-from ledger.payments import authorization_used
+from ledger.payments import authorization_used, record_revision_difference, revision_difference
 
 # Keys from payment() calls that passed no ledger. A ledger file keeps its own.
 _NO_LEDGER_KEYS: set[str] = set()
@@ -30,16 +31,21 @@ def clear_keys_without_ledger() -> None:
 
 def payment(state: PipelineState, ledger_path: str | Path | None = None, *, release: bool = False) -> dict:
     invoice = state.invoice
-    blocked = "" if release else _payment_blocked(state)
-    refusal = blocked or _authorization_refusal(state, ledger_path)
-    auth = state.authorization
     findings = list(state.findings)
-    if refusal or invoice is None or not isinstance(auth, PaymentAuthorization):
+    try:
+        payable = _payable_amount(state, ledger_path, release)
+    except sqlite3.Error as exc:
+        message = f"payments ledger unreadable: {exc}"
+        return _hold_unreadable_ledger(state, findings, message, release)
+    blocked = "" if release else _payment_blocked(state)
+    refusal = blocked or _authorization_refusal(state, ledger_path, payable)
+    auth = state.authorization
+    if refusal or invoice is None or not isinstance(auth, PaymentAuthorization) or payable is None:
         if refusal and not blocked:
             findings.append(Finding(code=PAYMENT_REFUSED, message=refusal, severity="blocking"))
         record = not_paid_record(invoice, refusal or "payment blocked")
         return _log_payment(state, record, findings, release)
-    return _pay(state, invoice, auth, findings, ledger_path, release)
+    return _pay(state, invoice, auth, findings, ledger_path, release, payable)
 
 
 def _pay(
@@ -49,6 +55,7 @@ def _pay(
     findings: list,
     ledger_path,
     release: bool,
+    payable: Decimal,
 ) -> dict:
     """The steps after a valid authorization: release record, ledger row, mock gateway."""
 
@@ -60,7 +67,7 @@ def _pay(
             return _hold_unreadable_ledger(
                 state, findings, noted or "release record could not be written", release
             )
-    wrote = _write_ledger(state, ledger_path, auth.key)
+    wrote = _write_ledger(state, ledger_path, auth.key, payable)
     if wrote is False:
         return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
     if wrote == "SPLIT_INVOICE":
@@ -75,7 +82,7 @@ def _pay(
     if ledger_path is None:
         _NO_LEDGER_KEYS.add(auth.key)
     try:
-        response = mock_payment(invoice.vendor, invoice.total)
+        response = mock_payment(invoice.vendor, payable)
     except Exception:
         response = None
     confirmed = isinstance(response, dict) and response.get("status") == "success"
@@ -88,7 +95,7 @@ def _pay(
     record = PaymentRecord(
         status="paid",
         vendor=invoice.vendor,
-        amount=invoice.total,
+        amount=payable,
         currency=invoice.currency,
         detail="mock payment accepted",
         mock_response=response,
@@ -142,17 +149,42 @@ def _log_explained(state: PipelineState, record: PaymentRecord, findings: list, 
     }
 
 
-def _write_ledger(state: PipelineState, ledger_path, authorization_key: str) -> bool | str:
+def _payable_amount(state: PipelineState, ledger_path, release: bool) -> Decimal | None:
+    """What this call may pay. A higher revision pays the difference only."""
+
+    invoice = state.invoice
+    if invoice is None or invoice.total is None:
+        return None
+    if release and ledger_path is not None:
+        owed = revision_difference(ledger_path, invoice, state.raw_text or "")
+        if owed is not None:
+            return owed
+    return invoice.total
+
+
+def _write_ledger(
+    state: PipelineState, ledger_path, authorization_key: str, payable: Decimal
+) -> bool | str:
     """True when there is no ledger, or the pending row was inserted.
 
     False is a duplicate. "SPLIT_INVOICE" is the split rule. Any other string
     is an unreadable ledger. None as the path keeps the direct unit tests on
-    the authorization key. The graph always passes a path.
+    the authorization key. The graph always passes a path. A payable amount
+    other than the invoice total is the unpaid difference of a revision.
     """
 
     if ledger_path is None:
         return True
     invoice = state.invoice
+    if invoice.total is None or payable != invoice.total:
+        return record_revision_difference(
+            ledger_path,
+            invoice,
+            state.raw_text or "",
+            payable,
+            authorization_key,
+            state.filename,
+        )
     return record_payment(
         ledger_path,
         vendor=invoice.vendor,
@@ -226,7 +258,7 @@ def _key_was_used(ledger_path, key: str) -> bool:
     return authorization_used(ledger_path, key)
 
 
-def _authorization_refusal(state: PipelineState, ledger_path=None) -> str:
+def _authorization_refusal(state: PipelineState, ledger_path, payable: Decimal | None) -> str:
     """Empty when the PASS audit's sign-off matches this invoice and is unused."""
 
     auth = state.authorization
@@ -237,7 +269,7 @@ def _authorization_refusal(state: PipelineState, ledger_path=None) -> str:
         return "payment refused: no invoice"
     if invoice.vendor != auth.vendor:
         return "payment refused: vendor does not match the audit authorization"
-    if invoice.total != auth.amount:
+    if payable is None or payable != auth.amount:
         return "payment refused: amount does not match the audit authorization"
     if invoice.currency != auth.currency:
         return "payment refused: currency does not match the audit authorization"

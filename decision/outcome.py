@@ -19,8 +19,10 @@ REJECT_CODES = (
 # A hold for a person. A reject-class finding wins when both are present.
 # SYSTEM_ERROR is a Grok failure after retries, not a business finding.
 # ITEM_NOT_IN_SOURCE is an extraction miss. It is named before a business hold.
-# DUPLICATE_INVOICE and SPLIT_INVOICE come before REVISED_INVOICE, so a paid
-# revision is named as a duplicate and the revision finding stays recorded.
+# DUPLICATE_INVOICE and SPLIT_INVOICE come before REVISED_INVOICE when both
+# are present. A revision whose total is above the amount already recorded
+# for that vendor and number does not get a duplicate finding, so the hold
+# stays REVISED_INVOICE and a reviewer can pay the difference.
 # PRICE_SPIKE follows FRAUD_CLUSTER, so a cluster stays the named reason
 # when a spiked price is present too.
 # AMOUNT_WORDS_MISMATCH and BALANCE_DUE are questions about which amount the
@@ -48,7 +50,8 @@ HOLD_CODES = (
 # Warnings may sit beside them. Anything else stays unpaid. These are the
 # holds whose next step is a person confirming a fact, after which the
 # invoice itself can be paid:
-#   REVISED_INVOICE — confirm the revision replaces an unpaid original.
+#   REVISED_INVOICE — confirm an unpaid original, or pay only the difference
+#     when that original was already paid.
 #   VENDOR_RENAMED — confirm it is the same company.
 #   NEW_REMITTANCE — confirm the bank change with the vendor.
 #   FRAUD_CLUSTER — confirm the signals with the vendor, using contacts on file.
