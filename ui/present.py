@@ -8,7 +8,8 @@ from pathlib import Path
 from decision.invoice_fields import normalize_invoice_number
 from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
-from parsers import SUFFIXES
+from ledger.payments import vendor_key
+from parsers import SUFFIXES, parse_file
 from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
 
@@ -18,18 +19,34 @@ _ANSWER_KEY = _ROOT / "data" / "answer_key.json"
 _INVOICES = _ROOT / "data" / "invoices"
 
 
-def _count_phrase(counts: dict) -> str:
+def _count_phrase(counts: dict, released: int = 0) -> str:
     parts = [f"{counts[name]} {name}" for name in OUTCOMES]
+    if released:
+        parts.append(f"released after review {released}")
     if len(parts) < 2:
         return parts[0] if parts else ""
     return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
+_COUNT_CACHE: tuple | None = None
+
+
 def _labeled_folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
+    global _COUNT_CACHE
+    if _COUNT_CACHE is not None:
+        return _COUNT_CACHE
+    counted = _folder_counts()
+    if counted is not None:
+        _COUNT_CACHE = counted
+    return counted
+
+
+def _folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
     """Sample-score counts, and the same files on one ledger, from the answer key.
 
-    An approve pays. A later approve of that invoice number is a duplicate hold.
-    This reads the labeled file only. It does not run the pipeline.
+    An approve pays. A later approve of that same vendor and invoice number
+    is a duplicate hold. This reads the labeled file only. It does not run
+    the pipeline.
     """
     try:
         labeled = json.loads(_ANSWER_KEY.read_text(encoding="utf-8"))["invoices"]
@@ -41,7 +58,7 @@ def _labeled_folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
     ) if _INVOICES.is_dir() else []
     alone = dict.fromkeys(OUTCOMES, 0)
     shared = dict.fromkeys(OUTCOMES, 0)
-    paid: dict[str, str] = {}
+    paid: dict[tuple[str, str], str] = {}
     flips: list[tuple[str, str]] = []
     for path in files:
         row = labeled.get(f"data/invoices/{path.name}")
@@ -52,34 +69,50 @@ def _labeled_folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
             continue
         alone[outcome] += 1
         number = normalize_invoice_number(row.get("invoice_number"))
-        if outcome == "approve" and number and number in paid:
+        vendor = _vendor_of(path)
+        identity = (vendor, number or "")
+        if outcome == "approve" and vendor and number and identity in paid:
             shared["hold"] += 1
-            flips.append((paid[number], path.name))
+            flips.append((paid[identity], path.name))
             continue
         shared[outcome] += 1
-        if outcome == "approve" and number:
-            paid[number] = path.name
+        if outcome == "approve" and vendor and number:
+            paid[identity] = path.name
     return alone, shared, flips
 
 
-def shared_ledger_note(batch_counts: dict | None = None) -> str:
-    """Why a shared-ledger folder tally differs from the per-invoice sample score."""
+def _vendor_of(path: Path) -> str:
+    try:
+        return vendor_key(parse_file(path).vendor)
+    except (OSError, ValueError, TypeError):
+        return ""
+
+
+def shared_ledger_note(batch_counts: dict | None = None, released: int = 0) -> str:
+    """Why a shared-ledger folder tally differs from the per-invoice sample score.
+
+    With no batch counts, the sentence says what a batch run is expected to give.
+    With the session counts, it repeats those counts, including releases.
+    """
     lead = "Process data/invoices shares one ledger, so an earlier payment changes a later invoice. "
     counted = _labeled_folder_counts()
     if counted is None:
         return lead + "The folder tally can differ from the README sample score, which runs each invoice on its own ledger."
     alone, shared, flips = counted
-    batch = batch_counts if batch_counts is not None else shared
     change = ""
     if flips:
         change = " ".join(
             f"{earlier} is paid first, and {later} is then held as a duplicate instead of approved."
             for earlier, later in flips
         ) + " "
+    if batch_counts is None:
+        tally = f"A batch run is expected to give {_count_phrase(shared)}. "
+    else:
+        tally = f"The counts are {_count_phrase(batch_counts, released)}. "
     return (
         lead
         + change
-        + f"The counts are {_count_phrase(batch)}. "
+        + tally
         + f"The README sample score runs each invoice on its own ledger: {_count_phrase(alone)}."
     )
 
@@ -117,7 +150,7 @@ def invoice_view(entry: dict) -> dict:
     payment = state.get("payment") if isinstance(state.get("payment"), dict) else None
     amount, currency = _first_amount(invoice, decision, payment)
     logs = list(state.get("logs") or [])
-    filename = state.get("filename") or (entry.get("result_line") or {}).get("file") or ""
+    filename = entry.get("display_name") or state.get("filename") or (entry.get("result_line") or {}).get("file") or ""
     return {
         "file": filename, "invoice_number": invoice.get("invoice_number"),
         "outcome": state.get("outcome"), "reason_code": state.get("reason_code"),
@@ -160,7 +193,7 @@ def payment_detail_text(view: dict) -> str:
     when = payment.get("time") or payment.get("paid_at") or _payment_logged_at(view)
     if not blank(when):
         parts.append(f"Time {when}")
-    auth = view.get("authorization") or payment.get("authorization")
+    auth = _repo_authorization(view.get("authorization") or payment.get("authorization"))
     if not blank(auth):
         parts.append(f"Authorization {auth}")
     if not parts:
@@ -177,6 +210,24 @@ def already_paid_notice(view: dict, row: dict) -> str:
     if blank(source):
         return f"Invoice {number} from this vendor is already paid."
     return f"Invoice {number} from this vendor is already paid as {source}."
+
+
+def _repo_authorization(value) -> str:
+    """Show a checkout-relative path when the authorization key starts with one."""
+    if blank(value):
+        return ""
+    text = str(value)
+    path, sep, digest = text.rpartition(":")
+    if not sep or not path:
+        return text
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return text
+    try:
+        relative = candidate.resolve().relative_to(_ROOT.resolve())
+    except (OSError, ValueError):
+        return text
+    return f"{relative.as_posix()}:{digest}"
 
 
 def _authorization_key(state: dict) -> str:

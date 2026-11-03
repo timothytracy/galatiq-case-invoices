@@ -85,18 +85,52 @@ def unrecorded(paths: list[Path], recording: Path) -> list[Path]:
     return [path for path in paths if not is_recorded(path, client)]
 
 
+_UPLOADS: Path | None = None
+
+
 def stage_upload(name: str, data: bytes) -> Path:
     """A path for run_one. Identical bytes use the repo file so replay still matches.
 
-    A new file is written under a temporary directory and processed as itself.
+    A new file is written into one upload directory for this process and
+    processed as itself. The caller shows the uploaded name.
     """
     known = _known_invoice(name, data)
     if known is not None:
         return known
-    folder = Path(tempfile.mkdtemp(prefix="review-upload-"))
-    path = folder / _upload_name(name)
+    path = _upload_folder() / _upload_name(name)
     path.write_bytes(data)
     return path
+
+
+def _upload_folder() -> Path:
+    """One directory for uploaded invoices. Later uploads reuse it."""
+    global _UPLOADS
+    if _UPLOADS is None or not _UPLOADS.is_dir():
+        _UPLOADS = Path(tempfile.mkdtemp(prefix="review-upload-"))
+    return _UPLOADS
+
+
+def session_paid_row(entries, view: dict) -> dict | None:
+    """A paid row for this bill in any session ledger, or None.
+
+    The pay form stays hidden when this returns a row. A revised invoice
+    with an unpaid difference can be allowed here later.
+    """
+    if not isinstance(view, dict):
+        return None
+    seen = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("ledger_path")
+        key = "" if path is None else str(path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        row = paid_ledger_row(path, view)
+        if row is not None:
+            return row
+    return None
 
 
 def paid_ledger_row(path, view: dict) -> dict | None:

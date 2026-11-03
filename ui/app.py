@@ -25,6 +25,7 @@ from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
     DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
     mode_label, paid_ledger_row, parse_payload, recording_files, resolve_path, run_one, save_run,
+    session_paid_row,
     stage_upload, temporary_ledger, unrecorded,
 )
 
@@ -139,7 +140,7 @@ def screen_run(mode: str) -> None:
             key="invoice_upload",
         )
         st.caption("Each replay run keeps the temporary ledger that run wrote.")
-        if not st.session_state.get("shared_ledger_batch"):
+        if not st.session_state.get("entries"):
             st.caption(shared_ledger_note())
     with right:
         st.subheader("Load")
@@ -160,7 +161,10 @@ def screen_run(mode: str) -> None:
     if invoice_token is not None and st.session_state.get("invoice_upload_id") != invoice_token:
         st.session_state["invoice_upload_id"] = invoice_token
         staged = stage_upload(uploaded_invoice.name, uploaded_invoice.getvalue())
-        _process([staged], mode, replay, single=True)
+        _process(
+            [staged], mode, replay, single=True,
+            display_name=Path(uploaded_invoice.name).name,
+        )
     _flash()
     entries = st.session_state.get("entries") or []
     if not entries:
@@ -172,7 +176,7 @@ def screen_run(mode: str) -> None:
         tally = f"{tally}, released after review {summary['released']['count']}"
     st.write(f"This session has {len(entries)} invoices ({tally}).")
     if st.session_state.get("shared_ledger_batch"):
-        st.caption(shared_ledger_note(counts))
+        st.caption(shared_ledger_note(counts, summary["released"]["count"]))
     if st.button("Save run file"):
         st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
 
@@ -301,7 +305,7 @@ def screen_holds(entries: list[dict], live: bool) -> None:
             note = st.text_area("Note", key=f"note-{index}-{view['file']}")
             if st.form_submit_button("Save review"):
                 _save_hold(view, choice, note)
-        paid_row = paid_ledger_row(entry.get("ledger_path"), view)
+        paid_row = session_paid_row(entries, view)
         if can_pay(view) and paid_row is None:
             _pay_form(index, entry, view, live)
         elif paid_row is not None and not released(view):
@@ -437,7 +441,9 @@ def _trail_block(view: dict) -> None:
         with st.expander("Raw text"):
             st.text(view["raw_text"])
 
-def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool) -> None:
+def _process(
+    paths: list[Path], mode: str, replay: Path | None, *, single: bool, display_name: str | None = None,
+) -> None:
     if single and not paths[0].is_file():
         st.error("Invoice path must be one invoice file." if paths[0].is_dir() else f"Invoice file not found: {paths[0]}")
         return
@@ -449,9 +455,9 @@ def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool)
         if missing:
             st.error("\n\n".join(NEEDS_KEY.format(file=path.name) for path in missing))
             return
-    # One ledger for this click. A later click gets its own file, so a second
-    # run of the same invoice is not a duplicate of the first. Pay reads the
-    # path stored on that result.
+    # Replay uses a new ledger for this click, so a second pipeline run is not
+    # a duplicate of the first. The pay form also reads every ledger already
+    # in the session, and a paid entry is kept when the same file is run again.
     ledger = PAYMENTS_DB if mode == "live" else temporary_ledger()
     rows, progress, status = [], st.progress(0.0), st.empty()
     try:
@@ -466,11 +472,15 @@ def _process(paths: list[Path], mode: str, replay: Path | None, *, single: bool)
         progress.empty()
         status.empty()
     if single:
+        shown = Path(display_name).name if display_name else ""
+        if shown:
+            rows[0]["display_name"] = shown
         _replace_entry(rows[0])
     else:
         st.session_state["entries"] = rows
     st.session_state["shared_ledger_batch"] = not single
-    notice = f"Processed {paths[0].name}." if single else f"Processed {len(rows)} invoices."
+    label = rows[0].get("display_name") if single else ""
+    notice = f"Processed {label or paths[0].name}." if single else f"Processed {len(rows)} invoices."
     _notice(notice, error=_replay_errors(rows) if mode == "replay" else None)
 
 def _load_path(text: str) -> None:
@@ -515,10 +525,16 @@ def _notice(notice: str, entries: list[dict] | None = None, error: str | None = 
     st.rerun()
 
 def _replace_entry(entry: dict) -> None:
+    """Replace an unpaid run of the same file. A paid run stays, so its payment remains in the metrics."""
     filename = (entry.get("state") or {}).get("filename")
-    kept = [row for row in st.session_state.get("entries") or [] if (row.get("state") or {}).get("filename") != filename]
+    kept = []
+    for row in st.session_state.get("entries") or []:
+        same = (row.get("state") or {}).get("filename") == filename
+        if same and invoice_view(row).get("payment_status") != "paid":
+            continue
+        kept.append(row)
     kept.append(entry)
-    kept.sort(key=lambda row: (row.get("state") or {}).get("filename") or "")
+    kept.sort(key=lambda row: ((row.get("state") or {}).get("filename") or "", row.get("display_name") or ""))
     st.session_state["entries"] = kept
 
 def _review_where() -> Path:
@@ -564,6 +580,10 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
     for message in missing:
         st.error(message)
     if missing:
+        return False
+    already = session_paid_row(st.session_state.get("entries") or [], view)
+    if already is not None:
+        st.error(already_paid_notice(view, already))
         return False
     pipeline = saved_result(entry)
     ledger = entry.get("ledger_path") or _session_ledger(live)

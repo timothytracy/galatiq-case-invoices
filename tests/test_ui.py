@@ -1114,7 +1114,8 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     facts = payment_detail_text(paid)
     assert "Amount 5,000.00 USD" in facts
     assert "Time " in facts
-    assert "Authorization " in facts
+    assert "Authorization data/invoices/invoice_1001.txt:" in facts
+    assert "Authorization /" not in facts
     assert "mock payment accepted" not in facts
     assert paid["reason"] not in facts
     held = invoice_view(next(
@@ -1124,8 +1125,12 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     assert payment_detail_text(held) == ""
     assert held["reason"] in held["payment"]["detail"]
     note = shared_ledger_note()
-    assert "6 approve, 9 reject, and 5 hold" in note
+    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in note
     assert "7 approve, 9 reject, and 4 hold" in note
+    paid_note = shared_ledger_note(
+        {"approve": 6, "reject": 9, "hold": 4}, released=1,
+    )
+    assert "The counts are 6 approve, 9 reject, 4 hold, and released after review 1" in paid_note
     assert "6 approve" not in (ROOT / "ui" / "present.py").read_text(encoding="utf-8")
     ledger.unlink(missing_ok=True)
 
@@ -1202,7 +1207,7 @@ def test_upload_uses_the_existing_run_path(monkeypatch):
     assert entry["llm"] == "replay"
     shown = _visible(app)
     assert "Processed invoice_1001.txt." in shown
-    assert shared_ledger_note() in shown
+    assert "A batch run is expected to give" not in shown
 
 
 def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
@@ -1210,14 +1215,101 @@ def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
     app.run()
     assert not app.exception, app.exception
-    assert shared_ledger_note() in _visible(app)
+    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in _visible(app)
     next(button for button in app.button if button.label == "Process data/invoices").click().run()
     assert not app.exception, app.exception
     shown = _visible(app)
     assert "Processed 20 invoices." in shown
     assert "approve 6, reject 9, hold 5" in shown
-    assert shared_ledger_note() in shown
+    assert "The counts are 6 approve, 9 reject, and 5 hold" in shown
+    assert "A batch run is expected to give" not in shown
     assert "7 approve, 9 reject, and 4 hold" in shown
+
+
+def _pay_1012(app, filename: str) -> None:
+    _show(app, "Hold queue")
+    app.text_input(key=f"pay-reviewer-0-{filename}").set_value("Ada")
+    app.text_area(key=f"pay-note-0-{filename}").set_value("Same company.")
+    app.checkbox(key=f"pay-confirm-0-{filename}").set_value(True)
+    _submit_pay(app, filename, 0)
+
+
+def _released_metrics(app) -> dict:
+    _show(app, "Metrics")
+    return {metric.label: metric.value for metric in app.metric}
+
+
+def test_pay_then_upload_copy_pays_once(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    _pay_1012(app, "invoice_1012.pdf")
+    _show(app, "Run or load")
+    original = (ROOT / "data" / "invoices" / "invoice_1012.txt").read_bytes()
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("renamed-1012.txt", original).run()
+    assert not app.exception, app.exception
+    shown = _visible(app)
+    assert "Processed renamed-1012.txt." in shown
+    assert "renamed-1012.txt" in shown
+    assert "A batch run is expected to give" not in shown
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    assert paid[0]["state"]["filename"] == "invoice_1012.pdf"
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    assert "already paid" in _visible(app)
+    again = (ROOT / "data" / "invoices" / "invoice_1012.pdf").read_bytes()
+    _show(app, "Run or load")
+    uploader = next(item for item in app.file_uploader if item.label == "Upload an invoice")
+    uploader.upload("invoice_1012.pdf", again).run()
+    assert not app.exception, app.exception
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+
+
+def test_pay_then_rerun_keeps_the_payment(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    _pay_1012(app, "invoice_1012.pdf")
+    _show(app, "Run or load")
+    assert "A batch run is expected to give" not in _visible(app)
+    _process_path(app, "data/invoices/invoice_1012.pdf")
+    copies = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1012.pdf"
+    ]
+    assert len(copies) == 2
+    assert sum(invoice_view(entry)["payment_status"] == "paid" for entry in copies) == 1
+    _show(app, "Hold queue")
+    assert not _pay_buttons(app)
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+
+
+def test_upload_directory_is_reused(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    first = stage_upload("fresh-one.txt", b"not a recorded invoice\n")
+    second = stage_upload("fresh-two.txt", b"still not recorded\n")
+    assert first.parent == second.parent
+    assert first.name == "fresh-one.txt"
+    assert second.name == "fresh-two.txt"
+    assert "review-upload-" in first.parent.name
 
 
 def test_processing_the_same_invoice_twice_matches(monkeypatch):
