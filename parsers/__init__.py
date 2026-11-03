@@ -1,6 +1,8 @@
 """Deterministic readers. Printed totals are kept even when the arithmetic is wrong."""
 
+import json
 from pathlib import Path
+from xml.etree import ElementTree
 
 from models import ExtractedInvoice
 from parsers.common import _read
@@ -19,6 +21,35 @@ def read_raw(path: Path) -> str:
     if path.suffix.lower() == ".pdf":
         return pdf_text(path)
     return _read(path)
+
+
+def unreadable_reason(path: Path, raw: str) -> str | None:
+    """Why this file cannot be an invoice, before any model reads it. None when it can.
+
+    An empty page gives a model nothing to read, so it would invent an
+    invoice. A JSON or XML file that does not parse was cut off or damaged;
+    a model would read the fragment and the reject would name the wrong cause.
+    """
+
+    if not raw.strip():
+        return "The file is empty."
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return f"The JSON is cut off or invalid at line {exc.lineno} column {exc.colno}: {exc.msg}."
+        if not isinstance(data, dict):
+            return "The JSON is not an invoice object."
+    if suffix == ".xml":
+        try:
+            ElementTree.fromstring(raw)
+        except ElementTree.ParseError as exc:
+            line, column = exc.position
+            return f"The XML is cut off or invalid at line {line} column {column + 1}."
+    if suffix == ".csv" and len([line for line in raw.splitlines() if line.strip(" ,\t")]) < 2:
+        return "The CSV has a header but no invoice rows."
+    return None
 
 
 def parse_file(path: Path) -> ExtractedInvoice:

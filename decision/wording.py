@@ -66,7 +66,10 @@ ACTION = {
     "NEGATIVE_AMOUNT": "Resend with corrected amounts, or send a labeled credit note.",
     "NON_USD": "Finance confirms the currency and amount. Nothing is converted and nothing is paid.",
     "DUPLICATE_INVOICE": "Do not pay it again. This vendor and invoice number are already paid.",
-    "SPLIT_INVOICE": "Do not pay it. This vendor's invoices in the split window cross the approval threshold.",
+    "SPLIT_INVOICE": (
+        "Confirm with the vendor that these are separate orders, not one bill split under "
+        "the approval threshold, before releasing it."
+    ),
     "REVISED_INVOICE": "Confirm it replaces the original and that the original was not paid.",
     "CREDIT_NOTE": "Accounting applies the credit. Nothing is paid.",
     "VENDOR_RENAMED": "Verify it is the same company.",
@@ -110,7 +113,8 @@ RULE_TEXT = {
     ),
     "SPLIT_INVOICE": (
         "An invoice at or under the approval threshold is a hold when it, plus the same "
-        "vendor's paid invoices inside the split window, is over that threshold."
+        "vendor's paid invoices inside the split window that were each at or under it, "
+        "is over that threshold."
     ),
     "REVISED_INVOICE": "A revised invoice is a hold until someone confirms it replaces an unpaid original.",
     "CREDIT_NOTE": "A labeled credit note whose math reconciles is a hold. Nothing is paid.",
@@ -161,8 +165,8 @@ PASSED_RULES = [
         "USD reference is a hold. A smaller difference is a price-variance warning."
     ),
     (
-        f"A {POLICY.allowed_currencies[0]} total over {APPROVAL_THRESHOLD_USD} goes to critique. "
-        "Being over that threshold is not a risk."
+        f"Every {POLICY.allowed_currencies[0]} invoice goes to critique. A total over "
+        f"{APPROVAL_THRESHOLD_USD} is marked VP scrutiny. Being over that threshold is not a risk."
     ),
 ]
 

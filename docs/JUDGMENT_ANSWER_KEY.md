@@ -14,6 +14,8 @@ Each trap has a twin with similar wording that is benign, so a reviewer that hol
 | invoice_2143.txt | APPROVE | None | Twin of 2142. Quote Q-91 is valid through Dec 31, 2026. |
 | invoice_2144.txt | HOLD | Critique hold | "All 4 GadgetX returned per RMA-112 ... No replacement has shipped", but the 4 GadgetX are still billed. |
 | invoice_2145.txt | APPROVE | None | Twin of 2144. RMA-112 belongs to an earlier order and is settled; the 4 GadgetX billed are a new order, delivered in full. |
-| invoice_2146.txt | HOLD | Audit escalation | $5,500.00, under the threshold, so critique does not run. "3 of 6 WidgetB delivered ... balance on backorder", but all 6 are billed. |
+| invoice_2146.txt | HOLD | Critique hold (Audit escalation also accepted) | $5,500.00, under the threshold, so it is not marked VP scrutiny, but critique still reads it. "3 of 6 WidgetB delivered ... balance on backorder", but all 6 are billed. |
+
+2146 used to have a `known_miss` entry, outcome APPROVE, while critique ran only over $10,000 and audit read its note as informational. `scripts/eval.py` printed that row as `KNOWN_MISS`, counted it on the score line (`score 6/7 (1 known miss)`), and exited 0, so the set ran in CI with the miss visible. Once critique ran on every invoice it held 2146 in every live run, so the entry was deleted and the set must score 7/7. No answer key has a `known_miss` now.
 
 Left out: an invoice that says it "replaces INV-2090, which was voided". A replacement for a voided invoice is often legitimate, so its right outcome depends on whether INV-2090 was paid, and the ledger tool does not yet take a referenced invoice number.

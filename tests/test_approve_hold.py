@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from db import inventory_db_path
+from db import data_dir, inventory_db_path
 from pipeline.approve_hold import approve_and_pay
 from pipeline.release_record import ROOT
 
@@ -275,6 +275,39 @@ def test_pending_or_failed_original_is_not_a_payable_difference(tmp_path):
         assert "unpaid difference" not in text
 
 
+def _seed_widgets(ledger, total, number="INV-0990"):
+    from ledger import record_payment
+    assert record_payment(
+        ledger, vendor="Widgets Inc.", invoice_number=number, revision=None,
+        total=Decimal(total), currency="USD", invoice_date="2026-01-10",
+        source_file="earlier.txt", raw_text=f"earlier {number}",
+    ) is True
+
+
+def test_a_large_payment_does_not_hold_the_next_bill(tmp_path):
+    ledger = tmp_path / "payments.db"
+    _seed_widgets(ledger, "12000.00")
+    result = _run(ROOT / "data/invoices/invoice_1001.txt", tmp_path, ledger=ledger)
+    assert result["outcome"] == "approve"
+    assert "SPLIT_INVOICE" not in [item.code for item in result["findings"]]
+
+
+def test_a_reviewed_split_hold_pays_once(tmp_path):
+    from ledger.payments import paid_rows
+
+    ledger = tmp_path / "payments.db"
+    _seed_widgets(ledger, "6000.00")
+    held = _run(ROOT / "data/invoices/invoice_1001.txt", tmp_path, ledger=ledger)
+    assert held["outcome"] == "hold"
+    assert held["reason_code"] == "SPLIT_INVOICE"
+    paid = _pay(held, tmp_path)
+    assert paid["result"] == "paid", paid["reason"]
+    assert paid["record"]["split_released"] is True
+    again = _pay(held, tmp_path)
+    assert again["result"] == "held"
+    assert len(paid_rows(ledger)) == 2
+
+
 def test_prior_payment_and_split_block_release(tmp_path):
     from ledger import record_payment
     result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
@@ -518,6 +551,7 @@ def _plant_critique_hold(tmp_path, monkeypatch):
     return result, path, releases, nest, ledger, record
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores read-only file modes")
 @pytest.mark.parametrize("lock_parent", [False, True])
 def test_read_only_stale_record_does_not_pay_in_a_new_process(lock_parent, tmp_path, monkeypatch):
     result, path, releases, nest, ledger, record = _plant_critique_hold(tmp_path, monkeypatch)
@@ -611,7 +645,7 @@ def test_demo_with_the_run_ledger_pays_once(tmp_path, capsys):
     )
     assert again["result"] == "held"
     assert capsys.readouterr().out.count("Paid ") == 1
-    assert not (ROOT / "output" / "reviews" / "approve_pay.jsonl").exists()
+    assert not (data_dir() / "output" / "reviews" / "approve_pay.jsonl").exists()
 
 
 def test_demo_without_a_ledger_is_refused(tmp_path):

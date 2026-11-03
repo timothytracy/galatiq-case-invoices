@@ -69,6 +69,9 @@ class _Message:
         self.tool_calls = tool_calls
 
 
+_CRITIQUE_CLEAR = '{"concerns": [], "stricter": false, "innocent_reading": "An ordinary bill."}'
+
+
 def _response(content, tool_calls=None, usage=None):
     message = _Message(content, tool_calls)
     choice = type("Choice", (), {"message": message})()
@@ -412,6 +415,8 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
             _response(body),
             _response(FRAUD_PASS),
             _response('{"risks_considered": ["none"]}'),
+            _response(_CRITIQUE_CLEAR),
+            _response('{"risks_considered": ["none"]}'),
             _response('{"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []}'),
         ],
     )
@@ -433,7 +438,7 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
     recorded_out = capsys.readouterr().out
     assert recorded == 0
     assert "score 1/1" in recorded_out
-    assert "tokens total=48 cost_usd=0.000070" in recorded_out
+    assert "tokens total=72 cost_usd=0.000105" in recorded_out
     assert _rows(recording)[0]["as_of"] == "2026-11-01"
     blob = "\n".join(message.get("content") or "" for kwargs in seen for message in kwargs["messages"])
     assert "Today's date is 2026-11-01." in blob
@@ -456,7 +461,7 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
     replayed_out = capsys.readouterr().out
     assert replayed == 0
     assert "score 1/1" in replayed_out
-    assert "tokens total=48 cost_usd=0.000070" in replayed_out
+    assert "tokens total=72 cost_usd=0.000105" in replayed_out
     assert "replay miss:" not in replayed_out
     assert "2027-12-12" not in replayed_out
 
@@ -482,6 +487,8 @@ def test_record_prompt_path_is_repo_relative_and_replays_from_another_directory(
     replies = [
         _response(body),
         _response(FRAUD_PASS),
+        _response('{"risks_considered": ["none"]}'),
+        _response(_CRITIQUE_CLEAR),
         _response('{"risks_considered": ["none"]}'),
         _response('{"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []}'),
     ]
@@ -668,7 +675,8 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     recording = tmp_path / "ordered.jsonl"
     seen = install_openai(
         monkeypatch,
-        [_response(body), _response(FRAUD_PASS), _response(reason), _response(audit), _response(body)],
+        [_response(body), _response(FRAUD_PASS), _response(reason), _response(_CRITIQUE_CLEAR),
+         _response(reason), _response(audit), _response(body)],
     )
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     recorded = eval_main(
@@ -734,7 +742,7 @@ def test_documented_replay_commands_match_the_recording():
     for path in docs:
         commands.extend(_eval_commands(path.read_text(encoding="utf-8")))
     ci = _ci_commands((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    assert len(ci) == 6
+    assert len(ci) == 7
     for command, name in commands + ci:
         assert name in _RECORDINGS, command
         assert (ROOT / "recordings" / name).is_file(), command

@@ -6,6 +6,12 @@ invoice_2115.txt is the example: the deterministic parser rejects the misread
 total '$3,5OO.00' as MISSING_FIELD, and the recorded model read gives the
 listed alternate TOTAL_MISMATCH.
 
+A row may list known_miss: an outcome the system is known to give instead of
+the label, with why. That result prints KNOWN_MISS, is counted on the score
+line, and does not fail the run. The label still stands, so the row is never
+counted as correct. When the row gets its label, it prints KNOWN_MISS_FIXED,
+and the entry should be deleted. Any other wrong result is a MISS.
+
 --ordered runs data/ordered_scenario.json on one shared ledger. The scored
 path does not pass a ledger, so each invoice still gets a fresh one.
 --verbose also prints each stage's JSON record. Without it, stdout is the
@@ -277,6 +283,7 @@ def _scored_main(
         path for path in invoices.iterdir() if path.is_file() and path.suffix.lower() in SUFFIXES
     )
     correct = 0
+    known = 0
     tool_calls = 0
     repeats = 0
     for path in files:
@@ -298,23 +305,28 @@ def _scored_main(
             continue
         row = grade(result, expected)
         ok = row["outcome_ok"] and row["reason_ok"]
+        mark = score_mark(ok, row["actual_outcome"], expected)
         correct += int(ok)
+        known += int(mark == "KNOWN_MISS")
         print(
             f"{path.name}\toutcome={row['actual_outcome']}\texpected={row['expected_outcome']}\t"
             f"reason={row['actual_code']}\texpected_reason={row['expected_code']}\t"
             f"payment={payment_status(result)}\t"
             f"warnings={row['warnings_matched']}/{row['warnings_expected']}\t"
             f"tools={len(calls)}\t"
-            f"{_mark(ok)}",
+            f"{mark}",
             flush=True,
         )
+        if mark == "KNOWN_MISS":
+            print(f"{path.name}\tknown_miss={expected['known_miss'].get('why') or ''}", flush=True)
         if not ok and result.get("agent_error"):
             print(f"{path.name}\terror={result['agent_error']}", flush=True)
     print(format_tool_summary(tool_calls, repeats), flush=True)
-    print(f"score {correct}/{len(files)}", flush=True)
+    print(score_line(correct, known, len(files)), flush=True)
     if mode != "live":
         print(client.usage_line(), flush=True)
-    return 0 if correct == len(files) and correct == len(key) else 1
+    passed = correct + known
+    return 0 if passed == len(files) and passed == len(key) else 1
 
 
 @contextlib.contextmanager
@@ -341,6 +353,25 @@ def _tally(calls: list[dict], tool_calls: int, repeats: int) -> tuple[int, int]:
 
 def _mark(ok: bool) -> str:
     return "ok" if ok else "MISS"
+
+
+def score_mark(ok: bool, actual_outcome: str, expected: dict) -> str:
+    """ok, MISS, KNOWN_MISS (the row's listed miss happened), or KNOWN_MISS_FIXED (it did not)."""
+
+    known = expected.get("known_miss")
+    if not known:
+        return _mark(ok)
+    if ok:
+        return "KNOWN_MISS_FIXED"
+    if str(known.get("outcome") or "").upper() == actual_outcome:
+        return "KNOWN_MISS"
+    return "MISS"
+
+
+def score_line(correct: int, known: int, total: int) -> str:
+    if not known:
+        return f"score {correct}/{total}"
+    return f"score {correct}/{total} ({known} known miss{'' if known == 1 else 'es'})"
 
 
 def format_tool_summary(calls: int, repeats: int) -> str:

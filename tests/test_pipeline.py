@@ -130,10 +130,14 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
         "validation",
         "fraud_review",
         "approval",
+        "critique",
+        "approval",
         "audit",
         "payment",
     ]
-    assert counts["critique"] == 0
+    assert counts["critique"] == 1
+    critique = next(row for row in result["logs"] if row["stage"] == "critique")
+    assert critique["result"]["vp_scrutiny"] is False
     reasoning = result["decision"].reasoning
     assert reasoning.rules_applied
     assert reasoning.risks_considered == ["no extra risk"]
@@ -148,6 +152,19 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
     assert auth.amount == result["invoice"].total
     assert auth.currency == result["invoice"].currency
     assert auth.key.startswith(str(path) + ":")
+
+
+def test_every_usd_invoice_routes_to_critique_and_other_currencies_skip_it():
+    from decision.policy import CRITIQUE_CAP
+    from graph import route_after_approval
+    from tests.fakes import payable_state
+
+    small = payable_state()
+    assert small.invoice.total < APPROVAL_THRESHOLD_USD
+    assert route_after_approval(small) == "critique"
+    assert route_after_approval(small.model_copy(update={"critique_rounds": CRITIQUE_CAP})) == "audit"
+    euro = small.model_copy(update={"invoice": small.invoice.model_copy(update={"currency": "EUR"})})
+    assert route_after_approval(euro) == "audit"
 
 
 def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
@@ -201,6 +218,8 @@ def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
     assert counts["critique"] == CRITIQUE_CAP
     assert result["critique_rounds"] == CRITIQUE_CAP
     assert counts["reason"] == CRITIQUE_CAP + 1
+    critique = next(row for row in result["logs"] if row["stage"] == "critique")
+    assert critique["result"]["vp_scrutiny"] is True
     assert "amount is high" in result["decision"].reasoning.risks_considered[-1]
     assert len(result["decision"].revisions) == 1
     assert "over the" in result["decision"].revisions[0].conclusion
@@ -441,7 +460,8 @@ def test_bad_reasoning_once_then_good_retries_and_pays(tmp_path, db_path):
     clock = FakeClock()
     result = run(path, db_path, handler, clock=clock)
     assert clock.slept == [1.0]
-    assert counts["reason"] == 2
+    # Two tries in the first approval, one in the approval after critique.
+    assert counts["reason"] == 3
     assert result["outcome"] == "approve"
     assert status(result) == "paid"
     assert result["agent_error"] is None
@@ -495,7 +515,7 @@ def test_bad_reasoning_attempt_log_contains_the_rejected_text(tmp_path, db_path,
     )
     handler, counts = scripted(extraction(), reasons=[phrase_reply, _GOOD_REASON])
     result = run(path, db_path, handler, clock=FakeClock())
-    assert counts["reason"] == 2
+    assert counts["reason"] == 3
     assert result["outcome"] == "approve"
     assert status(result) == "paid"
     assert result["decision"].reasoning.conclusion == _CLEAN_CONCLUSION

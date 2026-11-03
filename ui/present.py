@@ -165,9 +165,6 @@ def show_text(value) -> str:
 def threshold_text() -> str:
     amount = APPROVAL_THRESHOLD_USD
     return f"${amount:,.0f}" if amount == amount.to_integral_value() else f"${amount:,.2f}"
-def not_required() -> str:
-    return f"Not required (total under the {threshold_text()} threshold)"
-
 def invoice_view(entry: dict) -> dict:
     state = entry.get("state") if isinstance(entry.get("state"), dict) else {}
     invoice = state.get("invoice") if isinstance(state.get("invoice"), dict) else {}
@@ -590,7 +587,7 @@ def _difference_still_due(entry: dict, view: dict, ledger) -> bool:
     return owed is not None and total is not None and Decimal("0") < owed < total
 
 
-def agent_trail(logs: list[dict], total=None) -> dict:
+def agent_trail(logs: list[dict]) -> dict:
     rows, seen = [], []
     for row in logs:
         stage = row.get("stage") or ""
@@ -600,13 +597,10 @@ def agent_trail(logs: list[dict], total=None) -> dict:
             "summary": stage_summary(stage, result),
         })
         seen.append(stage)
-    amount = _decimal(total)
     if "critique" in seen:
         critique = next(row["summary"] for row in reversed(rows) if row["stage"] == "critique")
-    elif amount is None or amount <= APPROVAL_THRESHOLD_USD:
-        critique = not_required()
     else:
-        critique = "Did not run"
+        critique = "Critique did not run."
     missing = [stage for stage in TRAIL_STAGES if stage not in seen and stage != "critique"]
     return {"rows": rows, "missing": missing, "critique": critique}
 
@@ -617,6 +611,8 @@ def stage_summary(stage: str, result: dict) -> str:
     if stage == "critique":
         concerns = [item for item in result.get("concerns") or [] if not blank(item)]
         bits = [("Round", result.get("round"))]
+        if result.get("vp_scrutiny") is True:
+            bits.append(("", f"VP scrutiny (over {threshold_text()})"))
         if isinstance(result.get("stricter"), bool):
             bits.append(("", "Stricter" if result["stricter"] else "Not stricter"))
         if concerns:

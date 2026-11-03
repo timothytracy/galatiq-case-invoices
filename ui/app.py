@@ -330,9 +330,10 @@ def screen_holds(entries: list[dict], live: bool) -> None:
     st.header("Hold queue")
     _flash()
     st.caption(
+        "Each hold shows the evidence behind it, then one decision panel. "
         "Save review is a local note. It does not pay or change the pipeline outcome. "
         f"Saved to {_review_where()}. "
-        "Approve and pay is separate, and it asks before paying."
+        "Approve and pay uses the same reviewer and note, and asks before paying."
     )
     queued = []
     for entry in entries:
@@ -370,8 +371,11 @@ def screen_holds(entries: list[dict], live: bool) -> None:
         if next_action:
             st.caption("Next action")
             st.write(next_action)
+        st.caption("Evidence")
+        _findings_block(view.get("findings") or [])
         concerns = concern_text(view.get("critique_concerns"))
         if concerns:
+            st.caption("Critique concerns")
             st.write(concerns)
         existing = saved.get(view["file"])
         if existing:
@@ -380,18 +384,12 @@ def screen_holds(entries: list[dict], live: bool) -> None:
                 f"Pipeline outcome is still {existing.get('pipeline_outcome')}. Note: {existing.get('note')}"
             )
         _show_pay_result(view)
-        with st.form(f"review-{index}-{view['file']}"):
-            choice = st.radio(
-                "Reviewer choice", ["approve", "reject"], index=None, horizontal=True,
-                format_func=str.capitalize, key=f"choice-{index}-{view['file']}",
-            )
-            note = st.text_area("Note", key=f"note-{index}-{view['file']}")
-            if st.form_submit_button("Save review"):
-                _save_hold(view, choice, note)
         paid_row = session_paid_row(entries, view)
-        if can_pay(view) and (paid_row is None or _difference_still_owed(view)):
-            _pay_form(index, entry, view, live)
-        elif paid_row is not None and not released(view):
+        payable = can_pay(view) and (paid_row is None or _difference_still_owed(view))
+        _decision_panel(index, entry, view, live, payable)
+        if payable:
+            continue
+        if paid_row is not None and not released(view):
             st.caption(already_paid_notice(view, paid_row))
         else:
             st.caption(cannot_pay_text(view))
@@ -529,7 +527,7 @@ def _pass_list_block(view: dict) -> None:
     st.markdown("".join(lines), unsafe_allow_html=True)
 
 def _trail_block(view: dict) -> None:
-    trail = agent_trail(view["logs"], view["amount"])
+    trail = agent_trail(view["logs"])
     if trail["rows"]:
         st.dataframe(
             [{"Stage": label(row["stage"]), "Time": row["timestamp"], "Summary": row["summary"]} for row in trail["rows"]],
@@ -719,21 +717,31 @@ def _show_pay_result(view: dict) -> None:
     else:
         st.error(text)
 
-def _pay_form(index: int, entry: dict, view: dict, live: bool) -> None:
-    pipeline = saved_result(entry)
-    ledger = entry.get("ledger_path") or _session_ledger(live)
-    view = {**view, "amount": payable_amount(pipeline, ledger)}
+def _decision_panel(index: int, entry: dict, view: dict, live: bool, payable: bool) -> None:
+    """One form per hold: reviewer, note, decision, and the pay confirmation when it can be paid."""
+    if payable:
+        pipeline = saved_result(entry)
+        ledger = entry.get("ledger_path") or _session_ledger(live)
+        view = {**view, "amount": payable_amount(pipeline, ledger)}
     file = view["file"]
-    reviewer_key = f"pay-reviewer-{index}-{file}"
-    note_key = f"pay-note-{index}-{file}"
-    confirm_key = f"pay-confirm-{index}-{file}"
-    with st.form(f"pay-{index}-{file}"):
-        reviewer = st.text_input("Reviewer", key=reviewer_key)
-        note = st.text_area("Payment note", key=note_key)
-        confirmed = st.checkbox(confirm_label(view), key=confirm_key)
-        if st.form_submit_button("Approve and pay"):
-            if _pay_hold(entry, view, reviewer, note, confirmed, live):
-                st.rerun()
+    with st.form(f"decide-{index}-{file}"):
+        reviewer = st.text_input("Reviewer", key=f"pay-reviewer-{index}-{file}")
+        note = st.text_area("Note", key=f"note-{index}-{file}")
+        choice = st.radio(
+            "Reviewer choice", ["approve", "reject"], index=None, horizontal=True,
+            format_func=str.capitalize, key=f"choice-{index}-{file}",
+        )
+        confirmed = payable and st.checkbox(confirm_label(view), key=f"pay-confirm-{index}-{file}")
+        save, pay = st.columns(2)
+        saved = save.form_submit_button("Save review")
+        paid = payable and pay.form_submit_button("Approve and pay")
+    if saved:
+        _save_hold(view, choice, note)
+    if paid:
+        if choice == "reject":
+            st.error("The reviewer choice is reject. Choose approve, or save the review without paying.")
+        elif _pay_hold(entry, view, reviewer, note, confirmed, live):
+            st.rerun()
 
 def _two_letters(value: str) -> bool:
     return sum(character.isalpha() for character in (value or "")) >= 2

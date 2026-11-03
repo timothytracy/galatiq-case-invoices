@@ -68,7 +68,8 @@ def _pay(
             return _hold_unreadable_ledger(
                 state, findings, noted or "release record could not be written", release
             )
-    wrote = _write_ledger(state, ledger_path, auth.key, payable)
+    split_released = release and "SPLIT_INVOICE" in finding_codes(state.findings)
+    wrote = _write_ledger(state, ledger_path, auth.key, payable, split_released)
     if wrote is False:
         return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
     if wrote == "SPLIT_INVOICE":
@@ -166,7 +167,11 @@ def _payable_amount(state: PipelineState, ledger_path, release: bool) -> Decimal
 
 
 def _write_ledger(
-    state: PipelineState, ledger_path, authorization_key: str, payable: Decimal
+    state: PipelineState,
+    ledger_path,
+    authorization_key: str,
+    payable: Decimal,
+    split_released: bool = False,
 ) -> bool | str:
     """True when there is no ledger, or the pending row was inserted.
 
@@ -174,6 +179,7 @@ def _write_ledger(
     is an unreadable ledger. None as the path keeps the direct unit tests on
     the authorization key. The graph always passes a path. A payable amount
     other than the invoice total is the unpaid difference of a revision.
+    split_released is a reviewer releasing a recorded split hold.
     """
 
     if ledger_path is None:
@@ -187,6 +193,7 @@ def _write_ledger(
             payable,
             authorization_key,
             state.filename,
+            split_released=split_released,
         )
     return record_payment(
         ledger_path,
@@ -200,6 +207,7 @@ def _write_ledger(
         raw_text=state.raw_text,
         authorization_key=authorization_key,
         status="pending",
+        split_released=split_released,
     )
 
 

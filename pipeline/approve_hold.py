@@ -15,7 +15,7 @@ from contextlib import redirect_stdout
 from decimal import Decimal
 from pathlib import Path
 
-from db import ensure_inventory_db, inventory_db_path, payments_db_path
+from db import data_dir, ensure_inventory_db, inventory_db_path, payments_db_path
 from ledger.payments import revision_difference, stored_release_sha
 from models import ExtractedInvoice, PipelineState
 from parsers.pdf_invoice import pdf_text
@@ -40,6 +40,10 @@ from timestamps import utc_stamp
 
 _FILLERS = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u180e\u3164\uffa0\u115f\u1160\u00ad\u200e\u200f"))
 _NOT_LATEST = "release record is not the latest"
+_NEW_SPLIT = (
+    "SPLIT_INVOICE: this vendor's paid invoices in the split window now cross the approval "
+    "threshold, and the recorded hold did not show that. Rerun the invoice so the split is reviewed."
+)
 MISSING_REVIEWER = "MISSING_REVIEWER"
 MISSING_NOTE = "MISSING_NOTE"
 NOT_PAYABLE = "NOT_PAYABLE"
@@ -70,7 +74,7 @@ def approve_and_pay(
         log = _scratch("approve-", ".jsonl")
         temps.append(log)
     else:
-        log = Path(log_path) if log_path is not None else ROOT / "output" / "reviews" / "approve_pay.jsonl"
+        log = Path(log_path) if log_path is not None else data_dir() / "output" / "reviews" / "approve_pay.jsonl"
     ledger = None if demo and ledger_path is None else (
         Path(ledger_path) if ledger_path is not None else payments_db_path()
     )
@@ -110,6 +114,8 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
             "reason_code": code,
             "reason": message,
         }
+        if decision == "paid" and saved is not None and "SPLIT_INVOICE" in (saved.get("codes") or []):
+            record["split_released"] = True
         _append(log, record)
         paid = decision == "paid"
         body = {
@@ -162,6 +168,8 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     fresh = _recheck(saved, invoice, ledger)
     if isinstance(fresh, str):
         return finish("held", "SYSTEM_ERROR", fresh, saved)
+    if "SPLIT_INVOICE" in finding_codes(fresh) and "SPLIT_INVOICE" not in (saved.get("codes") or []):
+        return finish("held", NOT_PAYABLE, _NEW_SPLIT, saved)
     blocked = review_release_block(
         saved.get("outcome"),
         list(saved.get("findings") or []) + fresh,

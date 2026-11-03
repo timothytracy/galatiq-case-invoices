@@ -29,7 +29,7 @@ flowchart TD
   fraudReview -->|"pass, or a hold the code drops"| approval
   fraudReview -->|"quoted hold or model failure"| rejectLog
   validation -->|"reject or hold"| rejectLog
-  approval -->|"USD total over 10000 and critique not used"| critique
+  approval -->|"USD invoice and critique not used"| critique
   approval -->|"otherwise"| audit
   approval -->|"model failure or no decision"| rejectLog
   critique -->|"back to approval"| approval
@@ -45,13 +45,13 @@ flowchart TD
 
 ### Why code decides
 
-Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold that code or a quoted model hold could see was paid in any labeled run. The one labeled hold paid is judgment invoice 2146, which audit read past ([Limitations](#limitations)).
+Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques every USD bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold that code or a quoted model hold could see was paid in any labeled run of the final code. Before critique ran on every invoice, judgment invoice 2146 was paid: it is under $10,000, and audit read past it ([Limitations](#limitations)).
 
 ### Rules
 
 - Code decides: reject wins over hold, hold wins over approve, and critique and audit can only tighten.
 - Audit has tools that read inventory, totals, policy, and the ledger, cap at 3 rounds and 8 calls, and cannot pay.
-- The same vendor and invoice number is a `DUPLICATE_INVOICE` hold, and a same-vendor cluster inside the split window that crosses the threshold is a `SPLIT_INVOICE` hold.
+- The same vendor and invoice number is a `DUPLICATE_INVOICE` hold, and a same-vendor cluster of invoices each at or under the threshold, inside the split window, that crosses it together is a `SPLIT_INVOICE` hold.
 - Scored eval uses a fresh ledger per invoice, and `scripts/eval.py --ordered` shares one ledger.
 - Replay runs this code on saved replies with no API key and no network, and a miss is a `SYSTEM_ERROR` hold that pays nothing.
 - A non-USD invoice is a hold, and nothing is converted.
@@ -69,7 +69,7 @@ Grok is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the 
 
 Grok extracts one JSON object from the file text. PDFs contribute their text layer. There is no network fetch. Code normalizes item names and the invoice number, and it copies each item name as printed.
 
-An unreadable file is a reject, `UNREADABLE`. A model failure after the retries is a hold, `SYSTEM_ERROR`. Nothing is paid.
+Before any Grok call, code checks that the file can be read. An empty or blank file, JSON that does not parse or is not an object, XML that does not parse, and a CSV with a header but no rows are each a reject, `UNREADABLE`, and the reason names the problem (for cut-off JSON or XML, the line and column). Grok is never sent an empty page, so it cannot invent an invoice from one. A file that passes is still extracted by Grok; the plain JSON, CSV, and XML parsers are the fallback and the test double. A model failure after the retries is a hold, `SYSTEM_ERROR`. Nothing is paid.
 
 ### Validation
 
@@ -106,7 +106,7 @@ A model failure, or no decision, goes to `reject_log` and is not paid. Wording t
 
 ### Critique
 
-Critique runs when the currency is USD, the total is over $10,000, and this pass has not been critiqued. A send-back resets that counter. The model sees the decision, the facts code checked, and the raw page, and is told to raise anything the extraction missed or misread, and to compare what is billed with what the page says was ordered, delivered, priced, or returned. It returns concerns, each with a quote, a stricter flag, and an innocent reading. It can only turn an approve into a hold. It calls `grok-4.20-0309-reasoning`, with a 120-second timeout: on the default model it held the benign judgment twin 2141 in five runs of five, and on the reasoning model in none. A critique call averaged $0.0077–$0.0085 across the five judgment runs.
+Critique runs when the currency is USD and this pass has not been critiqued, whatever the total. A total over $10,000 is logged as `vp_scrutiny: true` on the critique row and shown as VP scrutiny in the review screen's trail; the explanation's rules say such a total is marked VP scrutiny, and its conclusion says the total is over the review threshold. It is a label, not a risk. A non-USD invoice is already a hold and skips critique. A send-back resets that counter. The model sees the decision, the facts code checked, and the raw page, and is told to raise anything the extraction missed or misread, and to compare what is billed with what the page says was ordered, delivered, priced, or returned. Shipping, receiving, packing, and dock or delivery-scheduling notes are routine logistics and never a reason to hold; a delivery hold needs the page to say outright that fewer units were delivered than billed, that billed units were returned or cancelled, or that the stated price basis does not apply. That line was added after the first live runs held clean bills on "The receiver is out on Thursdays." and "Dock appointment is flexible." It returns concerns, each with a quote, a stricter flag, and an innocent reading. It can only turn an approve into a hold. It calls `grok-4.20-0309-reasoning`, with a 120-second timeout: on the default model it held the benign judgment twin 2141 in five runs of five, and on the reasoning model in none. A critique call cost $0.0078–$0.0080 on average across the three final live runs of all seven sets, $0.22–$0.23 per pass over the 82 files. That is about $0.16–$0.18, or 23–26%, more than when critique ran only over $10,000.
 
 A model failure goes to `reject_log`. A concern that only restates the dollar threshold is dropped. The fact guard can set aside a covered-stock claim, a totals claim when the math already reconciles, or a future-date claim when that date is not after today. Every concern left must then pass the quote gate ([Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard)). A `CRITIQUE_HOLD` message quotes the page.
 
@@ -138,7 +138,7 @@ The four tools are `lookup_item`, `recompute_totals`, `get_policy_rule`, and `ch
 
 - **Match key.** The vendor name, casefolded with whitespace collapsed, plus the normalized invoice number. `INV 1004` and `INV-1004` are the same number. The same raw text is the same match.
 - **Revisions.** A revision of an unpaid number is `REVISED_INVOICE`. After the original is paid, a revision with a higher total is still `REVISED_INVOICE`, and a reviewer can pay only the difference, stored as a supplement row. The same document, a revision that is not higher, or a different total not marked as a revision is `DUPLICATE_INVOICE`.
-- **Splits.** The window is 30 days. An invoice's own number, including a supplement on it, is not part of its window, so a higher revision is not a split of the original. No sample file is a split.
+- **Splits.** The window is 30 days. An invoice's own number, including a supplement on it, is not part of its window, so a higher revision is not a split of the original. A paid invoice over the threshold is not part of any window: it already went through critique on its own, and counting it held every smaller bill from that vendor for 30 days. No sample file is a split.
 - **Example.** A name-order pass of `data/invoices` on one ledger holds `invoice_1011.txt` as a duplicate after `invoice_1011.pdf` is paid. If `invoice_1004.json` is paid, `invoice_1004_revised.json` is held with the difference payable.
 - **Payment states.** The row is reserved as `pending` inside the write lock, before the mock payment, so two writers cannot both pay. It becomes `paid` when the gateway confirms. If the gateway raises or does not confirm, the row becomes `failed` and the invoice is a `SYSTEM_ERROR` hold. A pending or failed row still blocks a second payment and is not a payable difference, because a failed call may have reached the bank. A person checks with the bank and clears it.
 
@@ -163,7 +163,7 @@ The reject, hold, and warning tables follow.
 
 Approve when all checks pass and there are no blocking findings.
 
-A USD total over $10,000 gets one critique. That review can only make the decision stricter. Being over the threshold is not a risk finding by itself.
+Every USD invoice gets one critique. That review can only make the decision stricter. A total over $10,000 is marked VP scrutiny; being over the threshold is not a risk finding by itself.
 
 ### The pass list
 
@@ -211,7 +211,7 @@ Hold when a person can do something the system cannot. Every hold names that act
 |---|---|
 | Non-USD currency | Finance confirms the currency and amount. Nothing is converted and nothing is paid. |
 | Duplicate invoice | Do not pay it again. The same vendor and invoice number are already in the payments ledger. |
-| Split invoice | Do not pay it. This invoice is at or under the approval threshold, and with this vendor's other paid invoices inside the split window it is over that threshold. |
+| Split invoice | Confirm with the vendor that these are separate orders, not one bill split under the approval threshold, before releasing it. This invoice is at or under the threshold, and with this vendor's other paid invoices inside the split window, each also at or under it, it is over that threshold. |
 | Revised invoice | Confirm it replaces an unpaid original. If that original was already paid and the revision total is higher, pay only the difference. |
 | Labeled credit note whose math reconciles | Accounting applies the credit. Nothing is paid. |
 | Renamed vendor | Verify it is the same company. |
@@ -260,9 +260,11 @@ Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer 
 
 `approve_and_pay` in `pipeline/approve_hold.py` is how a reviewer pays a held invoice. The pipeline outcome stays what the run recorded. Each decision is appended to a log and is not written back over that outcome.
 
-`PAYABLE_HOLD_CODES` in `decision/outcome.py` lists the holds a person may release: `REVISED_INVOICE`, `VENDOR_RENAMED`, `NEW_VENDOR`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, `INJECTION_SUSPECTED`, `PRICE_SPIKE`, `CRITIQUE_HOLD`, and `AUDIT_ESCALATED`. A hold is payable only when every saved finding and every fresh finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. `AUDIT_ESCALATED` is not payable when `send_back_cap` is set or the recorded message is the send-back cap sentence.
+In the review screen's hold queue, each hold shows its findings as evidence, then any critique concerns, then one decision panel: reviewer, note, approve or reject, and two buttons. "Save review" logs the decision without paying. "Approve and pay" appears only on a payable hold, needs the approve choice and a confirmation tick, and goes through `approve_and_pay`.
 
-A reject is never paid. Neither is a hold with a reject-class finding, or a closed hold: `ITEM_NOT_IN_SOURCE`, `NON_USD`, `CREDIT_NOTE`, `DUPLICATE_INVOICE`, `SPLIT_INVOICE`, `AMOUNT_WORDS_MISMATCH`, `BALANCE_DUE`, `ZERO_TOTAL`, `PRINTED_TOTAL_MISMATCH`, `SYSTEM_ERROR`, or `BAD_REASONING`. An invoice file outside the repository has no release record, so it cannot be released; the review screen stages uploads inside the repository for that reason. The total must be greater than zero and the currency must be USD. The amount must equal the recorded total, or the unpaid difference when a higher revision arrives after that invoice was paid. An OCR number such as `INV 1O12` stays held.
+`PAYABLE_HOLD_CODES` in `decision/outcome.py` lists the holds a person may release: `REVISED_INVOICE`, `VENDOR_RENAMED`, `NEW_VENDOR`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, `INJECTION_SUSPECTED`, `PRICE_SPIKE`, `SPLIT_INVOICE`, `CRITIQUE_HOLD`, and `AUDIT_ESCALATED`. A hold is payable only when every saved finding and every fresh finding is one of those codes or a warning. Two fraud signals count as the fraud-cluster hold. `AUDIT_ESCALATED` is not payable when `send_back_cap` is set or the recorded message is the send-back cap sentence. A `SPLIT_INVOICE` release is for a reviewer who has confirmed the orders are separate. It stays held when the fresh check finds a split the recorded hold did not have, because a payment landed after the hold. The released payment skips only the split check inside the ledger lock, and the record is marked `split_released`. The duplicate and same-text checks still run, so it pays once.
+
+A reject is never paid. Neither is a hold with a reject-class finding, or a closed hold: `ITEM_NOT_IN_SOURCE`, `NON_USD`, `CREDIT_NOTE`, `DUPLICATE_INVOICE`, `AMOUNT_WORDS_MISMATCH`, `BALANCE_DUE`, `ZERO_TOTAL`, `PRINTED_TOTAL_MISMATCH`, `SYSTEM_ERROR`, or `BAD_REASONING`. An invoice file outside the repository has no release record, so it cannot be released; the review screen stages uploads inside the repository for that reason. The total must be greater than zero and the currency must be USD. The amount must equal the recorded total, or the unpaid difference when a higher revision arrives after that invoice was paid. An OCR number such as `INV 1O12` stays held.
 
 A release re-checks the live source file and the live inventory without the model. Matching the vendor, invoice number, total, and each line's name and quantity is a sanity check. Text already in the file passes, so that check does not show the record is unchanged. Before the release file is written, the run stores its sha256 in `payments.db` when the outcome is a payable hold, or NULL otherwise. Approval pays only when the file's sha256 equals that row.
 
@@ -272,7 +274,7 @@ The split and same-text checks run at validation, and the payment write checks t
 
 | Knob | Value | What it does |
 |---|---|---|
-| `scrutiny_threshold` | 10000 | A USD total strictly over this goes to critique once. Being over it is not a risk by itself. |
+| `scrutiny_threshold` | 10000 | Every USD invoice goes to critique once. A total strictly over this is marked VP scrutiny in the critique log, the explanation, and the review screen. Being over it is not a risk by itself. It is also the split line and the near-threshold warning line. |
 | `critique_cap` | 1 | One critique pass, then approval again. |
 | `audit_send_back_cap` | 3 | The audit can send the extraction back three times. The next send-back becomes a hold. |
 | `allowed_currencies` | USD | Any other currency is a hold. Nothing is converted. |
@@ -293,7 +295,7 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 ## Limitations
 
 - The fact guard trusts the category on the model's claim. A stock sentence labeled `other` is kept by the fact guard, and then needs a quote from the page's wording.
-- The quote gate proves a concern is grounded in the page's wording, not that it is right. On the default model, critique held the benign twin 2141 in all five live judgment runs, quoting its note correctly and giving the right innocent reading. The reasoning model held no twin in five runs, but that is seven invoices, not proof it never will. Audit did not catch the trap under $10,000 in any run. The judgment set is seven invoices written by the author, so its rates are a regression check, not a measured detection rate.
+- The quote gate proves a concern is grounded in the page's wording, not that it is right. On the default model, critique held the benign twin 2141 in all five live judgment runs, quoting its note correctly and giving the right innocent reading. The reasoning model held no twin in fourteen runs, but that is seven invoices, not proof it never will. Critique now catches the trap under $10,000 because it runs on every invoice; when it ran only over $10,000, audit missed that trap in all five runs. Running critique on every bill also means more chances for a false hold: the first try held two clean unseen invoices on routine delivery notes, which a prompt line now covers, and other wording may still mislead it. The judgment set is seven invoices written by the author, so its rates are a regression check, not a measured detection rate.
 - Field lines are recognized by label on `.txt` pages. A field line with an unusual label counts as wording.
 - A `failed` ledger row blocks that invoice until a person removes it. There is no tool for that yet; it is a manual edit of `payments.db` after checking with the bank. A process killed between the reserve and the settle leaves a `pending` row, which blocks the same way.
 - One reviewer can release `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, `NEW_REMITTANCE`, `VENDOR_RENAMED`, or `NEW_VENDOR`. A second approver for vendor-risk holds is the production next step.

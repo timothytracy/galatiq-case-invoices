@@ -34,7 +34,7 @@ CRITIQUE_CLAIMS = (
 QUOTE_RULE = (
     "A concern the code cannot confirm stands only with a quote: text copied exactly from the "
     f"invoice text, at least {FRAUD_QUOTE_MIN_CHARS} characters, from the page's wording "
-    "(notes, terms, remarks), not only a date, item, or total line. Its text must say, in your "
+    "(notes, terms, remarks), not only a date, vendor, item, or total line. Its text must say, in your "
     "own words, what the quoted wording contradicts in the bill; a concern that only repeats "
     "the page is ignored. Also give innocent_reading (string): the most plausible innocent "
     "reading of the page, which the quote makes unlikely."
@@ -50,7 +50,7 @@ AUDIT_CLAIMS = (
 _DATE_FIELDS = {"invoice_date", "due_date"}
 # Lines whose facts code has already checked: dates, item lines, subtotal and total.
 _FIELD_LINE = re.compile(
-    r"^\s*(?:items?\s*:|invoice\s*(?:number|no\.?|#)|(?:invoice\s+)?date\b|due\s*date|"
+    r"^\s*(?:items?\s*:|vendor\s*:|invoice\s*(?:number|no\.?|#)|(?:invoice\s+)?date\b|due\s*date|"
     r"sub\s*-?\s*total|total(?:\s+amount)?\s*(?:due)?\s*:|amount\s+due)",
     re.IGNORECASE,
 )
@@ -162,7 +162,7 @@ def quote_dropped_reason(quote: str, invoice, raw_text: str, innocent_reading: s
     if not _quote_has_prose(squashed, invoice, raw_text):
         return (
             "quote_structured_only",
-            "The quote is only a date, item, or total line, which code has already checked.",
+            "The quote is only a date, vendor, item, or total line, which code has already checked.",
         )
     return None
 

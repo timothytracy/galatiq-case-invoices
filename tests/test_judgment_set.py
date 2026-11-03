@@ -113,6 +113,21 @@ def test_a_quoted_critique_holds_2140(db_path):
     assert row["outcome_ok"] and row["reason_ok"]
 
 
+def test_a_quoted_critique_holds_2146_under_the_threshold(db_path):
+    path = JUDGMENT / "invoice_2146.txt"
+    quote = "Partial shipment: 3 of 6 WidgetB delivered"
+    body = _critique("All 6 WidgetB are billed but only 3 were delivered.", quote)
+    result = _run(db_path, path, _handler(path, critique=body))
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "CRITIQUE_HOLD"
+    assert result["payment"].status == "not_paid"
+    logged = _stage(result, "critique")
+    assert logged["vp_scrutiny"] is False
+    assert logged["quotes"] == [quote]
+    row = grade(result, KEY["data/judgment_invoices/invoice_2146.txt"])
+    assert row["outcome_ok"] and row["reason_ok"]
+
+
 def test_a_quote_not_on_the_page_is_dropped_and_2140_pays(db_path):
     path = JUDGMENT / "invoice_2140.txt"
     body = _critique("Billed for goods not delivered.", "Only 5 of 15 WidgetA arrived, rest cancelled")
@@ -158,7 +173,7 @@ def test_a_quoted_audit_escalation_holds_2146_and_a_fake_quote_pays(db_path):
         "innocent_reading": INNOCENT,
     }
     held = _run(db_path, path, _handler(path, audit=escalate))
-    assert "critique" not in [row["stage"] for row in held["logs"]]
+    assert _stage(held, "critique")["vp_scrutiny"] is False
     assert held["outcome"] == "hold"
     assert held["reason_code"] == "AUDIT_ESCALATED"
     message = next(f.message for f in held["findings"] if f.code == "AUDIT_ESCALATED")
