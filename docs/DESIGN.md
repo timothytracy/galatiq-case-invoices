@@ -56,7 +56,7 @@ Grok does the reading and the judging: it extracts the fields, reads each invoic
 - Replay runs this code on saved replies with no API key and no network, and a miss is a `SYSTEM_ERROR` hold that pays nothing.
 - A non-USD invoice is a hold, and nothing is converted.
 - Invoice 1003 is a stock reject, and its fraud signals stay on the record.
-- Invoice 1004 is labeled approve: code records its non-commercial address as a warning. On this branch fraud review holds it, which is the recorded samples miss.
+- Invoice 1004 passes validation, and code records its non-commercial address as a warning. Its label accepts an approve or a `FRAUD_SUSPECTED` hold, and fraud review holds it.
 - Fraud review can only add a hold, and the hold stands only when its quote is on the page. A failed fraud call is a `SYSTEM_ERROR` hold.
 
 ## Extended details
@@ -212,7 +212,7 @@ Item names are matched after normalizing case, spaces, and hyphens.
 - Non-USD is never paid. Nothing is converted.
 - Critique and audit can only tighten. Critique sets aside a stock claim whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit sets aside that same future-date claim. Every other concern is kept, including a disagreement between the raw text and the extraction. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
 
-Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 is labeled approve. A non-commercial address on a clean invoice the brief lists as passing is a warning. On this branch fraud review holds it. The revised file stays a hold because it is a revision.
+Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 passes validation. A non-commercial address on a clean invoice the brief lists as passing is a warning. Fraud review holds it, and its label accepts that hold or an approve. The revised file stays a hold because it is a revision.
 
 ## Releasing a hold
 
@@ -257,6 +257,6 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
-- Fraud review held 1004, a labeled approve, on its address. The quote check proves the text is on the page, not that it is fraud. The prompt says one routine detail such as an address is not enough, and the model held anyway. The prompt was not tuned after the runs.
+- Fraud review held 1004, then labeled a strict approve, on its address. The quote check proves the text is on the page, not that it is fraud. The prompt says one routine detail such as an address is not enough, and the model held anyway. The label was changed after the run to accept the hold; the prompt was not changed.
 - The fraud set is five invoices written by the author. A 5/5 score there is a regression check, not a measured detection rate.
 - Fraud review cannot see a vendor master or the bank account on file, so "differs from the vendor's established payee" is judged from the page alone.

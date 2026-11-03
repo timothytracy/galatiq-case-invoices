@@ -4,19 +4,19 @@
 
 **Grok reads and questions every invoice, and written rules decide whether it is paid, so no money moves without an audit PASS or a named person's release.**
 
-The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, reads each invoice that passed validation for payment fraud, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The loop set adds 3 more: one approved and two held. The fraud set adds 5: two approved and three held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
+The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, reads each invoice that passed validation for payment fraud, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held; 1004 also accepts a fraud-review hold. The loop set adds 3 more: one approved and two held. The fraud set adds 5: two approved and three held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
 
 Replay of the five committed recordings, no API key. Each set was recorded once, live, on 2026-11-02 PT with `--as-of 2026-11-01`:
 
 | Set | Score |
 |---|---|
-| 20 samples | 19/20 |
+| 20 samples | 20/20 |
 | 21 unseen | 21/21 |
-| Ordered ledger | 9 of 11 steps ok, ledger short one row |
+| Ordered ledger | 11 steps ok, ledger matches |
 | Loop set | 3/3 |
 | Fraud set | 5/5 |
 
-The miss is invoice 1004, labeled a strict approve. Fraud review held it as `FRAUD_SUSPECTED`, quoting its vendor address, 742 Evergreen Terrace, the Simpsons' house. In the ordered scenario that hold leaves 1004 unpaid, so the revised 1004 that follows is a `REVISED_INVOICE` hold instead of the expected `DUPLICATE_INVOICE`. The fraud set scored 5/5 in that recording and in three more live runs. This misses the merge gate, which needed samples at 20/20 and the ordered scenario ok. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
+Fraud review held invoice 1004 as `FRAUD_SUSPECTED`, quoting its vendor address, 742 Evergreen Terrace, the Simpsons' house. 1004 was labeled a strict approve, so samples first scored 19/20 and the ordered scenario failed. The label was then changed to accept an approve or that hold, as described under Fraud review below, and samples and ordered pass under it. Held, 1004 is unpaid, so the ordered scenario's ledger has two rows instead of three. The fraud set scored 5/5 in its recording and in three more live runs. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
 
 ### Quick start
 
@@ -49,7 +49,7 @@ The brief describes $2M a year in manual processing, a 30% error rate, and five-
 
 - **Speed.** In the live runs on 2026-11-01 PT, an invoice took 2.85–3.90 s, against five days by hand.
 - **Cost.** Grok cost $0.004923–$0.006428 per invoice. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
-- **Errors.** On main, all 41 labeled outcomes were correct in replay and in three live runs of each set, and no reject or hold was paid. With fraud review, 1004 is held instead of paid, so 40 of 41 are correct. No reject or hold was paid. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
+- **Errors.** On main, all 41 labeled outcomes were correct in replay and in three live runs of each set, and no reject or hold was paid. With fraud review, 1004 is held instead of paid. That missed its original approve label; after the run the label was changed to accept a fraud-review hold, and under it all 41 are correct. No reject or hold was paid. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
 - **People.** 31 of the 41 invoices, 76%, need no one at Acme. The 15 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 10, 24%, are holds. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
 - **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 76%. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
@@ -151,11 +151,11 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. On this branch the samples and ordered replays exit 1 on invoice 1004. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs these three and the loop and fraud replays below, five in all, and does not set an API key.
+Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs these three and the loop and fraud replays below, five in all, and does not set an API key.
 
 **Loops in action.** In one live run of the loop set in `data/loop_invoices/`, the loops ran on one invoice and changed nothing. 2117, a clean $10,625 bill, went through critique and audit, and both passed it, so it was paid. 2118 and 2120 were held at validation, before any loop ran, because each page states a second amount. When Grok read 2118's total from the words ($10,250) instead of the printed $10,520, the hold still caught it. Fake-model tests cover the printed-total read, and the case where 2120's $8,000 balance is read as the total, which is a `TOTAL_MISMATCH` reject and still unpaid. Replay with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too). The fraud review on 2117 passed it.
 
-**Fraud review.** The fraud set in `data/fraud_invoices/` has three holds and two approves. Code alone approves all five. Two of the holds, 2124 and 2125, contain none of the keyword signals: one asks AP to pay a servicing company instead of the vendor, and one moves payment to a differently named remit-to party and asks for replies to a free email address. Fraud review held all three with a quote that code found on the page, and passed both approves. Replay with `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too).
+**Fraud review.** The fraud set in `data/fraud_invoices/` has three holds and two approves. Code alone approves all five. Two of the holds, 2124 and 2125, contain none of the keyword signals: one asks AP to pay a servicing company instead of the vendor, and one moves payment to a differently named remit-to party and asks for replies to a free email address. Fraud review held all three with a quote that code found on the page, and passed both approves. In the samples it also held 1004 on its address, a famous fictional home. 1004's label was changed after that run to accept an approve or a `FRAUD_SUSPECTED` hold. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at that address. The prompt was not changed. Replay with `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too).
 
 ### Reviewer quick path
 

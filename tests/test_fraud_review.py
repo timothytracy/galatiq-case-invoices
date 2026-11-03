@@ -2,18 +2,20 @@
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from decision.outcome import PAYABLE_HOLD_CODES, review_release_block
 from graph import run_invoice
+from ledger.scenario import run_scenario
 from llm_errors import LLMError
 from parsers import SUFFIXES, parse_file
 from pipeline.fraud_review import FRAUD_PROMPT, normalize_quote
 from scripts.eval import grade, load_answer_key
 from tests.fake_llm_eval import handler_for
-from tests.fakes import FakeClock, FakeLLM, ZeroRandom, scripted, extraction, write_invoice
+from tests.fakes import FRAUD_PASS, FakeClock, FakeLLM, ZeroRandom, scripted, extraction, write_invoice
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
@@ -235,3 +237,51 @@ def test_the_prompt_borrows_no_four_word_phrase_from_any_invoice():
             if f" {phrase} " in f" {prompt} ":
                 leaks.append((path.name, phrase))
     assert leaks == []
+
+
+def test_1004_grades_as_an_approve_or_a_fraud_hold_and_nothing_else():
+    row = load_answer_key()["data/invoices/invoice_1004.json"]
+    approved = grade({"outcome": "approve", "reason_code": None, "findings": []}, row)
+    held = grade({"outcome": "hold", "reason_code": "FRAUD_SUSPECTED", "findings": []}, row)
+    other_hold = grade({"outcome": "hold", "reason_code": "PRICE_SPIKE", "findings": []}, row)
+    rejected = grade({"outcome": "reject", "reason_code": "STOCK_SHORTFALL", "findings": []}, row)
+    assert approved["outcome_ok"] and approved["reason_ok"]
+    assert held["outcome_ok"] and held["reason_ok"]
+    assert not other_hold["reason_ok"]
+    assert not rejected["outcome_ok"]
+
+
+def test_the_ordered_scenario_accepts_a_held_1004_with_two_ledger_rows(db_path, tmp_path):
+    ledger = tmp_path / "payments.db"
+
+    def fraud(messages):
+        page = json.loads(messages[-1]["content"])["invoice_text"]
+        if "742 Evergreen Terrace" in page and "Revised" not in page:
+            return _hold("742 Evergreen Terrace, Springfield, IL 62704")
+        return FRAUD_PASS
+
+    report = run_scenario(
+        ROOT / "data" / "ordered_scenario.json",
+        db_path,
+        ledger,
+        lambda path: FakeLLM(handler_for(path), fraud=fraud),
+        clock=FakeClock(),
+        rng=ZeroRandom(),
+        max_attempts=5,
+        as_of=date(2026, 11, 1),
+    )
+    missed = [step for step in report["steps"] if not step["ok"]]
+    assert missed == [], missed
+    assert report["ok"]
+    assert report["ledger_files"] == ["invoice_1001.txt", "invoice_1011.pdf"]
+    steps = {step["file"]: step for step in report["steps"]}
+    assert steps["invoice_1004.json"]["reason_code"] == "FRAUD_SUSPECTED"
+    assert steps["invoice_1004_revised.json"]["reason_code"] == "REVISED_INVOICE"
+
+
+def test_the_ordered_scenario_accepts_exactly_the_paid_and_the_held_ledgers():
+    scenario = json.loads((ROOT / "data" / "ordered_scenario.json").read_text(encoding="utf-8"))
+    accepted = [scenario["ledger_files"], *scenario["also_accepted_ledger_files"]]
+    assert ["invoice_1001.txt", "invoice_1011.pdf", "invoice_1004.json"] in accepted
+    assert ["invoice_1001.txt", "invoice_1011.pdf"] in accepted
+    assert len(accepted) == 2

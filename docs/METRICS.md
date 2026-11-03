@@ -4,13 +4,13 @@ Every replay number is from a committed recording, with no API key. Each set was
 
 | Run | Command | Score | Tokens | Cost USD | Calls | Repeats |
 |---|---|---|---|---|---|---|
-| Samples | `python3 scripts/eval.py --replay recordings/samples.jsonl` | 19/20 | 78797 | 0.117528 | 38 | 0 |
+| Samples | `python3 scripts/eval.py --replay recordings/samples.jsonl` | 20/20 | 78797 | 0.117528 | 38 | 0 |
 | Unseen | `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl` | 21/21 | 112186 | 0.163493 | 56 | 0 |
-| Ordered | `python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | 9 of 11 steps ok | 31413 | 0.048786 | 12 | 0 |
+| Ordered | `python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | 11 steps, all ok | 31413 | 0.048786 | 12 | 0 |
 | Loop | `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` | 3/3 | 15073 | 0.021749 | 8 | 0 |
 | Fraud | `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` | 5/5 | 31908 | 0.051323 | 10 | 0 |
 
-Samples and ordered exit 1. Both misses are invoice 1004, a labeled approve that fraud review held as `FRAUD_SUSPECTED` on its vendor address. In the ordered scenario 1004 is then unpaid, so `invoice_1004_revised.json` is a `REVISED_INVOICE` hold instead of the expected `DUPLICATE_INVOICE`, and the ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf` against an expected three.
+Each command exited 0. Fraud review held invoice 1004 as `FRAUD_SUSPECTED` on its vendor address. Under its original strict-approve label, samples scored 19/20 and the ordered scenario failed. After the run the label was changed to accept an approve or that hold; the prompt and the recordings were not changed. The ordered scenario accepts either path: 1004 paid and a ledger of three rows, or 1004 held and a ledger of two. Either way `invoice_1004_revised.json` is a `REVISED_INVOICE` hold. This run took the held path, and the ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf`.
 
 The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key.
 

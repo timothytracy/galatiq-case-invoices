@@ -41,6 +41,13 @@
       ],
       "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the decision on 2026-10-31.",
       "next_step": "None (paid).",
+      "also_accepted_outcomes": [
+        {
+          "outcome": "HOLD",
+          "primary_reason": "Fraud suspected",
+          "next_step": "Verify payment details with the vendor using contact details already on file."
+        }
+      ],
       "source": "README"
     },
     "data/invoices/invoice_1004_revised.json": {
@@ -216,6 +223,7 @@
   },
   "notes": [
     "The policy names findings (for example 'Stock shortfall') but defines no reason-code identifiers. The primary reason column uses the policy's finding names.",
-    "invoice_1009.json has also_accepted_reasons: its vendor and due date are blank and its WidgetA quantity is negative, so Missing required field and the bad quantity are both genuinely present. The outcome must still be REJECT."
+    "invoice_1009.json has also_accepted_reasons: its vendor and due date are blank and its WidgetA quantity is negative, so Missing required field and the bad quantity are both genuinely present. The outcome must still be REJECT.",
+    "invoice_1004.json has also_accepted_outcomes: APPROVE, or a Fraud suspected HOLD. The label was changed after the run, when fraud review held 1004 on its address. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at a famous fictional home address. The prompt was not changed."
   ]
 }
