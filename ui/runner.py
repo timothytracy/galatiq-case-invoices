@@ -16,11 +16,11 @@ from pydantic import BaseModel
 from db import create_database, data_dir, inventory_db_path, payments_db_path
 from graph import run_invoice
 from llm_client import GrokClient, key_available
+from parsers import SUFFIXES
 from pipeline.ingestion import is_recorded
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 DEFAULT_DB = data_dir() / "inventory.db"
 DEFAULT_RUN = ROOT / "output" / "runs" / "review_run.json"
 PAYMENTS_DB = payments_db_path()

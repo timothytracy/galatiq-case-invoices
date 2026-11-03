@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from db import inventory_db_path
-from pipeline.approve_hold import ROOT, approve_and_pay
+from pipeline.approve_hold import approve_and_pay
+from pipeline.release_record import ROOT
 
 WHEN = __import__("datetime").datetime(2026, 11, 2, 5, 30, tzinfo=__import__("datetime").timezone.utc)
 
@@ -56,17 +57,17 @@ def _edit(result, tmp_path, **changes):
 
 
 def os_release(result):
-    from pipeline.approve_hold import _record_path, _repo_path
-    return _record_path(_repo_path(result["invoice"].source.path))
+    from pipeline.release_record import record_path, repo_path
+    return record_path(repo_path(result["invoice"].source.path))
 
 
 def _stamp(tmp_path, result):
     """Treat the file now on disk as the ledger's latest release."""
 
     from ledger.payments import save_release_sha
-    from pipeline.approve_hold import _repo_path
+    from pipeline.release_record import repo_path
     path = Path(os_release(result))
-    rel = _repo_path(result["invoice"].source.path).as_posix()
+    rel = repo_path(result["invoice"].source.path).as_posix()
     save_release_sha(tmp_path / "payments.db", rel, hashlib.sha256(path.read_bytes()).hexdigest())
 
 
@@ -285,8 +286,8 @@ def test_a_source_outside_the_repo_is_refused(tmp_path):
 
 
 def test_record_keys_do_not_collide():
-    from pipeline.approve_hold import _record_path
-    assert _record_path(Path("a__b/x.txt")) != _record_path(Path("a/b__x.txt"))
+    from pipeline.release_record import record_path
+    assert record_path(Path("a__b/x.txt")) != record_path(Path("a/b__x.txt"))
 
 
 def test_basename_collision_does_not_pay_the_other_file(tmp_path):
@@ -364,8 +365,8 @@ def _plant_critique_hold(tmp_path, monkeypatch):
     )
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     from ledger.payments import save_release_sha
-    from pipeline.approve_hold import _repo_path
-    rel = _repo_path(result["invoice"].source.path).as_posix()
+    from pipeline.release_record import repo_path
+    rel = repo_path(result["invoice"].source.path).as_posix()
     save_release_sha(ledger, rel, hashlib.sha256(path.read_bytes()).hexdigest())
     return result, path, releases, nest, ledger, record
 
@@ -395,7 +396,7 @@ def test_read_only_stale_record_does_not_pay_in_a_new_process(lock_parent, tmp_p
 
 
 def test_an_older_release_file_is_not_the_latest(tmp_path):
-    from pipeline.approve_hold import remember
+    from pipeline.release_record import remember
     result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
     path = Path(os_release(result))
     older = path.read_bytes()
@@ -505,3 +506,18 @@ def test_demo_pays_one_hold_and_refuses_one_reject(capsys):
     assert records[1]["reason"] == "A reject is never paid."
     after = {path.name: path.stat().st_mtime_ns for path in logs.glob("*.release.json")} if logs.is_dir() else {}
     assert after == before
+
+
+def test_an_amount_that_cannot_be_read_is_refused_and_logged(tmp_path):
+    class Unreadable:
+        def __str__(self):
+            raise RuntimeError("no text")
+
+    result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
+    refused = _pay(result, tmp_path, amount=Unreadable())
+    assert refused["result"] == "held"
+    assert refused["reason_code"] == "AMOUNT_MISMATCH"
+    rows = [json.loads(line) for line in (tmp_path / "approve.jsonl").read_text().splitlines()]
+    assert rows[-1] == refused["record"]
+    assert rows[-1]["reason_code"] == "AMOUNT_MISMATCH"
+    assert "paid" not in [row["decision"] for row in rows]

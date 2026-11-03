@@ -4,7 +4,6 @@ The tool is bound to the current invoice. A hit can hold. It cannot pay.
 """
 
 import json
-import socket
 import sqlite3
 from datetime import date
 from decimal import Decimal
@@ -12,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from db import create_database, load_stock
+from db import load_stock
 from graph import route_after_audit
 from ledger import paid_rows, record_payment
 from ledger.scenario import run_scenario
@@ -23,30 +22,23 @@ from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
 from decision.policy import POLICY
 from tests.fake_llm_eval import AS_OF, handler_for
-from tests.fakes import FakeClock, ScriptedToolModel, ZeroRandom
-from tests.test_audit_tools import _verdict
-from tests.test_tool_loop import _payable_state, text_step, tool_step
+from tests.fakes import (
+    FakeClock,
+    ScriptedToolModel,
+    ZeroRandom,
+    audit_verdict,
+    payable_state,
+    text_step,
+    tool_step,
+)
+
+pytestmark = pytest.mark.usefixtures("no_network")
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
-
-
 def _numbered(number="INV-1001", vendor="Widgets Inc.", when="2026-01-15"):
-    state = _payable_state()
+    state = payable_state()
     invoice = state.invoice.model_copy(
         update={"invoice_number": number, "vendor": vendor, "invoice_date": when}
     )
@@ -300,7 +292,7 @@ def test_a_duplicate_hit_cannot_pay(db_path, tmp_path, monkeypatch):
         state,
         [
             tool_step(("c1", "check_payment_ledger", "{}")),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -322,7 +314,7 @@ def test_a_split_hit_cannot_pay(db_path, tmp_path, monkeypatch):
         state,
         [
             tool_step(("c1", "check_payment_ledger", json.dumps({"vendor": "Other Co"}))),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -355,7 +347,7 @@ def test_two_ledger_hits_become_one_finding(db_path, tmp_path, monkeypatch):
                 ("c1", "check_payment_ledger", "{}"),
                 ("c2", "check_payment_ledger", json.dumps({"vendor": "Other Co"})),
             ),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,
@@ -391,13 +383,13 @@ def test_ledger_tool_counts_toward_the_cap_and_repeats_reuse(db_path, monkeypatc
             for index, code in enumerate(codes)
         ],
     ]
-    state = _payable_state()
+    state = payable_state()
     out, model = _run(
         state,
         [
             tool_step(*first),
             tool_step(("over", "lookup_item", json.dumps({"item": "WidgetA"}))),
-            text_step(_verdict("PASS")),
+            text_step(audit_verdict("PASS")),
         ],
         db_path,
         monkeypatch,

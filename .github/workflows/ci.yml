@@ -17,7 +17,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install requirements
-        run: python3 -m pip install -r requirements.txt
+        run: python3 -m pip install -r requirements-dev.txt
+      - name: Lint
+        run: python3 -m ruff check .
       - name: Tests
         run: python3 -m pytest -q
       - name: Setup wrapper still creates a missing inventory database

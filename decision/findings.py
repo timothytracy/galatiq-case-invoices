@@ -88,10 +88,36 @@ def collect_findings(
     """Every finding for this invoice, and the currency code that was resolved."""
 
     currency = resolve_currency(invoice.currency, raw_text)
-    findings: list[Finding] = []
-    for field in POLICY.required_fields:
-        if _field_missing(invoice, field):
-            findings.append(_finding("MISSING_FIELD", _MISSING_TEXT[field], "blocking", field))
+    blob = _blob(raw_text, invoice.vendor, invoice.notes, invoice.payment_terms)
+    fraud = _fraud_findings(blob)
+    findings = [
+        *_required_findings(invoice),
+        *_sign_findings(invoice, raw_text),
+        *_stock_findings(invoice, stock),
+        *_source_findings(invoice, raw_text),
+        *_math_findings(invoice),
+        *_identity_findings(invoice, raw_text, currency, blob),
+        *fraud,
+        *_price_findings(invoice, stock, currency),
+        *_descriptor_findings(invoice),
+        *_note_findings(invoice, raw_text, currency),
+    ]
+    cluster = _cluster_finding(findings, invoice, currency, bool(_NEW_ACCOUNT.search(blob)), fraud)
+    if cluster is not None:
+        findings.append(cluster)
+    return findings, currency
+
+
+def _required_findings(invoice: ExtractedInvoice) -> list[Finding]:
+    return [
+        _finding("MISSING_FIELD", _MISSING_TEXT[field], "blocking", field)
+        for field in POLICY.required_fields
+        if _field_missing(invoice, field)
+    ]
+
+
+def _sign_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
+    """A labeled credit note that reconciles, or the negative and zero amounts it would excuse."""
 
     credit = (
         _is_credit_label(invoice, raw_text)
@@ -100,28 +126,32 @@ def collect_findings(
         and all(line.quantity != 0 for line in invoice.line_items)
     )
     if credit:
-        findings.append(_finding("CREDIT_NOTE", "Labeled credit note and the math reconciles."))
-    else:
-        for line in invoice.line_items:
-            if line.quantity <= 0:
-                findings.append(
-                    _finding(
-                        "BAD_QUANTITY",
-                        f"{line.item} quantity {show_qty(line.quantity)} is negative or zero.",
-                        "blocking",
-                        line.item,
-                    )
-                )
-        if _has_negative_amount(invoice):
+        return [_finding("CREDIT_NOTE", "Labeled credit note and the math reconciles.")]
+    findings: list[Finding] = []
+    for line in invoice.line_items:
+        if line.quantity <= 0:
             findings.append(
                 _finding(
-                    "NEGATIVE_AMOUNT",
-                    "Negative amount is not a labeled credit note.",
+                    "BAD_QUANTITY",
+                    f"{line.item} quantity {show_qty(line.quantity)} is negative or zero.",
                     "blocking",
-                    "total",
+                    line.item,
                 )
             )
+    if _has_negative_amount(invoice):
+        findings.append(
+            _finding(
+                "NEGATIVE_AMOUNT",
+                "Negative amount is not a labeled credit note.",
+                "blocking",
+                "total",
+            )
+        )
+    return findings
 
+
+def _stock_findings(invoice: ExtractedInvoice, stock: dict[str, int]) -> list[Finding]:
+    findings: list[Finding] = []
     for item, qty in summed_quantities(invoice, stock).items():
         if item not in stock:
             # Hint only. The stored item stays the extracted name.
@@ -139,91 +169,109 @@ def collect_findings(
                     item,
                 )
             )
+    return findings
 
+
+def _source_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
     # line.item is the base name: a trailing "(rush order)" was already split into the note.
     # item_key is the same case, space, and hyphen fold as inventory matching.
     # Empty source text fails closed. Every reader supplies text; a missing one holds.
     # The line is not rewritten.
-    for line in invoice.line_items:
-        if _name_in_source(line.item, raw_text):
-            continue
-        findings.append(
-            _finding(
-                "ITEM_NOT_IN_SOURCE",
-                f"{line.item} is not in the invoice text.",
-                item=line.item,
-            )
+    return [
+        _finding(
+            "ITEM_NOT_IN_SOURCE",
+            f"{line.item} is not in the invoice text.",
+            item=line.item,
         )
+        for line in invoice.line_items
+        if not name_in_source(line.item, raw_text)
+    ]
 
-    findings.extend(_math_findings(invoice))
+
+def _identity_findings(
+    invoice: ExtractedInvoice, raw_text: str, currency: str, blob: str
+) -> list[Finding]:
+    findings: list[Finding] = []
     if currency not in POLICY.allowed_currencies:
         findings.append(_finding("NON_USD", non_usd_message(currency), item="currency"))
-    if _is_revised(invoice, raw_text):
+    if is_revised(invoice, raw_text):
         findings.append(_finding("REVISED_INVOICE", "This invoice is marked as a revision."))
-
-    blob = _blob(raw_text, invoice.vendor, invoice.notes, invoice.payment_terms)
     if _FORMERLY.search(blob):
         findings.append(_finding("VENDOR_RENAMED", "The vendor name says formerly.", item="vendor"))
+    return findings
 
+
+def _fraud_findings(blob: str) -> list[Finding]:
     fraud: list[Finding] = []
     if _URGENCY.search(blob):
         fraud.append(_finding("FRAUD_SIGNAL", "Urgency pressure is a fraud signal."))
     if _WIRE.search(blob):
         fraud.append(_finding("FRAUD_SIGNAL", "Wire transfer is a fraud signal."))
-    new_account = bool(_NEW_ACCOUNT.search(blob))
-    if new_account:
+    if _NEW_ACCOUNT.search(blob):
         fraud.append(
             _finding("FRAUD_SIGNAL", "A new remittance or bank account is a fraud signal.")
         )
-    findings.extend(fraud)
+    return fraud
 
+
+def _price_findings(
+    invoice: ExtractedInvoice, stock: dict[str, int], currency: str
+) -> list[Finding]:
     # USD only. abs(unit_price) so a -250 credit matches a 250 reference.
-    if currency in POLICY.allowed_currencies:
-        spike_at = Decimal("1") + POLICY.price_spike_ratio
-        spike_pct = f"{POLICY.price_spike_ratio * 100:.0f}"
-        for line in invoice.line_items:
-            ref = POLICY.reference_prices.get(canonical_item(line.item, stock))
-            if ref is None or line.unit_price is None:
-                continue
-            # Round to the money tolerance before comparing, same as the line math.
-            price = as_money(abs(line.unit_price))
-            if not different(price, ref):
-                continue
+    if currency not in POLICY.allowed_currencies:
+        return []
+    findings: list[Finding] = []
+    spike_at = Decimal("1") + POLICY.price_spike_ratio
+    spike_pct = f"{POLICY.price_spike_ratio * 100:.0f}"
+    for line in invoice.line_items:
+        ref = POLICY.reference_prices.get(canonical_item(line.item, stock))
+        if ref is None or line.unit_price is None:
+            continue
+        # Round to the money tolerance before comparing, same as the line math.
+        price = as_money(abs(line.unit_price))
+        if not different(price, ref):
+            continue
+        findings.append(
+            _finding(
+                "PRICE_VARIANCE",
+                (
+                    f"Unit price {show_money(line.unit_price)} for {line.item} "
+                    f"differs from the reference price {show_money(ref)}."
+                ),
+                item=line.item,
+            )
+        )
+        if price >= ref * spike_at:
             findings.append(
                 _finding(
-                    "PRICE_VARIANCE",
+                    "PRICE_SPIKE",
                     (
                         f"Unit price {show_money(line.unit_price)} for {line.item} "
-                        f"differs from the reference price {show_money(ref)}."
+                        f"is {spike_pct}% or more above the reference price {show_money(ref)}."
                     ),
                     item=line.item,
                 )
             )
-            if price >= ref * spike_at:
-                findings.append(
-                    _finding(
-                        "PRICE_SPIKE",
-                        (
-                            f"Unit price {show_money(line.unit_price)} for {line.item} "
-                            f"is {spike_pct}% or more above the reference price {show_money(ref)}."
-                        ),
-                        item=line.item,
-                    )
-                )
+    return findings
 
-    for line in invoice.line_items:
-        if line.description and re.search(r"\([^)]+\)", line.description) and line.note:
-            findings.append(
-                _finding(
-                    "DESCRIPTOR",
-                    (
-                        f"Descriptor on {line.description}: matched as {line.item}, "
-                        f"{line.note!r} kept as a note."
-                    ),
-                    item=line.item,
-                )
-            )
 
+def _descriptor_findings(invoice: ExtractedInvoice) -> list[Finding]:
+    return [
+        _finding(
+            "DESCRIPTOR",
+            (
+                f"Descriptor on {line.description}: matched as {line.item}, "
+                f"{line.note!r} kept as a note."
+            ),
+            item=line.item,
+        )
+        for line in invoice.line_items
+        if line.description and re.search(r"\([^)]+\)", line.description) and line.note
+    ]
+
+
+def _note_findings(invoice: ExtractedInvoice, raw_text: str, currency: str) -> list[Finding]:
+    findings: list[Finding] = []
     if _near_threshold(invoice.total, currency):
         findings.append(
             _finding(
@@ -236,7 +284,6 @@ def collect_findings(
                 item="total",
             )
         )
-
     address_note = _address_note(invoice)
     if address_note is not None:
         findings.append(_finding("NONCOMMERCIAL_ADDRESS", address_note, item="vendor_address"))
@@ -264,23 +311,34 @@ def collect_findings(
                 "blocking",
             )
         )
+    return findings
+
+
+def _cluster_finding(
+    findings: list[Finding],
+    invoice: ExtractedInvoice,
+    currency: str,
+    new_account: bool,
+    fraud: list[Finding],
+) -> Finding | None:
+    """A rule over the whole list. A blocking reject already decides the invoice."""
 
     rejected = any(item.severity == "blocking" and item.code in REJECT_CODES for item in findings)
+    if rejected:
+        return None
     over = (
         invoice.total is not None
         and currency in POLICY.allowed_currencies
         and invoice.total > APPROVAL_THRESHOLD_USD
     )
-    if not rejected and new_account and over:
-        findings.append(
-            _finding(
-                "NEW_REMITTANCE",
-                "Clean invoice over the threshold with a new remittance or bank account.",
-            )
+    if new_account and over:
+        return _finding(
+            "NEW_REMITTANCE",
+            "Clean invoice over the threshold with a new remittance or bank account.",
         )
-    elif not rejected and len(fraud) >= 2:
-        findings.append(_finding("FRAUD_CLUSTER", "Two or more fraud signals."))
-    return findings, currency
+    if len(fraud) >= 2:
+        return _finding("FRAUD_CLUSTER", "Two or more fraud signals.")
+    return None
 
 
 def assess(
@@ -327,7 +385,7 @@ def evidence_lines(
     return lines
 
 
-def _name_in_source(name: str, raw_text: str | None) -> bool:
+def name_in_source(name: str, raw_text: str | None) -> bool:
     """True when the base item name appears in the source text.
 
     Both sides go through item_key, so case, spaces, and hyphens do not matter.
@@ -409,7 +467,7 @@ def _has_negative_amount(invoice: ExtractedInvoice) -> bool:
     )
 
 
-def _is_revised(invoice: ExtractedInvoice, raw_text: str) -> bool:
+def is_revised(invoice: ExtractedInvoice, raw_text: str) -> bool:
     if invoice.revision and invoice.revision.strip():
         return True
     blob = _blob(raw_text, invoice.notes)

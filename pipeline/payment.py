@@ -1,8 +1,10 @@
 """Payment. The mock gateway runs only with an unused PASS-audit authorization."""
 
 from decimal import Decimal
+from pathlib import Path
 
-from models import Finding, PaymentAuthorization, PaymentRecord, PipelineState
+from models import ExtractedInvoice, Finding, PaymentAuthorization, PaymentRecord, PipelineState
+from pipeline.release_record import remember
 from pipeline.stage_log import stage_log
 from decision.invoice_fields import non_usd_message
 from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_codes
@@ -26,7 +28,7 @@ def clear_keys_without_ledger() -> None:
     _NO_LEDGER_KEYS.clear()
 
 
-def payment(state: PipelineState, ledger_path=None, *, release: bool = False) -> dict:
+def payment(state: PipelineState, ledger_path: str | Path | None = None, *, release: bool = False) -> dict:
     invoice = state.invoice
     blocked = "" if release else _payment_blocked(state)
     refusal = blocked or _authorization_refusal(state, ledger_path)
@@ -35,72 +37,78 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
     if refusal or invoice is None or not isinstance(auth, PaymentAuthorization):
         if refusal and not blocked:
             findings.append(Finding(code=PAYMENT_REFUSED, message=refusal, severity="blocking"))
-        record = PaymentRecord(
-            status="not_paid",
-            vendor=None if invoice is None else invoice.vendor,
-            amount=None if invoice is None else invoice.total,
-            currency=None if invoice is None else invoice.currency,
-            detail=refusal or "payment blocked",
-        )
-    else:
-        # The release record is written before the ledger row. A failed write
-        # pays nothing and does not raise.
-        if not release:
-            from pipeline.approve_hold import remember
-            noted = remember(state, ledger_path)
-            if noted is not True:
-                return _hold_unreadable_ledger(
-                    state, findings, noted or "release record could not be written", release
-                )
-        wrote = _write_ledger(state, ledger_path, auth.key)
-        if wrote is False:
-            return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
-        if wrote == "SPLIT_INVOICE":
-            return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
-        if wrote == "USED_AUTHORIZATION":
-            detail = "payment refused: authorization key was already used"
-            findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
-            record = PaymentRecord(
-                status="not_paid",
-                vendor=invoice.vendor,
-                amount=invoice.total,
-                currency=invoice.currency,
-                detail=detail,
+        record = not_paid_record(invoice, refusal or "payment blocked")
+        return _log_payment(state, record, findings, release)
+    return _pay(state, invoice, auth, findings, ledger_path, release)
+
+
+def _pay(
+    state: PipelineState,
+    invoice: ExtractedInvoice,
+    auth: PaymentAuthorization,
+    findings: list,
+    ledger_path,
+    release: bool,
+) -> dict:
+    """The steps after a valid authorization: release record, ledger row, mock gateway."""
+
+    # The release record is written before the ledger row. A failed write
+    # pays nothing and does not raise.
+    if not release:
+        noted = remember(state, ledger_path)
+        if noted is not True:
+            return _hold_unreadable_ledger(
+                state, findings, noted or "release record could not be written", release
             )
-            result = {
-                "payment": record.model_dump(mode="json"),
-                "outcome": state.outcome,
-                "codes": finding_codes(findings),
-            }
-            return {
-                "payment": record,
-                "findings": findings,
-                "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
-            }
-        if wrote is not True:
-            return _hold_unreadable_ledger(state, findings, wrote, release)
-        # No ledger file: remember the key here. A file stored it in the same write.
-        if ledger_path is None:
-            _NO_LEDGER_KEYS.add(auth.key)
-        try:
-            response = mock_payment(invoice.vendor, invoice.total)
-        except Exception:
-            response = None
-        confirmed = isinstance(response, dict) and response.get("status") == "success"
-        if ledger_path is not None:
-            confirmed = confirmed and settle_payment(ledger_path, auth.key, "paid")
-            if not confirmed:
-                settle_payment(ledger_path, auth.key, "failed")
+    wrote = _write_ledger(state, ledger_path, auth.key)
+    if wrote is False:
+        return _refuse_ledger(state, findings, ledger_path, "DUPLICATE_INVOICE", release)
+    if wrote == "SPLIT_INVOICE":
+        return _refuse_ledger(state, findings, ledger_path, "SPLIT_INVOICE", release)
+    if wrote == "USED_AUTHORIZATION":
+        detail = "payment refused: authorization key was already used"
+        findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
+        return _log_payment(state, not_paid_record(invoice, detail), findings, release)
+    if wrote is not True:
+        return _hold_unreadable_ledger(state, findings, wrote, release)
+    # No ledger file: remember the key here. A file stored it in the same write.
+    if ledger_path is None:
+        _NO_LEDGER_KEYS.add(auth.key)
+    try:
+        response = mock_payment(invoice.vendor, invoice.total)
+    except Exception:
+        response = None
+    confirmed = isinstance(response, dict) and response.get("status") == "success"
+    if ledger_path is not None:
+        confirmed = confirmed and settle_payment(ledger_path, auth.key, "paid")
         if not confirmed:
-            return _hold_unreadable_ledger(state, findings, PAYMENT_UNCONFIRMED, release)
-        record = PaymentRecord(
-            status="paid",
-            vendor=invoice.vendor,
-            amount=invoice.total,
-            currency=invoice.currency,
-            detail="mock payment accepted",
-            mock_response=response,
-        )
+            settle_payment(ledger_path, auth.key, "failed")
+    if not confirmed:
+        return _hold_unreadable_ledger(state, findings, PAYMENT_UNCONFIRMED, release)
+    record = PaymentRecord(
+        status="paid",
+        vendor=invoice.vendor,
+        amount=invoice.total,
+        currency=invoice.currency,
+        detail="mock payment accepted",
+        mock_response=response,
+    )
+    return _log_payment(state, record, findings, release)
+
+
+def not_paid_record(invoice: ExtractedInvoice | None, detail: str) -> PaymentRecord:
+    return PaymentRecord(
+        status="not_paid",
+        vendor=None if invoice is None else invoice.vendor,
+        amount=None if invoice is None else invoice.total,
+        currency=None if invoice is None else invoice.currency,
+        detail=detail,
+    )
+
+
+def _log_payment(state: PipelineState, record: PaymentRecord, findings: list, release: bool) -> dict:
+    """The payment stage log when the outcome stays the one audit set."""
+
     result = {
         "payment": record.model_dump(mode="json"),
         "outcome": state.outcome,
@@ -109,6 +117,27 @@ def payment(state: PipelineState, ledger_path=None, *, release: bool = False) ->
     return {
         "payment": record,
         "findings": findings,
+        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
+    }
+
+
+def _log_explained(state: PipelineState, record: PaymentRecord, findings: list, release: bool) -> dict:
+    """The payment stage log when the findings decide a new outcome."""
+
+    outcome, code, reason, action = explain(findings, state.invoice)
+    result = {
+        "payment": record.model_dump(mode="json"),
+        "outcome": outcome,
+        "reason": reason,
+        "reason_code": code,
+        "codes": finding_codes(findings),
+    }
+    return {
+        "payment": record,
+        "findings": findings,
+        "outcome": outcome,
+        "reason_code": code,
+        "action": action,
         "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
     }
 
@@ -145,29 +174,7 @@ def _hold_unreadable_ledger(state: PipelineState, findings: list, message: str, 
     findings = list(findings) + [
         Finding(code="SYSTEM_ERROR", message=message, severity="warning")
     ]
-    outcome, code, reason, action = explain(findings, state.invoice)
-    record = PaymentRecord(
-        status="not_paid",
-        vendor=state.invoice.vendor,
-        amount=state.invoice.total,
-        currency=state.invoice.currency,
-        detail=message,
-    )
-    result = {
-        "payment": record.model_dump(mode="json"),
-        "outcome": outcome,
-        "reason": reason,
-        "reason_code": code,
-        "codes": finding_codes(findings),
-    }
-    return {
-        "payment": record,
-        "findings": findings,
-        "outcome": outcome,
-        "reason_code": code,
-        "action": action,
-        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
-    }
+    return _log_explained(state, not_paid_record(state.invoice, message), findings, release)
 
 
 def _refuse_ledger(state, findings, ledger_path, code: str, release: bool) -> dict:
@@ -189,29 +196,7 @@ def _refuse_ledger(state, findings, ledger_path, code: str, release: bool) -> di
     findings = list(findings) + list(extra)
     if code == "DUPLICATE_INVOICE":
         findings.append(Finding(code=PAYMENT_REFUSED, message=detail, severity="blocking"))
-    outcome, reason_code, reason, action = explain(findings, state.invoice)
-    record = PaymentRecord(
-        status="not_paid",
-        vendor=state.invoice.vendor,
-        amount=state.invoice.total,
-        currency=state.invoice.currency,
-        detail=detail,
-    )
-    result = {
-        "payment": record.model_dump(mode="json"),
-        "outcome": outcome,
-        "reason": reason,
-        "reason_code": reason_code,
-        "codes": finding_codes(findings),
-    }
-    return {
-        "payment": record,
-        "findings": findings,
-        "outcome": outcome,
-        "reason_code": reason_code,
-        "action": action,
-        "logs": state.logs + [stage_log(state.filename, "payment", result, echo=not release)],
-    }
+    return _log_explained(state, not_paid_record(state.invoice, detail), findings, release)
 
 
 def _payment_blocked(state: PipelineState) -> str:

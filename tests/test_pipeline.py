@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import socket
 import sqlite3
 import subprocess
 import sys
@@ -12,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from db import connect_readonly, create_database
+from db import connect_readonly
 from graph import mermaid_text, run_invoice
 from llm_client import (
     BACKOFF_SECONDS,
@@ -45,7 +44,9 @@ from decision.invoice_fields import resolve_currency
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, outcome_from_findings
 from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, MAX_SEND_BACKS
 from decision.findings import assess
-from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
+from tests.fakes import FakeClock, FakeLLM, ZeroRandom, extraction, scripted, write_invoice
+
+pytestmark = pytest.mark.usefixtures("no_network")
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
@@ -65,57 +66,6 @@ README_OUTCOMES = {
 }
 
 
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
-
-
-def extraction(**overrides) -> str:
-    payload = {
-        "vendor": "Widgets Inc.",
-        "vendor_address": None,
-        "invoice_number": "INV-9",
-        "invoice_date": "2026-01-01",
-        "due_date": "2026-02-01",
-        "currency": "USD",
-        "line_items": [
-            {
-                "item": "WidgetA",
-                "description": "WidgetA",
-                "quantity": 2,
-                "unit_price": 250,
-                "amount": 500,
-                "note": None,
-            }
-        ],
-        "subtotal": 500,
-        "tax_rate": 0,
-        "tax_amount": 0,
-        "shipping": 0,
-        "total": 500,
-        "payment_terms": "Net 30",
-        "notes": None,
-    }
-    payload.update(overrides)
-    return json.dumps(payload)
-
-
-def write_invoice(directory: Path, name: str, text: str) -> Path:
-    path = directory / name
-    path.write_text(text, encoding="utf-8")
-    return path
-
-
 def stages(result) -> list[str]:
     return [row["stage"] for row in result["logs"]]
 
@@ -125,46 +75,6 @@ def status(result) -> str:
     if isinstance(payment, dict):
         return payment["status"]
     return payment.status
-
-
-def scripted(extract_text, *, audits=None, critique=None, before_extract=None, reasons=None):
-    """before_extract(call_number) may raise LLMError or return a stand-in string.
-
-    reasons, when set, is the sequence of TASK reason replies. The last one repeats.
-    """
-
-    audit_replies = list(audits or ["PASS"])
-    reason_replies = None if reasons is None else list(reasons)
-    counts = {"extract": 0, "audit": 0, "critique": 0, "reason": 0}
-
-    def handler(messages):
-        name = task_of(messages)
-        if name == "extract":
-            counts["extract"] += 1
-            if before_extract is not None:
-                replacement = before_extract(counts["extract"], messages)
-                if replacement is not None:
-                    return replacement
-            return extract_text
-        if name == "reason":
-            counts["reason"] += 1
-            if reason_replies is not None:
-                index = min(counts["reason"] - 1, len(reason_replies) - 1)
-                return reason_replies[index]
-            return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
-        if name == "critique":
-            counts["critique"] += 1
-            body = critique or {"concerns": ["amount is high"], "stricter": False}
-            return json.dumps(body)
-        if name == "audit":
-            counts["audit"] += 1
-            index = min(counts["audit"] - 1, len(audit_replies) - 1)
-            verdict = audit_replies[index]
-            feedback = ["due_date is wrong"] if verdict == "SEND_BACK" else []
-            return json.dumps({"verdict": verdict, "feedback": feedback, "notes": verdict})
-        raise AssertionError(f"unexpected task {name}")
-
-    return handler, counts
 
 
 def run(path, db_path, handler, clock=None, max_attempts=5):

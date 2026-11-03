@@ -11,27 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from db import SEED, create_database
+from db import SEED
 from decision.findings import assess
 from decision.invoice_fields import item_key, normalize_item_name
 from decision.wording import ACTION, KEY_REASON_TO_CODE
 from graph import run_invoice
 from models import ExtractedInvoice, LineItem, SourceInfo
-from parsers import parse_file
+from parsers import SUFFIXES, parse_file
 from scripts.eval import grade, load_answer_key
 from tests.fake_llm_eval import handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
-SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 STOCK = dict(SEED)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def _invoice(item, source, *, note=None, description=None, items=None):

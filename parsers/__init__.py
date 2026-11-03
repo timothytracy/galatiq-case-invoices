@@ -10,6 +10,8 @@ from parsers.pdf_invoice import parse_pdf_file, pdf_text
 from parsers.text_invoice import parse_text_file
 from parsers.xml_invoice import parse_xml_file
 
+SUFFIXES = frozenset({".txt", ".pdf", ".json", ".csv", ".xml"})
+
 
 def read_raw(path: Path) -> str:
     """Document text only. PDF text comes from the text layer. No network."""

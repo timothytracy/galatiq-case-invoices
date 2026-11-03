@@ -4,9 +4,12 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from db import load_stock
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, call_with_retries
 from tool_loop import tool_request
 from models import ApprovalDecision, AuditDraft, Finding, PaymentAuthorization, PipelineState
@@ -18,7 +21,7 @@ from pipeline.fact_guard import (
     partition_concerns,
     verified_payload,
 )
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from pipeline.tools import audit_registry
 from decision.invoice_fields import show_money
 from decision.outcome import (
@@ -55,27 +58,27 @@ class AuditResult:
 
 def audit(
     state: PipelineState,
-    llm,
-    db_path,
-    clock,
-    rng,
+    llm: LLM,
+    db_path: str | Path,
+    clock: Clock,
+    rng: Rng,
     max_attempts: int,
-    as_of=None,
-    ledger_path=None,
+    as_of: date | None = None,
+    ledger_path: str | Path | None = None,
 ) -> dict:
     as_of = resolve_as_of(as_of)
     invoice = state.invoice
     decision = state.decision
     if invoice is None or decision is None:
         reason = "Audit had no decision."
-        return stopped(
+        return stop_with_finding(
             state,
-            "hold",
-            reason,
             "audit",
-            [],
+            reason,
+            "SYSTEM_ERROR",
+            outcome="hold",
+            severity="warning",
             agent_error=state.agent_error,
-            finding=Finding(code="SYSTEM_ERROR", message=reason, severity="warning"),
         )
 
     stock = dict(load_stock(db_path))
@@ -98,16 +101,7 @@ def audit(
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "audit",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-            note=_cap_note(step),
-        )
+        return agent_stop(state, "audit", step_attempts, exc, note=_cap_note(step))
 
     fresh = assess(invoice, state.raw_text, stock)
     # Stock and totals are not checked here: a note may be about the raw text.
@@ -128,19 +122,7 @@ def audit(
     if guarded.verdict != "SEND_BACK" and guarded.outcome not in (None, decision.decision):
         new_decision = tighten(decision, guarded.outcome, guarded.conclusion, guarded.evidence)
 
-    findings = list(state.findings) or list(fresh.findings)
-    for extra in ledger_holds:
-        if not any(item.code == extra.code for item in findings):
-            findings.append(extra)
-    note_text = None
-    if ignored is not None:
-        note_text = f"Audit note, not an escalation: {ignored}"
-        findings = findings + [
-            Finding(code="AUDIT_NOTE", message=note_text, severity="info")
-        ]
-    extra = _audit_finding(guarded, findings)
-    if extra is not None:
-        findings = findings + [extra]
+    findings, note_text = _merge_findings(state, fresh.findings, ledger_holds, ignored, guarded)
     if guarded.verdict == "SEND_BACK":
         kept = []
     else:
@@ -167,6 +149,46 @@ def audit(
         result.update(note)
     if step.log:
         result["tool_calls"] = list(step.log)
+    logged = stage_log(state.filename, "audit", result)
+    return _audit_update(state, guarded, new_decision, kept, authorization, step_attempts, logged)
+
+
+def _merge_findings(
+    state: PipelineState,
+    fresh: list[Finding],
+    ledger_holds: list[Finding],
+    ignored: str | None,
+    guarded: AuditResult,
+) -> tuple[list[Finding], str | None]:
+    """Findings after audit, and the audit note text when a note was not an escalation."""
+
+    findings = list(state.findings) or list(fresh)
+    for extra in ledger_holds:
+        if not any(item.code == extra.code for item in findings):
+            findings.append(extra)
+    note_text = None
+    if ignored is not None:
+        note_text = f"Audit note, not an escalation: {ignored}"
+        findings = findings + [
+            Finding(code="AUDIT_NOTE", message=note_text, severity="info")
+        ]
+    extra = _audit_finding(guarded, findings)
+    if extra is not None:
+        findings = findings + [extra]
+    return findings, note_text
+
+
+def _audit_update(
+    state: PipelineState,
+    guarded: AuditResult,
+    new_decision: ApprovalDecision,
+    kept: list[Finding],
+    authorization: PaymentAuthorization | None,
+    step_attempts: list[dict],
+    logged: dict,
+) -> dict:
+    """The graph update. SEND_BACK clears the decision for another round."""
+
     update = {
         "audit_verdict": guarded.verdict,
         "decision": new_decision,
@@ -174,7 +196,7 @@ def audit(
         "authorization": authorization,
         "attempts": state.attempts + step_attempts,
         "agent_error": None,
-        "logs": state.logs + [stage_log(state.filename, "audit", result)],
+        "logs": state.logs + [logged],
     }
     if guarded.verdict == "SEND_BACK":
         update["outcome"] = None

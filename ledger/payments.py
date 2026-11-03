@@ -18,18 +18,19 @@ difference of the printed invoice dates. A date that does not parse is
 outside the window. Another vendor does not count.
 """
 
+import contextlib
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 
 from models import ExtractedInvoice, Finding, SourceInfo
 
-from decision.findings import _is_revised, parse_printed_date
+from decision.findings import is_revised, parse_printed_date
 from decision.invoice_fields import different, normalize_invoice_number, show_money
 from decision.policy import POLICY
+from timestamps import utc_stamp
 
 _CREATE = """\
 CREATE TABLE IF NOT EXISTS payments (
@@ -53,7 +54,6 @@ _ADDED_COLUMNS = (
     ("status", "TEXT NOT NULL DEFAULT 'paid'"),
     ("authorization_key", "TEXT"),
 )
-STATUSES = ("pending", "paid", "failed")
 
 # One paid row per vendor and invoice number. A second insert fails.
 _UNIQUE = (
@@ -224,7 +224,7 @@ def record_payment(
         (invoice_date or "").strip() or None,
         source_file,
         raw_sha256(raw_text),
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        utc_stamp(),
         status,
         authorization_key,
     )
@@ -281,10 +281,7 @@ def record_payment(
         return False
     except sqlite3.Error as exc:
         if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
+            _rollback_quietly(connection)
         return f"payments ledger unreadable: {exc}"
     finally:
         if connection is not None:
@@ -315,10 +312,7 @@ def settle_payment(path: str | Path, authorization_key: str, status: str) -> boo
         return True
     except sqlite3.Error:
         if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
+            _rollback_quietly(connection)
         return False
     finally:
         if connection is not None:
@@ -383,7 +377,7 @@ def _duplicate_finding(
 def _same_key_message(invoice: ExtractedInvoice, raw_text: str, row: PaymentRow) -> str:
     """Same vendor and invoice number, different text. Say which case it is."""
 
-    revised = _is_revised(invoice, raw_text or "")
+    revised = is_revised(invoice, raw_text or "")
     totals_differ = invoice.total is None or different(invoice.total, Decimal(row.total))
     if revised or totals_differ:
         if revised and totals_differ:
@@ -454,6 +448,13 @@ def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding
     )
 
 
+def _rollback_quietly(connection: sqlite3.Connection) -> None:
+    """Roll back after an error. A failed rollback must not hide the first error."""
+
+    with contextlib.suppress(sqlite3.Error):
+        connection.execute("ROLLBACK")
+
+
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     name = path.resolve().as_posix()
     return sqlite3.connect(f"file:{name}?mode=ro", uri=True, timeout=5)
@@ -477,10 +478,7 @@ def save_release_sha(ledger, path: str, digest: str | None) -> None:
         )
         connection.execute("COMMIT")
     except sqlite3.Error:
-        try:
-            connection.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
+        _rollback_quietly(connection)
         raise
     finally:
         connection.close()

@@ -22,7 +22,7 @@ Python 3.12 (the version CI uses). No API key needed.
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 python3 -m pytest
 python3 scripts/eval.py --replay recordings/samples.jsonl
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl

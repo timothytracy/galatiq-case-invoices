@@ -4,10 +4,10 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from decision.outcome import PAYABLE_HOLD_CODES, review_release_block
+from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
+from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
-from main import payment_status
 
 OUTCOMES = ("approve", "reject", "hold")
 TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")
@@ -141,7 +141,7 @@ def pay_message(view: dict, result: dict) -> tuple[str, str]:
     return "error", text
 
 def summarize(entries: list[dict]) -> dict:
-    counts = {name: 0 for name in OUTCOMES}
+    counts = dict.fromkeys(OUTCOMES, 0)
     dollars = {name: Decimal("0") for name in OUTCOMES}
     other: dict[str, dict[str, Decimal]] = {}
     paid_holds = {"count": 0, "dollars": Decimal("0"), "other": {}}
@@ -262,7 +262,7 @@ def _elapsed(entry: dict) -> float | None:
     if entry.get("elapsed_seconds") is not None:
         return float(entry["elapsed_seconds"])
     stamps = [
-        datetime.strptime(row["timestamp"], "%Y-%m-%dT%H:%M:%SZ")
+        datetime.strptime(row["timestamp"], STAMP_FORMAT)
         for row in (entry.get("state") or {}).get("logs") or [] if row.get("timestamp")
     ]
     if len(stamps) < 2:

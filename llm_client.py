@@ -15,10 +15,10 @@ network client. A replay miss is a non-retryable error, never a live call.
 
 import json
 import os
-import random
 import re
 import time
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from recording import (
@@ -33,6 +33,7 @@ from recording import (
 from pydantic import BaseModel, ValidationError
 
 from decision.policy import POLICY
+from interfaces import Clock, Rng
 from llm_errors import LLMError
 from tool_loop import (  # noqa: F401  re-exported for callers that import them from here
     TOOL_CALL_CAP,
@@ -48,6 +49,7 @@ BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MAX_ATTEMPTS = POLICY.model_retry_attempts
 SCHEMA_REPAIR_LIMIT = 2
 BACKOFF_SECONDS = (1, 2, 4, 8, 16)
+REPAIR_PREFIX = "The JSON failed validation: "
 
 _MISSING_KEY = (
     "XAI_API_KEY is not set. Add it to the environment or to a .env file "
@@ -129,15 +131,13 @@ def resolve_run_mode(record: str | None, replay: str | None) -> tuple[str, str |
         return "record", record
     if replay:
         return "replay", replay
-    raw = os.environ.get("XAI_MODE", "").strip().lower()
-    if raw in ("", "live"):
+    mode = _normalize_mode(None)
+    if mode == "live":
         return "live", None
-    if raw not in ("record", "replay"):
-        raise ModeError("XAI_MODE must be live, record, or replay")
     path = os.environ.get("XAI_RECORDING", "").strip()
     if not path:
         raise ModeError("XAI_RECORDING is required when XAI_MODE is record or replay")
-    return raw, path
+    return mode, path
 
 
 def begin_client(
@@ -170,7 +170,7 @@ def begin_client(
     raise ModeError("mode must be live, record, or replay")
 
 
-def backoff_seconds(failed_attempt: int, rng: random.Random) -> float:
+def backoff_seconds(failed_attempt: int, rng: Rng) -> float:
     """1, 2, 4, 8, 16 seconds, plus up to 25% jitter."""
 
     index = min(failed_attempt - 1, len(BACKOFF_SECONDS) - 1)
@@ -239,7 +239,7 @@ def structured_call(request, messages: list[dict], schema: type[BaseModel], chec
                 {
                     "role": "user",
                     "content": (
-                        "The JSON failed validation: "
+                        REPAIR_PREFIX
                         + error_text
                         + ". Return only a JSON object that matches the schema."
                     ),
@@ -268,8 +268,8 @@ def call_with_retries(
     schema: type[BaseModel],
     *,
     max_attempts: int,
-    clock,
-    rng: random.Random,
+    clock: Clock,
+    rng: Rng,
     attempt_log: list[dict],
     check=None,
 ) -> BaseModel:
@@ -393,10 +393,7 @@ class GrokClient:
             self.as_of = store.as_of
             return
         load_dotenv()
-        if api_key is None:
-            key = os.environ.get("XAI_API_KEY", "")
-        else:
-            key = api_key
+        key = os.environ.get("XAI_API_KEY", "") if api_key is None else api_key
         key = key.strip()
         if not key:
             raise MissingAPIKey(_MISSING_KEY)
@@ -491,18 +488,11 @@ class GrokClient:
 
         if self._replay is None:
             return False
-        fingerprint = request_fingerprint(
-            model=self.model,
-            messages=messages,
-            tools=None,
-            tool_choice=None,
-            response_format=None,
-            temperature=0,
-        )
+        fingerprint = self._fingerprint(messages, None, None)
         return self._replay.has(fingerprint)
 
-    def _replay_answer(self, messages, tools, tool_choice, as_text: bool):
-        fingerprint = request_fingerprint(
+    def _fingerprint(self, messages, tools, tool_choice) -> str:
+        return request_fingerprint(
             model=self.model,
             messages=messages,
             tools=tools,
@@ -510,6 +500,9 @@ class GrokClient:
             response_format=None,
             temperature=0,
         )
+
+    def _replay_answer(self, messages, tools, tool_choice, as_text: bool):
+        fingerprint = self._fingerprint(messages, tools, tool_choice)
         answer = self._replay.take(fingerprint) if self._replay is not None else None
         if answer is None:
             short = fingerprint[:12]
@@ -525,14 +518,7 @@ class GrokClient:
     def _record_message(self, messages, tools, tool_choice, message, usage) -> None:
         if self._record is None:
             return
-        fingerprint = request_fingerprint(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            response_format=None,
-            temperature=0,
-        )
+        fingerprint = self._fingerprint(messages, tools, tool_choice)
         self._record.append(
             {
                 "fingerprint": fingerprint,
@@ -560,7 +546,5 @@ def _read_tool_call(item) -> dict:
     }
 
 
-def _decimal(value: str):
-    from decimal import Decimal
-
+def _decimal(value: str) -> Decimal:
     return Decimal(value)

@@ -72,6 +72,23 @@ def normalize_item_name(description: str) -> tuple[str, str | None]:
     return code, note
 
 
+def blank_to_none(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def merge_notes(name_note: str | None, extra: str | None) -> str | None:
+    """Join the note taken from the item name with the line's own note."""
+
+    if name_note and extra:
+        return f"{name_note}; {extra}"
+    if name_note:
+        return name_note
+    return extra
+
+
 def non_usd_message(currency: str) -> str:
     return f"Non-USD currency ({currency})."
 

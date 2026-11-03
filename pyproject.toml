@@ -1,0 +1,7 @@
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["recordings", "logs"]
+
+[tool.ruff.lint.per-file-ignores]
+# streamlit run needs the repo root on sys.path before local imports.
+"ui/app.py" = ["E402"]

@@ -1,39 +1,45 @@
 """Ingestion. Read the file, ask the model to extract it, then normalize names."""
 
+from datetime import date
 from pathlib import Path
 
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, call_with_retries
 from models import (
     ExtractedInvoice,
     ExtractionSchema,
-    Finding,
     LineItem,
     PipelineState,
     SourceInfo,
 )
 from parsers import read_raw
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from recording import stable_invoice_path
-from decision.invoice_fields import normalize_invoice_number, normalize_item_name, resolve_currency
+from decision.invoice_fields import (
+    blank_to_none,
+    merge_notes,
+    normalize_invoice_number,
+    normalize_item_name,
+    resolve_currency,
+)
 from decision.wording import resolve_as_of, today_line
 
 
-def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None) -> dict:
+def ingest(
+    state: PipelineState,
+    llm: LLM,
+    clock: Clock,
+    rng: Rng,
+    max_attempts: int,
+    as_of: date | None = None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     path = Path(state.invoice_path)
     try:
         raw = read_raw(path)
     except Exception as exc:
         reason = f"Could not read the invoice: {exc}"
-        return stopped(
-            state,
-            "reject",
-            reason,
-            "ingestion",
-            [],
-            agent_error=None,
-            finding=Finding(code="UNREADABLE", message=reason, severity="blocking"),
-        )
+        return stop_with_finding(state, "ingestion", reason, "UNREADABLE")
 
     step_attempts: list[dict] = []
     try:
@@ -47,15 +53,7 @@ def ingest(state: PipelineState, llm, clock, rng, max_attempts: int, as_of=None)
             attempt_log=step_attempts,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "ingestion",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-        )
+        return agent_stop(state, "ingestion", step_attempts, exc)
 
     invoice = invoice_from_extraction(extracted, _path_in_prompt(path, llm), raw)
     result = {
@@ -138,11 +136,7 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
     for line in data.line_items:
         label = (line.description or line.item or "").strip()
         code, note = normalize_item_name(line.item or label)
-        extra = _blank(line.note)
-        if note and extra:
-            extra = f"{note}; {extra}"
-        elif note:
-            extra = note
+        extra = merge_notes(note, blank_to_none(line.note))
         items.append(
             LineItem(
                 item=code or label or "UNKNOWN",
@@ -154,14 +148,14 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
             )
         )
     currency = resolve_currency(data.currency, raw)
-    raw_number = _blank(data.invoice_number)
+    raw_number = blank_to_none(data.invoice_number)
     return ExtractedInvoice(
-        vendor=_blank(data.vendor),
-        vendor_address=_blank(data.vendor_address),
+        vendor=blank_to_none(data.vendor),
+        vendor_address=blank_to_none(data.vendor_address),
         invoice_number=normalize_invoice_number(raw_number),
         invoice_number_raw=raw_number,
-        invoice_date=_blank(data.invoice_date),
-        due_date=_blank(data.due_date),
+        invoice_date=blank_to_none(data.invoice_date),
+        due_date=blank_to_none(data.due_date),
         currency=currency,
         line_items=items,
         subtotal=data.subtotal,
@@ -169,12 +163,12 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
         tax_amount=data.tax_amount,
         shipping=data.shipping,
         total=data.total,
-        payment_terms=_blank(data.payment_terms),
-        notes=_blank(data.notes),
-        revision=_blank(data.revision),
+        payment_terms=blank_to_none(data.payment_terms),
+        notes=blank_to_none(data.notes),
+        revision=blank_to_none(data.revision),
         embedded_instructions=bool(data.embedded_instructions),
         noncommercial_address=bool(data.noncommercial_address),
-        address_reason=_blank(data.address_reason),
+        address_reason=blank_to_none(data.address_reason),
         source=SourceInfo(
             path=str(path),
             filename=path.name,
@@ -183,10 +177,3 @@ def invoice_from_extraction(data: ExtractionSchema, path: Path, raw: str) -> Ext
             raw_text=raw,
         ),
     )
-
-
-def _blank(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None

@@ -3,10 +3,14 @@
 import json
 import re
 
+from datetime import date
+from pathlib import Path
+
 from db import load_stock
+from interfaces import LLM, Clock, Rng
 from llm_client import AgentStepFailed, LLMError, call_with_retries
-from models import ApprovalDecision, ApprovalReasoning, Finding, PipelineState, ReasoningDraft
-from pipeline.stage_log import stopped, agent_finding, stage_log
+from models import ApprovalDecision, ApprovalReasoning, PipelineState, ReasoningDraft
+from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from decision.findings import evidence_lines
 from decision.policy import POLICY
 from decision.wording import PASSED_RULES, approval_conclusion, resolve_as_of, today_line
@@ -15,7 +19,15 @@ from decision.wording import PASSED_RULES, approval_conclusion, resolve_as_of, t
 _LOG_LIMIT = 500
 
 
-def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, as_of=None) -> dict:
+def approve(
+    state: PipelineState,
+    llm: LLM,
+    db_path: str | Path,
+    clock: Clock,
+    rng: Rng,
+    max_attempts: int,
+    as_of: date | None = None,
+) -> dict:
     as_of = resolve_as_of(as_of)
     if state.agent_error:
         return {"outcome": "hold"}
@@ -23,15 +35,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
     report = state.validation
     if invoice is None or report is None:
         reason = "Approval had no invoice."
-        return stopped(
-            state,
-            "reject",
-            reason,
-            "approval",
-            [],
-            agent_error=None,
-            finding=Finding(code="MISSING_FIELD", message=reason, severity="blocking"),
-        )
+        return stop_with_finding(state, "approval", reason, "MISSING_FIELD")
 
     stock = dict(load_stock(db_path))
     step_attempts: list[dict] = []
@@ -64,15 +68,7 @@ def approve(state: PipelineState, llm, db_path, clock, rng, max_attempts: int, a
             check=reject_bad_wording,
         )
     except AgentStepFailed as exc:
-        return stopped(
-            state,
-            "hold",
-            str(exc),
-            "approval",
-            step_attempts,
-            agent_error=str(exc),
-            finding=agent_finding(exc),
-        )
+        return agent_stop(state, "approval", step_attempts, exc)
     risks = list(draft.risks_considered)
     for concern in state.critique_concerns:
         line = f"Critique concern: {concern}"

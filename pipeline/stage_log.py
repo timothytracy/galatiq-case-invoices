@@ -1,18 +1,17 @@
 """One JSON object per stage, printed and returned."""
 
 import json
-from datetime import datetime, timezone
-
 from models import Finding, StageRecord
 from decision.outcome import finding_codes
 from decision.wording import explain
+from timestamps import utc_stamp
 
 
 def stage_log(filename: str, stage: str, result: dict, *, echo: bool = True) -> dict:
     record = StageRecord(
         stage=stage,
         invoice_file=filename,
-        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        timestamp=utc_stamp(),
         result=result,
     )
     payload = record.model_dump(mode="json")
@@ -79,3 +78,41 @@ def stopped(state, outcome, reason, stage, step_attempts, agent_error, finding=N
         "attempts": state.attempts + step_attempts,
         "logs": state.logs + [stage_log(state.filename, stage, result)],
     }
+
+
+def stop_with_finding(
+    state,
+    stage: str,
+    reason: str,
+    code: str,
+    *,
+    outcome: str = "reject",
+    severity: str = "blocking",
+    agent_error=None,
+) -> dict:
+    """Stop before any model call, with one finding that carries the reason."""
+
+    return stopped(
+        state,
+        outcome,
+        reason,
+        stage,
+        [],
+        agent_error=agent_error,
+        finding=Finding(code=code, message=reason, severity=severity),
+    )
+
+
+def agent_stop(state, stage: str, step_attempts, exc, note=None) -> dict:
+    """Hold after a model step failed for good."""
+
+    return stopped(
+        state,
+        "hold",
+        str(exc),
+        stage,
+        step_attempts,
+        agent_error=str(exc),
+        finding=agent_finding(exc),
+        note=note,
+    )

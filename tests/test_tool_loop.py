@@ -2,16 +2,13 @@
 
 import importlib
 import json
-import socket
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
 
-from db import create_database
 from graph import route_after_audit, run_invoice
-from main import _result_line
+from decision.outcome import result_line
 from llm_client import (
     TOOL_CALL_CAP,
     TOOL_ROUND_CAP,
@@ -21,24 +18,29 @@ from llm_client import (
     call_with_retries,
     tool_request,
 )
-from models import (
-    ApprovalDecision,
-    ApprovalReasoning,
-    ExtractedInvoice,
-    LineItem,
-    PipelineState,
-    SourceInfo,
-    ValidationReport,
-)
 from pipeline import audit
 from pipeline.audit import LEDGER_LINE, TOOLS_LINE
 from pipeline.payment import payment
 from pipeline.tools import Tool, ToolInputError, ToolRegistry, example_registry
-from tests.fakes import FakeClock, FakeLLM, ScriptedToolModel, ZeroRandom, task_of
-from tests.test_pipeline import extraction, scripted, write_invoice
+from tests.fakes import (
+    ANSWER,
+    Echoed,
+    FakeClock,
+    FakeLLM,
+    ScriptedToolModel,
+    ZeroRandom,
+    extraction,
+    payable_state,
+    scripted,
+    task_of,
+    text_step,
+    tool_step,
+    write_invoice,
+)
+
+pytestmark = pytest.mark.usefixtures("no_network")
 
 ROOT = Path(__file__).resolve().parents[1]
-ANSWER = '{"echoed": "phase-1"}'
 AUDIT_PASS = json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
 _RECORD_FIELDS = {
     "round",
@@ -50,40 +52,6 @@ _RECORD_FIELDS = {
     "error",
     "latency_ms",
 }
-
-
-class Echoed(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    echoed: str
-
-
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
-
-
-def tool_step(*calls, content=""):
-    return {
-        "content": content,
-        "tool_calls": [
-            {"id": call_id, "name": name, "arguments": arguments}
-            for call_id, name, arguments in calls
-        ],
-    }
-
-
-def text_step(content):
-    return {"content": content, "tool_calls": []}
 
 
 def _echo(note="phase-1", call_id="c1"):
@@ -165,7 +133,7 @@ def test_parallel_calls_all_run_and_each_counts(monkeypatch):
     assert tool_ids == ["c1", "c2"]
 
 
-def test_identical_repeat_does_not_count_or_rerun(monkeypatch):
+def test_identical_repeat_does_not_count_or_rerun():
     runs = {"n": 0}
 
     def echo(arguments):
@@ -216,7 +184,7 @@ def test_identical_repeat_does_not_count_or_rerun(monkeypatch):
     assert body == step.log[0]["result"]
 
 
-def test_repeat_does_not_spend_the_call_cap_but_rounds_still_count(monkeypatch):
+def test_repeat_does_not_spend_the_call_cap_but_rounds_still_count():
     runs = {"n": 0}
 
     def echo(arguments):
@@ -314,47 +282,6 @@ def test_bad_args_return_an_error_and_the_loop_continues(monkeypatch):
         assert body == {"error": error}
 
 
-def _payable_state() -> PipelineState:
-    invoice = ExtractedInvoice(
-        vendor="Widgets Inc.",
-        currency="USD",
-        invoice_date="2026-01-01",
-        due_date="2026-02-01",
-        total=Decimal("500"),
-        subtotal=Decimal("500"),
-        tax_amount=Decimal("0"),
-        line_items=[
-            LineItem(
-                item="WidgetA",
-                description="WidgetA",
-                quantity=Decimal("2"),
-                unit_price=Decimal("250"),
-                amount=Decimal("500"),
-            )
-        ],
-        source=SourceInfo(path="x", filename="x.txt", format="txt", raw_text="Total: 500.00"),
-    )
-    decision = ApprovalDecision(
-        decision="approve",
-        reasoning=ApprovalReasoning(
-            rules_applied=["stock covered"],
-            evidence=["total 500.00 USD"],
-            risks_considered=["no extra risk"],
-            conclusion="The checks passed.",
-        ),
-        amount=Decimal("500"),
-        currency="USD",
-    )
-    return PipelineState(
-        invoice_path="x",
-        filename="x.txt",
-        raw_text="WidgetA\nTotal: 500.00\n",
-        invoice=invoice,
-        validation=ValidationReport(passed=True, findings=[]),
-        decision=decision,
-    )
-
-
 def _cap_hold(steps, db_path, monkeypatch, registry=None):
     """Drive audit() with a scripted model. The registry stands in for the audit tools."""
 
@@ -369,7 +296,7 @@ def _cap_hold(steps, db_path, monkeypatch, registry=None):
     model = ScriptedToolModel(steps)
     clock = FakeClock()
     out = audit(
-        _payable_state(),
+        payable_state(),
         model,
         db_path,
         clock,
@@ -392,7 +319,7 @@ def _assert_system_error_hold(out, clock, executed, error_type="tool_cap"):
     assert len(out["attempts"][0]["tool_calls"]) == executed
     assert clock.slept == []
     assert "payment" not in [row["stage"] for row in out["logs"]]
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "reason_code": out["reason_code"],
@@ -435,10 +362,10 @@ def test_round_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     assert final["messages"][-1]["content"].startswith("The tool cap is reached.")
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
     assert len(model.requests) == 1
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "audit_verdict": out["audit_verdict"],
@@ -476,7 +403,7 @@ def test_call_cap_then_a_bad_final_answer_holds_without_payment(db_path, monkeyp
     assert len(model.requests) == 2
     assert all("tools" not in sent and "tool_choice" not in sent for sent in model.requests)
     assert model.requests[1]["messages"][-1]["content"].startswith("The JSON failed validation:")
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "calls"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
@@ -500,10 +427,10 @@ def test_calls_cap_then_a_plain_pass_still_approves(db_path, monkeypatch):
     stage = next(row for row in out["logs"] if row["stage"] == "audit")
     assert stage["result"]["tool_cap_hit"] == "calls"
     assert stage["result"]["forced_final_turn"] is True
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "calls"
     assert line["forced_final_turn"] is True
-    stopped = _payable_state().model_copy(
+    stopped = payable_state().model_copy(
         update={
             "outcome": out["outcome"],
             "audit_verdict": out["audit_verdict"],
@@ -527,7 +454,7 @@ def test_rounds_cap_then_a_bad_final_answer_holds_without_payment(db_path, monke
     stage = next(row for row in out["logs"] if row["stage"] == "audit")
     assert stage["result"]["tool_cap_hit"] == "rounds"
     assert stage["result"]["forced_final_turn"] is True
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
@@ -546,13 +473,13 @@ def test_api_error_on_the_final_turn_is_a_hold_without_retry(db_path, monkeypatc
     assert "tools" not in model.requests[0]
     assert "tool_choice" not in model.requests[0]
     assert len(model.tool_requests) == TOOL_ROUND_CAP + 1
-    line = _result_line(Path("cap.txt"), out)
+    line = result_line(Path("cap.txt"), out)
     assert line["tool_cap_hit"] == "rounds"
     assert line["forced_final_turn"] is True
     assert line["payment_status"] == "not_paid"
 
 
-def test_repair_turn_sends_no_tools(monkeypatch):
+def test_repair_turn_sends_no_tools():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(text_step("not-json"))
     steps.append(text_step(ANSWER))
@@ -583,7 +510,7 @@ def test_repair_turn_sends_no_tools(monkeypatch):
     )
 
 
-def test_retry_keeps_counting_toward_the_cap(monkeypatch):
+def test_retry_keeps_counting_toward_the_cap():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(2)]
     steps.append(LLMError("http_429", True, "busy"))
     steps.append(_echo(note="after", call_id="after"))
@@ -633,7 +560,7 @@ def test_retry_then_cap_logs_each_call_once(db_path, monkeypatch):
     assert out["logs"][-1]["result"]["forced_final_turn"] is True
 
 
-def test_retry_does_not_reset_the_round_cap(monkeypatch):
+def test_retry_does_not_reset_the_round_cap():
     steps = [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(LLMError("http_429", True, "busy"))
     steps.append(_echo(note="over", call_id="over"))
@@ -663,7 +590,7 @@ def test_retry_does_not_reset_the_round_cap(monkeypatch):
     assert log[-1]["result"] is None
 
 
-def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
+def test_reusing_the_callable_for_a_second_step_starts_fresh():
     steps = [_echo(note=f"a{index}", call_id=f"a{index}") for index in range(TOOL_ROUND_CAP)]
     steps.append(text_step(ANSWER))
     steps.append(_echo(note="b1", call_id="b1"))
@@ -701,7 +628,7 @@ def test_reusing_the_callable_for_a_second_step_starts_fresh(monkeypatch):
     assert log[0]["call_id"] == "b1"
 
 
-def test_a_new_tool_step_starts_fresh(monkeypatch):
+def test_a_new_tool_step_starts_fresh():
     spent = ScriptedToolModel(
         [_echo(note=str(index), call_id=f"c{index}") for index in range(TOOL_ROUND_CAP + 1)]
     )
@@ -862,7 +789,7 @@ def test_only_the_audit_prompt_names_the_tools(tmp_path, db_path):
             assert "check_payment_ledger" not in system
 
 
-def test_final_turn_follows_the_flag_not_the_agent_name(monkeypatch):
+def test_final_turn_follows_the_flag_not_the_agent_name():
     messages = [{"role": "user", "content": "Answer with JSON."}]
 
     def drive(agent, flag):

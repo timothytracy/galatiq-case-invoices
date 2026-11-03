@@ -4,7 +4,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from models import ExtractedInvoice, LineItem, SourceInfo
-from decision.invoice_fields import as_money, normalize_invoice_number, normalize_item_name
+from decision.invoice_fields import (
+    as_money,
+    blank_to_none as _blank,
+    merge_notes,
+    normalize_invoice_number,
+    normalize_item_name,
+)
 
 
 def _build(
@@ -53,18 +59,13 @@ def _build(
 def _make_item(description, quantity, unit_price, amount, note) -> LineItem:
     text = str(description).strip()
     code, name_note = normalize_item_name(text)
-    extra = _blank(note)
-    if name_note and extra:
-        extra = f"{name_note}; {extra}"
-    elif name_note:
-        extra = name_note
     return LineItem(
         item=code,
         description=text,
         quantity=Decimal(str(quantity)),
         unit_price=_money(unit_price),
         amount=_money(amount),
-        note=extra,
+        note=merge_notes(name_note, _blank(note)),
     )
 
 
@@ -87,13 +88,6 @@ def _rate(value) -> Decimal | None:
     if text.endswith("%"):
         return Decimal(text[:-1].strip()) / Decimal("100")
     return Decimal(text)
-
-
-def _blank(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _read(path: Path) -> str:

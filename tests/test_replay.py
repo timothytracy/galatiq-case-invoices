@@ -2,7 +2,6 @@
 
 import json
 import re
-import socket
 import tempfile
 from datetime import date
 from decimal import Decimal
@@ -10,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from db import create_database
 from graph import run_invoice
 from llm_client import (
     DEFAULT_MODEL,
@@ -21,26 +19,11 @@ from llm_client import (
 from pipeline.tools import example_registry
 from recording import estimate_cost, request_fingerprint
 from scripts.eval import main as eval_main
-from tests.fakes import FakeClock, ZeroRandom, task_of
-from tests.test_pipeline import extraction, write_invoice
-from tests.test_tool_loop import ANSWER, Echoed
+from tests.fakes import ANSWER, Echoed, FakeClock, ZeroRandom, extraction, task_of, write_invoice
+
+pytestmark = pytest.mark.usefixtures("no_network")
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(autouse=True)
-def block_network(monkeypatch):
-    def explode(*_args, **_kwargs):
-        raise AssertionError("network is disabled in tests")
-
-    monkeypatch.setattr(socket, "create_connection", explode)
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def _fp(messages, **overrides):
@@ -571,9 +554,9 @@ def test_missing_replay_file_fails_and_a_present_file_can_fail(tmp_path, capsys,
 def test_fingerprint_covers_the_ledger_tool_like_any_other_tool():
     from pipeline.audit import LEDGER_LINE
     from pipeline.tools import audit_registry
-    from tests.test_tool_loop import _payable_state
+    from tests.test_tool_loop import payable_state
 
-    state = _payable_state()
+    state = payable_state()
     schemas = audit_registry(state.invoice, {"WidgetA": 15}, state.raw_text or "").schemas()
     names = [item["function"]["name"] for item in schemas]
     assert "check_payment_ledger" in names

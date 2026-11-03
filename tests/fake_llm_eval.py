@@ -20,13 +20,12 @@ from pydantic import BaseModel
 from db import ensure_inventory_db
 from decision.findings import injection_phrase
 from graph import run_invoice
-from main import payment_status
-from parsers import parse_file
+from decision.outcome import payment_status
+from parsers import SUFFIXES, parse_file
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
-SUFFIXES = {".txt", ".pdf", ".json", ".csv", ".xml"}
 # Fixed so the sample run does not depend on the wall clock or the time zone.
 AS_OF = date(2026, 10, 31)
 

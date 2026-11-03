@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from db import create_database
 from decision.policy import APPROVAL_THRESHOLD_USD
 from llm_client import TOOL_CALL_CAP, TOOL_ROUND_CAP
 from ui.pay import (
@@ -16,7 +15,6 @@ from ui.pay import (
     approve_and_pay,
     extracted_total,
     saved_result,
-    shape_pay_result,
 )
 from ui.present import (
     INVOICE_FIELDS,
@@ -48,13 +46,6 @@ from ui.runner import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "recordings" / "samples.jsonl"
-
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "inventory.db"
-    create_database(path)
-    return path
 
 
 def test_replay_run_exposes_pipeline_fields(db_path, monkeypatch):
@@ -638,7 +629,7 @@ def test_tool_call_view_renders(monkeypatch):
     assert "[]" not in detail
 
 
-def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch, tmp_path):
+def test_approve_and_pay_shapes_stubbed_success_and_refusal(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     seen = []
 
@@ -774,7 +765,7 @@ def test_adapter_passes_the_loaded_result_unchanged(monkeypatch, tmp_path):
     assert invoice_view({"state": {"filename": "held.txt", "outcome": "hold"}})["critique_concerns"] == []
 
 
-def test_loaded_run_without_a_record_is_refused(monkeypatch, tmp_path):
+def test_loaded_run_without_a_record_is_refused(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert Path.cwd().resolve() == ROOT.resolve()
     assert "chdir" not in (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
