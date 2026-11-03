@@ -4,6 +4,7 @@ import glob
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import time
 from contextlib import redirect_stdout
@@ -14,7 +15,9 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from db import create_database, data_dir, inventory_db_path, payments_db_path
+from decision.invoice_fields import normalize_invoice_number
 from graph import run_invoice
+from ledger.payments import raw_sha256, vendor_key
 from llm_client import GrokClient, key_available
 from parsers import SUFFIXES
 from pipeline.ingestion import is_recorded
@@ -80,6 +83,141 @@ def unrecorded(paths: list[Path], recording: Path) -> list[Path]:
     """Invoices the recording has no extraction answer for. Nothing is run."""
     client = GrokClient(mode="replay", recording=recording)
     return [path for path in paths if not is_recorded(path, client)]
+
+
+_UPLOADS: Path | None = None
+
+
+def stage_upload(name: str, data: bytes) -> Path:
+    """A path for run_one. Identical bytes use the repo file so replay still matches.
+
+    A new file is written into one upload directory for this process and
+    processed as itself. The caller shows the uploaded name.
+    """
+    known = _known_invoice(name, data)
+    if known is not None:
+        return known
+    path = _upload_folder() / _upload_name(name)
+    path.write_bytes(data)
+    return path
+
+
+def _upload_folder() -> Path:
+    """One directory for uploaded invoices. Later uploads reuse it."""
+    global _UPLOADS
+    if _UPLOADS is None or not _UPLOADS.is_dir():
+        _UPLOADS = Path(tempfile.mkdtemp(prefix="review-upload-"))
+    return _UPLOADS
+
+
+def session_paid_row(entries, view: dict) -> dict | None:
+    """A paid row for this bill in any session ledger, or None.
+
+    The pay form stays hidden when this returns a row. A revised invoice
+    with an unpaid difference can be allowed here later.
+    """
+    if not isinstance(view, dict):
+        return None
+    seen = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("ledger_path")
+        key = "" if path is None else str(path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        row = paid_ledger_row(path, view)
+        if row is not None:
+            return row
+    return None
+
+
+def paid_ledger_row(path, view: dict) -> dict | None:
+    """The paid ledger row for this invoice, or None. Read-only.
+
+    Matches the ledger: the same document, or the same vendor and invoice number.
+    Pending and failed rows are not paid. A missing file is an empty ledger.
+    """
+    if not path or not isinstance(view, dict):
+        return None
+    db_path = Path(path)
+    try:
+        if not db_path.is_file() or db_path.stat().st_size == 0:
+            return None
+    except OSError:
+        return None
+    invoice = view.get("invoice") if isinstance(view.get("invoice"), dict) else {}
+    vendor = vendor_key(invoice.get("vendor"))
+    number = normalize_invoice_number(invoice.get("invoice_number"))
+    digest = raw_sha256(view.get("raw_text") or "")
+    try:
+        rows = _read_payments(db_path)
+    except sqlite3.Error:
+        return None
+    for row in rows:
+        if row.get("status") != "paid":
+            continue
+        same_document = bool(digest) and row.get("raw_sha256") == digest
+        same_bill = bool(vendor and number) and row.get("vendor_key") == vendor and row.get("invoice_number") == number
+        if same_document or same_bill:
+            return row
+    return None
+
+
+def _known_invoice(name: str, data: bytes) -> Path | None:
+    """A repo invoice with these exact bytes. None for a new or empty file."""
+    if not data:
+        return None
+    folders = (INVOICES, ROOT / "data" / "extra_invoices")
+    hits = []
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in SUFFIXES:
+                continue
+            try:
+                same = path.read_bytes() == data
+            except OSError:
+                continue
+            if same:
+                hits.append(path)
+    if not hits:
+        return None
+    wanted = _upload_name(name)
+    for path in hits:
+        if path.name == wanted:
+            return path
+    return hits[0]
+
+
+def _upload_name(name: str) -> str:
+    filename = Path(str(name or "")).name
+    if not filename or filename in {".", ".."}:
+        return "invoice.txt"
+    return filename
+
+
+def _read_payments(db_path: Path) -> list[dict]:
+    """Read-only rows. Does not create or change the ledger."""
+    uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(payments)")}
+        if "vendor_key" not in columns:
+            return []
+        wanted = [
+            "vendor", "vendor_key", "invoice_number", "total", "currency",
+            "paid_at", "status", "source_file", "raw_sha256",
+        ]
+        if "authorization_key" in columns:
+            wanted.append("authorization_key")
+        picked = ", ".join(wanted)
+        found = connection.execute(f"SELECT {picked} FROM payments ORDER BY rowid").fetchall()
+    finally:
+        connection.close()
+    return [dict(zip(wanted, row)) for row in found]
 
 
 def run_one(
