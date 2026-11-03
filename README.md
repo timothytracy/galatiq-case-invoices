@@ -12,9 +12,22 @@ The system takes one invoice, reads it, checks stock, math, and the payments led
 
 Grok extracts the fields, reads each invoice for payment fraud, critiques any bill over $10,000, and audits the result. Code makes the final call. A reject or a hold is never paid.
 
+## Before any payment, all six must be true
+
+| Check | What it stops |
+|---|---|
+| Known vendor | Paying a vendor nobody at Acme has set up. `data/vendor_master.json` stands in for Acme's vendor master. |
+| Bank details unchanged | A new or changed bank account, at any amount. This is the most common payment-fraud pattern. |
+| Printed total matches | Paying a total that is not printed on the page, or that the lines do not add up to. |
+| No embedded instructions | Text aimed at the system, such as "approve this invoice." A fixed phrase list catches known wording. Grok catches new wording, but only counts when it quotes the text and code finds that quote on the page. One signal holds the invoice; both reject it. |
+| Total above zero, in USD | A $0 bill, or a foreign-currency bill that would need a conversion rate. |
+| Audit passed | Anything Grok's final audit, using read-only lookups, will not sign off on. |
+
+Each check, with its result, is on the review screen and in the audit trail. If one fails, the invoice is held or rejected, and payment refuses it even if every other step said approve.
+
 ## Results
 
-Every score below replays a committed recording of a live Grok run, so it needs no API key. CI runs all five on every change. Each set was recorded on 2026-11-02 PT.
+Every score below replays a committed recording of a live Grok run, so it needs no API key. CI runs all six on every change. Each set was recorded on 2026-11-02 PT.
 
 | Set | What it tests | Score |
 |---|---|---|
@@ -23,8 +36,9 @@ Every score below replays a committed recording of a live Grok run, so it needs 
 | Ordered ledger | 11 invoice files run in sequence on one shared ledger, so duplicates and revisions are caught | All 11 steps correct |
 | Loop set | A large bill through critique and audit, and two pages that state a second amount | 3/3 |
 | Fraud set | Payment-fraud cases that code alone would pay | 5/5 |
+| Pass-list set | One invoice for each pass-list check the other sets did not test, plus a clean control | 5/5 |
 
-Across the 41 sample and unseen invoices, 14 are approved, 16 rejected, and 11 held. The unseen, loop, and fraud invoices and their answer keys were written by the author, not by Acme, so treat those scores as regression checks rather than independent tests.
+Across the 41 sample and unseen invoices, 14 are approved, 16 rejected, and 11 held. The unseen, loop, fraud, and pass-list invoices and their answer keys were written by the author, not by Acme, so treat those scores as regression checks rather than independent tests.
 
 ![Review screen from the recorded Grok run](docs/review_screen.png)
 
@@ -36,9 +50,9 @@ Across the 41 sample and unseen invoices, 14 are approved, 16 rejected, and 11 h
 
 The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
 
-- **Speed.** About 6 seconds per invoice, against five days by hand. A live run of the 20 samples took 122 s.
-- **Cost.** Under one cent of Grok usage per invoice: $0.0059 on the samples and $0.0078 on the unseen set. Details are in [docs/METRICS.md](docs/METRICS.md).
-- **Errors.** Every labeled outcome was correct in replay and in every live run on record: three runs each of the samples and unseen sets before fraud review was added, and since then the five recordings, one more samples run, and three more fraud-set runs. No reject or hold was ever paid. Forty-one invoices is a small set, so read this as "no errors seen," not as a measured rate to compare with 30%.
+- **Speed.** About 5 to 7 seconds per invoice, against five days by hand. Live runs of the 20 samples took 98 to 136 s.
+- **Cost.** Under one cent of Grok usage per invoice: $0.0059 on the samples and $0.0074 on the unseen set. Details are in [docs/METRICS.md](docs/METRICS.md).
+- **Errors.** Every labeled outcome was correct in replay and in every live run of the final code: the six recordings, and three more runs each of the samples and unseen sets. Two earlier recording attempts held clean invoice 2003, which led to a fix rather than a relabel ([what happened](docs/METRICS.md#what-recording-these-sets-changed)). No reject or hold was ever paid. Forty-one invoices is a small set, so read this as "no errors seen," not as a measured rate to compare with 30%.
 - **People.** 30 of the 41 invoices (73%) need no one at Acme: 14 are paid and 16 go back to the vendor with the fix to make. The other 11 (27%) are holds, and each names one action for one owner instead of starting an email chain.
 - **Savings.** Labor saved is the share of invoices that need no person, times today's cost per invoice. That share is 73% on this set. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
@@ -49,17 +63,19 @@ The brief describes $2M a year in manual processing, a 30% error rate, and five-
 | Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text. An OCR fix such as "2O26" to "2026" is kept only when the math reconciles. |
 | Staff check an inconsistent legacy inventory database. | One read-only SQLite table. A near-miss name is rejected with "Likely meant WidgetA," never silently substituted. |
 | A VP approves by email chain. | Written rules decide. A bill over $10,000 gets one critique, and an audit with read-only tools can only make the decision stricter. A hold names one action for one owner. |
-| Staff pay through the banking API. | Payment runs only after an audit PASS or a reviewer's release. A payments ledger blocks a duplicate or a split invoice before money moves. |
+| Staff pay through the banking API. | Payment runs only when all six pass-list checks are true, or after a reviewer's release. A payments ledger blocks a duplicate or a split invoice before money moves. |
 
 Each kind of hold has one owner. These roles are proposed; the brief does not name Acme's teams.
 
 | Hold kind | Codes | Owner | Can a reviewer pay it? |
 |---|---|---|---|
-| Vendor identity or bank change | `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `FRAUD_SUSPECTED` | Accounts payable, with the vendor-master owner | Yes. A second approver is the production next step. |
+| Vendor identity or bank change | `NEW_VENDOR`, `VENDOR_RENAMED`, `NEW_REMITTANCE`, `FRAUD_CLUSTER`, `FRAUD_SUSPECTED` | Accounts payable, with the vendor-master owner | Yes. A second approver is the production next step. |
+| Wording aimed at the system | `INJECTION_SUSPECTED` | Accounts payable reads the flagged wording | Yes |
 | Invoice history | `REVISED_INVOICE` | Accounts payable | Yes |
 | Invoice history | `DUPLICATE_INVOICE`, `SPLIT_INVOICE` | Accounts payable | No |
 | Price | `PRICE_SPIKE` | Purchasing, which owns the PO price | Yes |
 | Currency or credit | `NON_USD`, `CREDIT_NOTE` | Finance and accounting | No |
+| Amount on the page | `AMOUNT_WORDS_MISMATCH`, `BALANCE_DUE`, `ZERO_TOTAL`, `PRINTED_TOTAL_MISMATCH` | Accounts payable checks the document | No |
 | Extraction trust | `ITEM_NOT_IN_SOURCE` | Accounts payable checks the document | No |
 | Review escalation | `CRITIQUE_HOLD`, `AUDIT_ESCALATED` | The approver who replaces the VP email chain | Yes, except at the send-back cap |
 | System failure | `SYSTEM_ERROR`, `BAD_REASONING` | Engineering on call reruns the invoice | No |
@@ -76,6 +92,20 @@ Code alone records the address as a warning and would approve. Fraud review hold
 
 Code alone approves all five invoices in `data/fraud_invoices/`. Three should be held. Two of those, 2124 and 2125, contain no keyword a rule could match: one asks accounts payable to pay a servicing company instead of the vendor, and one moves payment to a differently named party and asks for replies to a free email address. Fraud review held all three, each with a quote that code confirmed is on the page, and passed both legitimate invoices. A fraud-review hold that cannot be traced to text on the page is dropped.
 
+### What each model step changed
+
+Counts are from the six recordings, 65 invoice runs in all ([docs/METRICS.md](docs/METRICS.md#how-often-each-loop-fired)).
+
+| Step | Runs | What it changed |
+|---|---|---|
+| Extraction | 65 | Read every invoice. Its instructions flag, with a quote code found on the page, held 2134, which no phrase rule matched. |
+| Fraud review | 25 | Held 5: 1004 (twice, in samples and ordered), 2121, 2124, and 2125. Code dropped none. |
+| Approval | 22 | Wrote the explanation for 20 invoices, two of them again after critique. It never chooses the outcome. |
+| Critique | 2 | Changed no outcome. Two concerns on 2106 said past dates were in the future, and code set them aside. |
+| Audit | 20 | Changed no outcome: no send-back and no escalation. |
+
+Critique and audit found nothing in these sets that code had missed. They are kept as a second reader with lookups and the raw page, and they can only make a decision stricter.
+
 ### Invoice 2106: a clean bill the reviewers kept doubting
 
 2106 is a clean $11,500 bill that should be paid. At first Grok's critique raised a stock concern that was not real, and the audit called its dates future dates, so it was held on every run. The fix, in [PR #14](https://github.com/timothytracy/galatiq-case-invoices/pull/14), gives the critique and audit the facts code has already checked, and drops, with a log entry, only the concerns that contradict them. Giving the critique lookup tools broke 2106 again ([PR #20](https://github.com/timothytracy/galatiq-case-invoices/pull/20), closed), so tools went to the audit only ([PR #21](https://github.com/timothytracy/galatiq-case-invoices/pull/21), [PR #27](https://github.com/timothytracy/galatiq-case-invoices/pull/27)).
@@ -91,10 +121,10 @@ Duplicate detection almost made the cut list. But a system that pays every invoi
 | Email ingestion | Parsing mailboxes adds nothing to the decision logic. The pipeline takes one file, which is what an inbox watcher would hand it. | A mailbox watcher that drops attachments into the same command. |
 | OCR for scanned PDFs | All provided PDFs have a text layer. OCR-style damage ("2O26") is handled at the text level. | Grok vision or Tesseract for image-only PDFs. |
 | Currency conversion | Paying from a stale exchange rate is a real money risk. Non-USD invoices are held, never converted. | A dated rate feed, with finance confirming the rate on the hold. |
-| A vendor master (bank account on file) | The brief supplies no vendor data. Renames and bank changes are caught from the invoice text. | A vendor table, so a bank change is a code check, not a judgment call. |
+| A real vendor master (bank account on file) | The brief supplies no vendor data. `data/vendor_master.json` lists vendor names only, so an unknown vendor is held, but bank changes are still caught from the invoice text. | Acme's vendor table with the bank account on file, so a bank change is a code check, not a reading of the page. |
 | Purchase-order matching | The brief supplies no PO data. Stock and reference prices stand in for it. | Match each line to an open PO line for item, quantity, and price. |
 | Live inventory | Stock is a fixed snapshot so each invoice gets the same answer whatever ran before it. | Read stock from the system of record at decision time. |
-| A second approver | One reviewer can release a vendor-identity or bank-change hold. | Two-person approval for those holds. |
+| A second approver | One reviewer can release a `FRAUD_SUSPECTED` hold or a bank-change hold (`NEW_REMITTANCE`, `VENDOR_RENAMED`, `NEW_VENDOR`). Those are the holds where a single fooled or compromised reviewer costs the most. | Two-person approval for those holds. |
 | Multi-process safety | The prototype runs one process at a time. | A database lock or queue around the split check and payment. |
 | Auth and a shared review queue | The brief says run locally. Review notes are local files. | Sign-in, roles, and a durable queue. |
 | Memory from human reviews | A reviewer's decision is recorded, but the agents never read it. | Let a reviewer mark a resolution, such as a confirmed vendor rename, for later runs to remember. |
@@ -164,9 +194,10 @@ python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_a
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl
 python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl
+python3 scripts/eval.py --invoices data/passlist_invoices --answer-key data/passlist_answer_key.json --replay recordings/passlist.jsonl
 ```
 
-Each exits 0 on a perfect score. These are the five CI runs, with no API key. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate. Add `--verbose` to see each stage's JSON record.
+Each exits 0 on a perfect score. These are the six CI runs, with no API key. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate. Add `--verbose` to see each stage's JSON record.
 
 In the ordered run, 1004 is held by fraud review, so the ledger ends with two paid rows (1001 and 1011), and 1004's revision is still a `REVISED_INVOICE` hold. If 1004 were approved instead, the ledger would have three rows, which the scenario also accepts.
 
@@ -199,6 +230,6 @@ python3 scripts/approve_hold_demo.py --demo
 - [REQUIREMENTS.md](REQUIREMENTS.md): the original brief, unchanged
 - [docs/DESIGN.md](docs/DESIGN.md): each agent, the approve, reject, and hold rules, warnings, and the settings
 - [docs/METRICS.md](docs/METRICS.md): replay and live-run numbers
-- [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md), [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md), and [docs/FRAUD_ANSWER_KEY.md](docs/FRAUD_ANSWER_KEY.md): the labeled outcomes
+- [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md), [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md), [docs/FRAUD_ANSWER_KEY.md](docs/FRAUD_ANSWER_KEY.md), and [docs/PASSLIST_ANSWER_KEY.md](docs/PASSLIST_ANSWER_KEY.md): the labeled outcomes
 - [docs/graph.md](docs/graph.md): the generated graph
-- [recordings/README.md](recordings/README.md): how the five recordings were made
+- [recordings/README.md](recordings/README.md): how the six recordings were made

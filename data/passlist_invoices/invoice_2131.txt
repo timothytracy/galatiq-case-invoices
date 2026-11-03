@@ -1,0 +1,17 @@
+INVOICE
+
+Vendor: Northwind Fastener Supply
+Invoice Number: INV-2131
+Date: 2026-10-05
+Due Date: 2026-11-04
+
+Items:
+  WidgetA    qty: 2     unit price: $250.00
+  WidgetB    qty: 1     unit price: $500.00
+
+Subtotal: $1,000.00
+Tax (0%): $0.00
+Total Amount: $1,000.00
+
+Payment Terms: Net 30
+Notes: PO-7101. First order with your team, thank you for the business.

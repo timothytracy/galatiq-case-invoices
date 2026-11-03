@@ -7,6 +7,7 @@ from pathlib import Path
 
 from decision.invoice_fields import normalize_invoice_number
 from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
+from decision.pass_list import pass_checks
 from decision.policy import APPROVAL_THRESHOLD_USD
 from ledger.payments import vendor_key
 from parsers import SUFFIXES, parse_file
@@ -164,6 +165,28 @@ def invoice_view(entry: dict) -> dict:
         "tool_calls": tool_call_view(logs, entry.get("result_line"), state.get("attempts")),
         "authorization": _authorization_key(state),
     }
+def pass_list_rows(view: dict) -> list[dict]:
+    """The six pass-list checks for the detail screen.
+
+    The run's own record is used when it has one. An older saved run is
+    checked again from its invoice, findings, and audit verdict.
+    """
+    checks = None
+    verdict = None
+    for row in view.get("logs") or []:
+        result = row.get("result") if isinstance(row, dict) and isinstance(row.get("result"), dict) else {}
+        if isinstance(result.get("pass_list"), list):
+            checks = result["pass_list"]
+        if row.get("stage") == "audit" and result.get("verdict"):
+            verdict = result["verdict"]
+    if checks is None:
+        if not view.get("invoice"):
+            return []
+        checks = pass_checks(view["invoice"], view.get("findings") or [], verdict)
+    return [
+        {"Check": item.get("check"), "Result": "Pass" if item.get("ok") else "Fail", "Detail": item.get("detail")}
+        for item in checks if isinstance(item, dict)
+    ]
 def _place(view: dict, key: str) -> str:
     if view.get("outcome") == "approve" and blank(view.get(key)):
         return APPROVED

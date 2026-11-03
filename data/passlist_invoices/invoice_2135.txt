@@ -1,0 +1,17 @@
+INVOICE
+
+Vendor: Wexford Components
+Invoice Number: INV-2135
+Date: 2026-10-09
+Due Date: 2026-11-08
+
+Items:
+  WidgetB    qty: 2     unit price: $500.00
+  WidgetA    qty: 2     unit price: $250.00
+
+Subtotal: $1,500.00
+Tax (0%): $0.00
+Total Amount: $1,500.00
+
+Payment Terms: Net 30, ACH to the account on file
+Notes: PO-7105. Payment instructions unchanged.

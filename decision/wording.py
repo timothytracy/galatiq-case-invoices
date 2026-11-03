@@ -48,6 +48,10 @@ KEY_REASON_TO_CODE = {
     "Balance due lower than the total": "BALANCE_DUE",
     "Critique hold": "CRITIQUE_HOLD",
     "Audit escalation": "AUDIT_ESCALATED",
+    "Vendor not on the vendor master": "NEW_VENDOR",
+    "Zero total": "ZERO_TOTAL",
+    "Extracted total does not match the printed total": "PRINTED_TOTAL_MISMATCH",
+    "Possible embedded instructions": "INJECTION_SUSPECTED",
 }
 
 # What a person does on a hold, or what the vendor must send on a reject.
@@ -79,6 +83,10 @@ ACTION = {
     "BALANCE_DUE": (
         "Confirm the deposit or credit, then pay the balance by hand. Nothing is paid here."
     ),
+    "NEW_VENDOR": "Set the vendor up in the vendor master, then release the hold.",
+    "ZERO_TOTAL": "Confirm with the vendor why the total is zero. Nothing is paid.",
+    "PRINTED_TOTAL_MISMATCH": "Rerun the invoice or read the total by hand. Nothing is paid.",
+    "INJECTION_SUSPECTED": "Read the flagged wording and confirm it is not aimed at the payment system.",
 }
 
 RULE_TEXT = {
@@ -91,7 +99,9 @@ RULE_TEXT = {
         f"{MONEY}."
     ),
     "NEGATIVE_AMOUNT": "A negative amount that is not a labeled credit note is rejected.",
-    "EMBEDDED_INSTRUCTIONS": "Embedded instructions aimed at the system are rejected.",
+    "EMBEDDED_INSTRUCTIONS": (
+        "Embedded instructions aimed at the system, flagged by both the model and the text check, are rejected."
+    ),
     "NON_USD": "Any currency other than USD is a hold. There is no conversion.",
     "VENDOR_RENAMED": "A vendor rename (formerly) is a hold and is not auto-paid.",
     "DUPLICATE_INVOICE": (
@@ -110,7 +120,15 @@ RULE_TEXT = {
         "The fraud review holds an invoice when it quotes page text that makes the "
         "innocent reading of a payment red flag unlikely."
     ),
-    "NEW_REMITTANCE": "A new bank account on a clean invoice over the threshold is a hold.",
+    "NEW_REMITTANCE": "A new or changed bank or remittance account is a hold at any amount.",
+    "NEW_VENDOR": "A vendor that is not on the vendor master is a hold.",
+    "ZERO_TOTAL": "A total of zero that is not a labeled credit note is a hold. Nothing is paid.",
+    "PRINTED_TOTAL_MISMATCH": (
+        "The extracted total must equal a total printed on the page. Otherwise it is a hold."
+    ),
+    "INJECTION_SUSPECTED": (
+        "Wording aimed at the system, flagged by the model or the text check but not both, is a hold."
+    ),
     "PRICE_SPIKE": (
         f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "
         "reference price is a hold."

@@ -39,7 +39,7 @@ Notes on the columns:
 
 **Counts:** APPROVE 6, REJECT 9, HOLD 5 (20 files). Code alone, without fraud review, gives APPROVE 7 and HOLD 4, because it approves 1004.
 
-The "clean invoice over $10,000 with a new bank account" Hold doesn't apply to any file here, because no sample invoice has bank or remittance details. Every invoice over $10,000 (1002, 1003, 1005, 1007, 1013) is rejected for stock, so the critique-over-$10K follow-up changes no outcome in this set.
+The bank-change hold, which applies at any amount, doesn't apply to any file here, because no sample invoice has bank or remittance details. Every invoice over $10,000 (1002, 1003, 1005, 1007, 1013) is rejected for stock, so the critique-over-$10K follow-up changes no outcome in this set.
 
 ## Rulings on 1003 and 1004
 

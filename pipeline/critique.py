@@ -44,7 +44,7 @@ def critique(
     try:
         draft = call_with_retries(
             llm.request,
-            _critique_messages(decision, as_of, facts),
+            _critique_messages(decision, as_of, facts, state.raw_text or ""),
             CritiqueDraft,
             max_attempts=max_attempts,
             clock=clock,
@@ -89,7 +89,7 @@ def critique(
     return update
 
 
-def _critique_messages(decision: ApprovalDecision, as_of, facts) -> list[dict]:
+def _critique_messages(decision: ApprovalDecision, as_of, facts, invoice_text: str) -> list[dict]:
     return [
         {
             "role": "system",
@@ -101,6 +101,8 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts) -> list[dict]:
                 "Being over the scrutiny threshold is not a risk. Do not set stricter only "
                 "because the total is over it. "
                 "You cannot approve a failure and you cannot clear a non-USD hold. "
+                "invoice_text is the page as read. Compare it with the decision and "
+                "verified_by_code, and raise a concern for anything the extraction missed or misread. "
                 f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Return JSON only."
             ),
         },
@@ -110,6 +112,7 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts) -> list[dict]:
                 {
                     "decision": decision.model_dump(mode="json"),
                     "verified_by_code": facts,
+                    "invoice_text": invoice_text,
                 }
             ),
         },

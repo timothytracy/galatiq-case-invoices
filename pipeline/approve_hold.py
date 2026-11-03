@@ -130,6 +130,12 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", MISSING_NOTE, "A note is required.")
     if ledger is None:
         return finish("held", NOT_PAYABLE, "A ledger is required.")
+    if repo_key(result) is None:
+        return finish(
+            "held",
+            NOT_PAYABLE,
+            "The invoice file is outside the repository, so it has no release record.",
+        )
     saved = load_record(filename)
     if saved is None:
         return finish("held", NOT_PAYABLE, "No pipeline record for this invoice.")

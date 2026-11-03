@@ -78,10 +78,28 @@ KEYS = (
 )
 
 
+CHANGED_BY = {"FRAUD_SUSPECTED": "fraud_review", "CRITIQUE_HOLD": "critique", "AUDIT_ESCALATED": "audit"}
+
+
+def changed_by(result: dict) -> str | None:
+    """The model step that moved the outcome off what validation decided, or None."""
+
+    first = stages(result, "validation")
+    if not first:
+        return None
+    if str(first[0].get("outcome") or "") == str(result.get("outcome") or ""):
+        return None
+    return CHANGED_BY.get(result.get("reason_code") or "", "audit_send_back")
+
+
 def tally(results: list[dict], repairs: int) -> dict:
     counts = Counter(dict.fromkeys(KEYS, 0))
     tools = Counter()
+    changed = Counter(dict.fromkeys(("fraud_review", "critique", "audit", "audit_send_back"), 0))
     for result in results:
+        step = changed_by(result)
+        if step:
+            changed[step] += 1
         frauds = stages(result, "fraud_review")
         counts["fraud_reviews"] += len(frauds)
         counts["fraud_holds"] += sum(1 for row in frauds if row.get("reason_code") == "FRAUD_SUSPECTED")
@@ -112,7 +130,12 @@ def tally(results: list[dict], repairs: int) -> dict:
             if row.get("verdict") != "PASS":
                 counts["audits_with_tools_not_pass"] += 1
     counts["schema_repairs"] = repairs
-    return {"invoices": len(results), **dict(counts), "tools_by_name": dict(tools)}
+    return {
+        "invoices": len(results),
+        **dict(counts),
+        "outcomes_changed": dict(changed),
+        "tools_by_name": dict(tools),
+    }
 
 
 def main(argv=None) -> int:

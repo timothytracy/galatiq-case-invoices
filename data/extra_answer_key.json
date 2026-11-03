@@ -184,7 +184,7 @@
       "warnings": [
         "Fraud signal: new bank account (\"new bank account\", \"Bank account updated\")"
       ],
-      "reason": "WidgetA 12 (stock 15), WidgetB 10 (stock 10) and GadgetX 4 (stock 5) are in stock at the reference prices, and the lines add up to $11,000.00. The invoice is over $10,000 and names a new bank account. That single fraud signal is a hold on its own because the invoice is otherwise clean and over $10,000. There is no second fraud signal.",
+      "reason": "WidgetA 12 (stock 15), WidgetB 10 (stock 10) and GadgetX 4 (stock 5) are in stock at the reference prices, and the lines add up to $11,000.00. The invoice names a new bank account. A bank change is a hold on its own, at any amount. There is no second fraud signal.",
       "next_step": "Verify the change with the vendor.",
       "source": "Policy judgment"
     },

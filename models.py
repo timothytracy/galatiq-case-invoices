@@ -51,8 +51,12 @@ class ExtractedInvoice(_Strict):
     total: Decimal | None = None
     payment_terms: str | None = None
     notes: str | None = None
-    # Reject also needs the phrase check in decision.findings.
+    # Reject also needs the phrase check in decision.findings. Alone, the flag
+    # holds only when embedded_quote is on the page and embedded_action asks to
+    # approve, pay, skip the review, or ignore the rules.
     embedded_instructions: bool = False
+    embedded_quote: str | None = None
+    embedded_action: str | None = None
     # Warning only. Set when the address looks non-commercial.
     noncommercial_address: bool = False
     address_reason: str | None = None
@@ -154,6 +158,17 @@ class ExtractionLine(_Loose):
     amount: Decimal | None = None
     note: str | None = None
 
+    @field_validator("item", mode="before")
+    @classmethod
+    def _null_item(cls, value):
+        return "" if value is None else value
+
+    # A null quantity is not a number: validation rejects it as BAD_QUANTITY.
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def _null_quantity(cls, value):
+        return Decimal("0") if value is None else value
+
 
 class ExtractionSchema(_Loose):
     vendor: str | None = None
@@ -172,8 +187,20 @@ class ExtractionSchema(_Loose):
     notes: str | None = None
     revision: str | None = None
     embedded_instructions: bool = False
+    embedded_quote: str | None = None
+    embedded_action: str | None = None
     noncommercial_address: bool = False
     address_reason: str | None = None
+
+    @field_validator("embedded_instructions", "noncommercial_address", mode="before")
+    @classmethod
+    def _null_flag(cls, value):
+        return False if value is None else value
+
+    @field_validator("line_items", mode="before")
+    @classmethod
+    def _null_lines(cls, value):
+        return [] if value is None else value
 
 
 class ReasoningDraft(_Loose):
