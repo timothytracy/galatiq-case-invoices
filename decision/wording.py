@@ -136,6 +136,7 @@ _FILLER = set(
     ).split()
 )
 _AMOUNT = r"(?:\$\s*)?10[,.]?000|\$?\s*10k"
+_UNPAID_DIFFERENCE = re.compile(r"The unpaid difference is (\d+\.\d{2} [A-Z]{3})")
 _THRESHOLD_PHRASE = re.compile(
     rf"""(?ix)
     \b(?:total|amount|invoice|being)?\s*
@@ -296,4 +297,13 @@ def _action_text(findings: list[Finding], outcome: Outcome, code: str | None) ->
             if name in present and step and step not in steps:
                 steps.append(step)
         return " ".join(steps) or ACTION.get(code)
+    if code == "REVISED_INVOICE":
+        for finding in findings:
+            text = finding.get("message") if isinstance(finding, dict) else finding.message
+            match = _UNPAID_DIFFERENCE.search(text or "")
+            if match:
+                return (
+                    f"Pay only the difference of {match.group(1)}. "
+                    "Do not pay the revised total again."
+                )
     return ACTION.get(code)

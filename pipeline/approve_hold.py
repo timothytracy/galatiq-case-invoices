@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from db import ensure_inventory_db, inventory_db_path, payments_db_path
-from ledger.payments import stored_release_sha
+from ledger.payments import revision_difference, stored_release_sha
 from models import ExtractedInvoice, PipelineState
 from parsers.pdf_invoice import pdf_text
 from pipeline.audit import amount_in_text, issue_authorization
@@ -86,14 +86,20 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
     when = _timestamp(now)
     filename = repo_key(result) or "unknown"
 
-    def finish(decision, code, message, saved=None):
+    def finish(decision, code, message, saved=None, paid_amount=None):
         invoice = None if saved is None else saved.get("invoice")
+        if paid_amount is not None:
+            shown_amount = format(paid_amount, "f")
+        elif invoice is None or invoice.total is None:
+            shown_amount = None
+        else:
+            shown_amount = format(invoice.total, "f")
         record = {
             "time": when,
             "invoice": filename,
             "invoice_number": None if invoice is None else invoice.invoice_number,
             "vendor": None if invoice is None else invoice.vendor,
-            "amount": None if invoice is None or invoice.total is None else format(invoice.total, "f"),
+            "amount": shown_amount,
             "currency": None if invoice is None else invoice.currency,
             "pipeline_outcome": None if saved is None else saved.get("outcome"),
             "pipeline_codes": [] if saved is None else list(saved.get("codes") or []),
@@ -168,19 +174,38 @@ def _approve(result, reviewer, note, amount, ledger, log, now) -> dict:
         return finish("held", NOT_PAYABLE, "The total must be greater than zero.", saved)
     if invoice.currency not in POLICY.allowed_currencies:
         return finish("held", "NON_USD", non_usd_message(invoice.currency), saved)
+    try:
+        owed = revision_difference(ledger, invoice, saved.get("raw_text") or "")
+    except sqlite3.Error as exc:
+        return finish("held", "SYSTEM_ERROR", f"payments ledger unreadable: {exc}", saved)
+    payable = invoice.total if owed is None else owed
     offered = _money(amount)
-    if offered is None or offered != invoice.total:
+    if offered is None or offered != payable:
         shown = "missing" if offered is None else format(offered, "f")
-        return finish("held", AMOUNT_MISMATCH, f"Amount {shown} does not equal the extracted total {format(invoice.total, 'f')}.", saved)
-    finish("attempt", None, "Paying after the guards passed.", saved)
+        if owed is None:
+            mismatch = (
+                f"Amount {shown} does not equal the extracted total {format(invoice.total, 'f')}."
+            )
+        else:
+            mismatch = (
+                f"Amount {shown} does not equal the unpaid difference {format(payable, 'f')}."
+            )
+        return finish("held", AMOUNT_MISMATCH, mismatch, saved)
+    finish("attempt", None, "Paying after the guards passed.", saved, payable)
     state = _pay_state(saved, invoice)
-    auth = issue_authorization(state)
+    auth = issue_authorization(state, payable)
     if auth is None:
         return finish("held", NOT_PAYABLE, "The invoice has no vendor or total to pay.", saved)
     paid = payment(state.model_copy(update={"authorization": auth}), ledger, release=True)
     if paid["payment"].status == "paid":
-        return finish("paid", None, "Reviewer approved this hold for payment.", saved)
-    return finish("held", paid.get("reason_code") or "PAYMENT_REFUSED", paid["payment"].detail, saved)
+        return finish("paid", None, "Reviewer approved this hold for payment.", saved, payable)
+    return finish(
+        "held",
+        paid.get("reason_code") or "PAYMENT_REFUSED",
+        paid["payment"].detail,
+        saved,
+        payable,
+    )
 
 
 def _fresh_block_code(fresh) -> str | None:

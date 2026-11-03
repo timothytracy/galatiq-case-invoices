@@ -39,9 +39,9 @@
     {
       "file": "data/invoices/invoice_1004_revised.json",
       "outcome": "hold",
-      "reason_code": "DUPLICATE_INVOICE",
+      "reason_code": "REVISED_INVOICE",
       "paid": false,
-      "also_codes": ["REVISED_INVOICE"]
+      "absent_codes": ["DUPLICATE_INVOICE"]
     },
     {
       "file": "data/invoices/invoice_1012.pdf",

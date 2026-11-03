@@ -6,10 +6,12 @@ The invoice number goes through normalize_invoice_number, so INV 1004
 and INV-1004 are the same number. Nothing else is fuzzy.
 
 The same raw text (sha256) is also a duplicate, even when the number differs.
-A second file with the same key is a duplicate too: same total means another
-format, and a different total or a revision marker means a revision of a
-bill that was already paid. A revision is not a duplicate until that key
-has a paid row.
+A second file with the same key is a duplicate too. A revision whose total
+is higher than the amount already recorded for that key is the exception:
+it stays a revised-invoice hold, and a reviewer may pay only the difference.
+That difference is a supplement row. It does not add a second payments row.
+The same document, a revision that is not higher, or a different total that
+is not marked as a revision stays a duplicate and is not paid.
 
 Split: this total is at or under the approval threshold, and this total
 plus the same vendor's paid totals whose invoice dates fall within
@@ -28,7 +30,7 @@ from typing import NamedTuple
 from models import ExtractedInvoice, Finding, SourceInfo
 
 from decision.findings import is_revised, parse_printed_date
-from decision.invoice_fields import different, normalize_invoice_number, show_money
+from decision.invoice_fields import as_money, different, normalize_invoice_number, show_money
 from decision.policy import POLICY
 from timestamps import utc_stamp
 
@@ -69,6 +71,28 @@ CREATE TABLE IF NOT EXISTS used_authorizations (
 )
 """
 
+# Extra money paid on a revision after the original row. One payments row
+# stays the unique key. A pending or failed supplement still counts as
+# recorded: the gateway may have paid it.
+_SUPPLEMENTS = """\
+CREATE TABLE IF NOT EXISTS payment_supplements (
+    vendor_key TEXT NOT NULL,
+    invoice_number TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    raw_sha256 TEXT NOT NULL,
+    paid_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    authorization_key TEXT
+)
+"""
+
+_SUPPLEMENT_UNIQUE = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS payment_supplements_document "
+    "ON payment_supplements (vendor_key, invoice_number, raw_sha256)"
+)
+
 # Seconds a writer waits on a lock before the payment becomes a system-error hold.
 _LOCK_TIMEOUT = 5
 
@@ -106,6 +130,31 @@ class PaymentRow(NamedTuple):
     status: str = "paid"
 
 
+class SupplementRow(NamedTuple):
+    """One difference payment for a revision. The original payments row stays."""
+
+    vendor_key: str
+    invoice_number: str
+    amount: str
+    currency: str
+    source_file: str
+    raw_sha256: str
+    paid_at: str
+    status: str
+
+
+_SUPPLEMENT_COLUMNS = (
+    "vendor_key",
+    "invoice_number",
+    "amount",
+    "currency",
+    "source_file",
+    "raw_sha256",
+    "paid_at",
+    "status",
+)
+
+
 def vendor_key(name: str | None) -> str:
     """Casefolded, whitespace collapsed. Punctuation stays. Not fuzzy."""
 
@@ -136,6 +185,64 @@ def paid_rows(path: str | Path) -> list[PaymentRow]:
     finally:
         connection.close()
     return [PaymentRow._make(row) for row in found]
+
+
+def supplement_rows(path: str | Path) -> list[SupplementRow]:
+    """Read-only difference rows. A missing table is an empty list.
+
+    A sqlite error is not an empty list. The caller turns it into a hold.
+    """
+
+    db_path = Path(path)
+    if not db_path.is_file() or db_path.stat().st_size == 0:
+        return []
+    connection = _connect_readonly(db_path)
+    try:
+        found = _supplements_on(connection)
+    finally:
+        connection.close()
+    return found
+
+
+def _supplements_on(connection: sqlite3.Connection) -> list[SupplementRow]:
+    present = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'payment_supplements'"
+    ).fetchone()
+    if present is None:
+        return []
+    cursor = connection.execute(
+        "SELECT " + ", ".join(_SUPPLEMENT_COLUMNS) + " FROM payment_supplements ORDER BY rowid"
+    )
+    return [SupplementRow._make(row) for row in cursor.fetchall()]
+
+
+def _covered_amount(row: PaymentRow, supplements: list[SupplementRow]) -> Decimal:
+    extra = Decimal("0")
+    for item in supplements:
+        if (
+            item.vendor_key == row.vendor_key
+            and item.invoice_number == row.invoice_number
+            and item.currency == row.currency
+        ):
+            extra += Decimal(item.amount)
+    return Decimal(row.total) + extra
+
+
+def _rows_with_supplements(
+    rows: list[PaymentRow], supplements: list[SupplementRow]
+) -> list[PaymentRow]:
+    """Payment rows whose totals include recorded difference payments."""
+
+    if not supplements:
+        return rows
+    folded = []
+    for row in rows:
+        covered = _covered_amount(row, supplements)
+        if covered == Decimal(row.total):
+            folded.append(row)
+        else:
+            folded.append(row._replace(total=show_money(covered)))
+    return folded
 
 
 def _column_names(connection: sqlite3.Connection) -> set[str]:
@@ -250,10 +357,11 @@ def record_payment(
             total=total,
             source=SourceInfo(path=source_file, filename=source_file, format="txt"),
         )
-        if _duplicate_finding(snapshot, raw_text, rows) is not None:
+        supplements = _supplements_on(connection)
+        if _duplicate_finding(snapshot, raw_text, rows, supplements) is not None:
             connection.execute("ROLLBACK")
             return False
-        _paid, over = split_window(snapshot, rows)
+        _paid, over = split_window(snapshot, _rows_with_supplements(rows, supplements))
         if over:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
@@ -305,6 +413,12 @@ def settle_payment(path: str | Path, authorization_key: str, status: str) -> boo
             "UPDATE payments SET status = ? WHERE authorization_key = ? AND status = 'pending'",
             (status, authorization_key),
         ).rowcount
+        if changed == 0 and _supplements_on(connection):
+            changed = connection.execute(
+                "UPDATE payment_supplements SET status = ? "
+                "WHERE authorization_key = ? AND status = 'pending'",
+                (status, authorization_key),
+            ).rowcount
         if changed != 1:
             connection.execute("ROLLBACK")
             return False
@@ -319,6 +433,151 @@ def settle_payment(path: str | Path, authorization_key: str, status: str) -> boo
             connection.close()
 
 
+def revision_difference(
+    path: str | Path,
+    invoice: ExtractedInvoice,
+    raw_text: str,
+) -> Decimal | None:
+    """Unpaid amount of a higher revision, or None when the full total is due.
+
+    None also means this is not a payable difference: no prior row, same
+    document, a total that is not higher, a currency mismatch, or non-USD.
+    A sqlite error propagates. It is not treated as "nothing was paid".
+    """
+
+    balance = _revision_balance(invoice, raw_text or "", paid_rows(path), supplement_rows(path))
+    if balance is None:
+        return None
+    return balance[1]
+
+
+def record_revision_difference(
+    path: str | Path,
+    invoice: ExtractedInvoice,
+    raw_text: str,
+    amount: Decimal,
+    authorization_key: str,
+    source_file: str,
+    status: str = "pending",
+) -> bool | str:
+    """Insert the unpaid difference. Does not add a second payments row.
+
+    True means the supplement was inserted. False means this is not a
+    positive difference or it was already recorded. "SPLIT_INVOICE" and
+    "USED_AUTHORIZATION" match record_payment. Any other string means the
+    file could not be written. The check runs inside the write lock.
+    """
+
+    if status not in ("pending", "paid"):
+        raise ValueError(
+            f"record_revision_difference status must be pending or paid, not {status!r}"
+        )
+    number = normalize_invoice_number(invoice.invoice_number)
+    if invoice.total is None or not number:
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(Path(path), timeout=_LOCK_TIMEOUT, isolation_level=None)
+        connection.execute("BEGIN IMMEDIATE")
+        present = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'payments'"
+        ).fetchone()
+        if present is None:
+            connection.execute("ROLLBACK")
+            return False
+        _migrate(connection)
+        connection.execute(_SUPPLEMENTS)
+        connection.execute(_SUPPLEMENT_UNIQUE)
+        connection.execute(_USED_AUTH)
+        rows = [
+            PaymentRow._make(item)
+            for item in connection.execute(
+                "SELECT " + ", ".join(_COLUMNS) + " FROM payments ORDER BY rowid"
+            )
+        ]
+        supplements = _supplements_on(connection)
+        balance = _revision_balance(invoice, raw_text or "", rows, supplements)
+        if balance is None or balance[1] != amount:
+            connection.execute("ROLLBACK")
+            return False
+        _paid, over = split_window(invoice, _rows_with_supplements(rows, supplements))
+        if over:
+            connection.execute("ROLLBACK")
+            return "SPLIT_INVOICE"
+        inserted = _SUPPLEMENT_COLUMNS + ("authorization_key",)
+        connection.execute(
+            "INSERT INTO payment_supplements (" + ", ".join(inserted) + ") VALUES ("
+            + ", ".join("?" for _ in inserted)
+            + ")",
+            (
+                vendor_key(invoice.vendor),
+                number,
+                show_money(amount),
+                invoice.currency,
+                source_file,
+                raw_sha256(raw_text or ""),
+                utc_stamp(),
+                status,
+                authorization_key,
+            ),
+        )
+        if authorization_key:
+            try:
+                connection.execute(
+                    "INSERT INTO used_authorizations (key) VALUES (?)",
+                    (authorization_key,),
+                )
+            except sqlite3.IntegrityError:
+                connection.execute("ROLLBACK")
+                return "USED_AUTHORIZATION"
+        connection.execute("COMMIT")
+        return True
+    except sqlite3.IntegrityError:
+        if connection is not None:
+            connection.execute("ROLLBACK")
+        return False
+    except sqlite3.Error as exc:
+        if connection is not None:
+            _rollback_quietly(connection)
+        return f"payments ledger unreadable: {exc}"
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _revision_balance(
+    invoice: ExtractedInvoice,
+    raw_text: str,
+    rows: list[PaymentRow],
+    supplements: list[SupplementRow],
+) -> tuple[PaymentRow, Decimal] | None:
+    """The paid row and the unpaid difference, when a reviewer may pay it."""
+
+    if not is_revised(invoice, raw_text or ""):
+        return None
+    if invoice.total is None or invoice.currency not in POLICY.allowed_currencies:
+        return None
+    digest = raw_sha256(raw_text or "")
+    if any(row.raw_sha256 == digest for row in rows):
+        return None
+    if any(row.raw_sha256 == digest for row in supplements):
+        return None
+    key = vendor_key(invoice.vendor)
+    number = normalize_invoice_number(invoice.invoice_number)
+    if not key or not number:
+        return None
+    hit = next(
+        (row for row in rows if row.vendor_key == key and row.invoice_number == number),
+        None,
+    )
+    if hit is None or hit.currency != invoice.currency:
+        return None
+    owed = as_money(invoice.total - _covered_amount(hit, supplements))
+    if owed <= 0:
+        return None
+    return hit, owed
+
+
 def arrival_findings(
     path: str | Path,
     invoice: ExtractedInvoice,
@@ -326,31 +585,54 @@ def arrival_findings(
 ) -> list[Finding]:
     """Hold findings from the ledger. Empty when nothing matches.
 
-    Read-only. Does not create the file.
+    Read-only. Does not create the file. A higher revision of a paid invoice
+    is a revised-invoice finding, not a duplicate, so the difference can be paid.
     """
 
     rows = paid_rows(path)
-    if not rows:
+    supplements = supplement_rows(path)
+    if not rows and not supplements:
         return []
     findings = []
-    duplicate = _duplicate_finding(invoice, raw_text, rows)
-    if duplicate is not None:
-        findings.append(duplicate)
-    split = _split_finding(invoice, rows)
+    balance = _revision_balance(invoice, raw_text, rows, supplements)
+    if balance is None:
+        duplicate = _duplicate_finding(invoice, raw_text, rows, supplements)
+        if duplicate is not None:
+            findings.append(duplicate)
+    else:
+        hit, owed = balance
+        findings.append(_balance_finding(invoice, hit, owed))
+    split = _split_finding(invoice, _rows_with_supplements(rows, supplements))
     if split is not None:
         findings.append(split)
     return findings
+
+
+def _balance_finding(invoice: ExtractedInvoice, row: PaymentRow, owed: Decimal) -> Finding:
+    return Finding(
+        code="REVISED_INVOICE",
+        message=(
+            f"Invoice {row.invoice_number} from {row.vendor} was already paid "
+            f"as {row.source_file} for {row.total} {row.currency}. "
+            f"The unpaid difference is {show_money(owed)} {invoice.currency}."
+        ),
+        severity="warning",
+        item="total",
+    )
 
 
 def _duplicate_finding(
     invoice: ExtractedInvoice,
     raw_text: str,
     rows: list[PaymentRow],
+    supplements: list[SupplementRow] | tuple = (),
 ) -> Finding | None:
     digest = raw_sha256(raw_text)
     key = vendor_key(invoice.vendor)
     number = normalize_invoice_number(invoice.invoice_number)
     sha_hit = next((row for row in rows if row.raw_sha256 == digest), None)
+    if sha_hit is None:
+        sha_hit = next((row for row in supplements if row.raw_sha256 == digest), None)
     key_hit = None
     if key and number:
         key_hit = next(
@@ -358,9 +640,10 @@ def _duplicate_finding(
             None,
         )
     if sha_hit is not None:
+        paid_amount = sha_hit.total if isinstance(sha_hit, PaymentRow) else sha_hit.amount
         message = (
             f"This document was already paid as {sha_hit.source_file} "
-            f"({sha_hit.invoice_number}, {sha_hit.total} {sha_hit.currency})."
+            f"({sha_hit.invoice_number}, {paid_amount} {sha_hit.currency})."
         )
     elif key_hit is not None:
         message = _same_key_message(invoice, raw_text, key_hit)

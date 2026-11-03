@@ -228,19 +228,25 @@ def authorization_key(invoice_path: str, content: str) -> str:
     return f"{invoice_path}:{digest}"
 
 
-def issue_authorization(state: PipelineState) -> PaymentAuthorization | None:
-    """One-time sign-off for this invoice's vendor, total, and currency.
+def issue_authorization(
+    state: PipelineState, amount: Decimal | None = None
+) -> PaymentAuthorization | None:
+    """One-time sign-off for this invoice's vendor, amount, and currency.
 
-    A PASS audit calls this. A reviewer release calls it only after the hold
-    guards have passed. The payment step checks the three fields again.
+    A PASS audit calls this for the invoice total. A reviewer release calls
+    it only after the hold guards have passed, and may pass the unpaid
+    difference of a revision. The payment step checks the three fields again.
     """
 
     invoice = state.invoice
     if invoice is None or not invoice.vendor or invoice.total is None:
         return None
+    payable = invoice.total if amount is None else amount
+    if payable <= 0:
+        return None
     return PaymentAuthorization(
         vendor=invoice.vendor,
-        amount=invoice.total,
+        amount=payable,
         currency=invoice.currency,
         key=authorization_key(state.invoice_path, state.raw_text),
     )
