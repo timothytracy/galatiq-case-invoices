@@ -47,11 +47,11 @@ Demo: the review screen replays the recorded Grok run with no API key, shows app
 
 The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
 
-- **Speed.** In the live runs on 2026-11-01 PT, an invoice took 2.85–3.90 s, against five days by hand.
-- **Cost.** Grok cost $0.004923–$0.006428 per invoice. Each figure is that run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
+- **Speed.** One live samples run with fraud review, on 2026-11-02 PT, took 122 s for 20 invoices, 6.10 s each, against five days by hand. Before fraud review was added, live runs took 2.85–3.90 s per invoice.
+- **Cost.** In the current recordings Grok cost $0.005876 per invoice on the samples and $0.007785 on the unseen set, fraud review included. Each figure is the run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
 - **Errors.** On main, all 41 labeled outcomes were correct in replay and in three live runs of each set, and no reject or hold was paid. With fraud review, 1004 is held instead of paid. That missed its original approve label; after the run the label was changed to accept a fraud-review hold, and under it all 41 are correct. No reject or hold was paid. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
-- **People.** 31 of the 41 invoices, 76%, need no one at Acme. The 15 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 10, 24%, are holds. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
-- **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 76%. Acme's real mix and volume set the dollar figure, so none is claimed here.
+- **People.** In the recorded runs, 30 of the 41 invoices, 73%, need no one at Acme. The 14 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 11, 27%, are holds, including 1004, which fraud review held and its label also accepts as an approve. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
+- **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 73%. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
 ### What changes for Acme
 
@@ -80,6 +80,10 @@ Each kind of hold has one owner. These roles are proposed. The brief does not na
 Invoice 2106 is the one unseen test invoice that should be approved, and on Oct 31 it was held on every run. Grok's critique raised a stock concern that was not real (WidgetB, 8 against 10), and the audit called its dates future dates. On Nov 1, [PR #14](https://github.com/timothytracy/galatiq-case-invoices/pull/14) gave the critique and audit prompts the code's own findings, and it drops, with a log entry, only the concerns that contradict them. The unseen set then scored 21/21 on all three runs.
 
 When we tried Grok lookup tools on the critique in [PR #20](https://github.com/timothytracy/galatiq-case-invoices/pull/20), 2106 broke again. It first hit the call and round limits, then got a fresh critique hold, until the critique's tools were cut to one lookup per item. That PR was closed, and the tools went to the audit step only in [PR #21](https://github.com/timothytracy/galatiq-case-invoices/pull/21). With audit tools on by default in [PR #27](https://github.com/timothytracy/galatiq-case-invoices/pull/27), the unseen set scored 21/21 three times. On one of those runs 2106 hit the call limit on the way and still got the right answer.
+
+### Fraud review: what the model catches that code can't
+
+The fraud set in `data/fraud_invoices/` has three holds and two approves. Code alone approves all five. Two of the holds, 2124 and 2125, contain none of the keyword signals: one asks AP to pay a servicing company instead of the vendor, and one moves payment to a differently named remit-to party and asks for replies to a free email address. Fraud review held all three with a quote that code found on the page, and passed both approves. In the samples it also held 1004 on its address, a famous fictional home. 1004's label was changed after that run to accept an approve or a `FRAUD_SUSPECTED` hold. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at that address. The prompt was not changed. Replay with `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too).
 
 ### What I cut, and why
 
@@ -155,7 +159,7 @@ Each of those three exits 0 when the score is perfect. The unseen scorer checks 
 
 **Loops in action.** In one live run of the loop set in `data/loop_invoices/`, the loops ran on one invoice and changed nothing. 2117, a clean $10,625 bill, went through critique and audit, and both passed it, so it was paid. 2118 and 2120 were held at validation, before any loop ran, because each page states a second amount. When Grok read 2118's total from the words ($10,250) instead of the printed $10,520, the hold still caught it. Fake-model tests cover the printed-total read, and the case where 2120's $8,000 balance is read as the total, which is a `TOTAL_MISMATCH` reject and still unpaid. Replay with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too). The fraud review on 2117 passed it.
 
-**Fraud review.** The fraud set in `data/fraud_invoices/` has three holds and two approves. Code alone approves all five. Two of the holds, 2124 and 2125, contain none of the keyword signals: one asks AP to pay a servicing company instead of the vendor, and one moves payment to a differently named remit-to party and asks for replies to a free email address. Fraud review held all three with a quote that code found on the page, and passed both approves. In the samples it also held 1004 on its address, a famous fictional home. 1004's label was changed after that run to accept an approve or a `FRAUD_SUSPECTED` hold. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at that address. The prompt was not changed. Replay with `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too).
+The fraud set replay is `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too). What it shows is in [Fraud review](#fraud-review-what-the-model-catches-that-code-cant).
 
 ### Reviewer quick path
 
