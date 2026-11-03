@@ -656,7 +656,7 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert "MISS" not in replayed_out
 
 
-_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl"}
+_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl", "warning.jsonl"}
 _RECORDING = re.compile(r"recordings/([A-Za-z0-9_.-]+\.jsonl)")
 
 
@@ -702,7 +702,7 @@ def test_documented_replay_commands_match_the_recording():
         assert command in readme_replay[start:], command
         start = readme_replay.index(command, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
-    assert "These three were recorded on 2026-11-01 PT." in recorded
+    assert "These five were recorded on 2026-11-02 PT." in recorded
 
 
 def _invoices(folder: Path) -> list[Path]:
@@ -727,6 +727,11 @@ def test_every_provided_invoice_is_recorded_once():
     assert len(loop_files) == 3
     assert all(is_recorded(path, loop) for path in loop_files)
     assert not any(is_recorded(path, loop) for path in provided + extra)
+    warning = GrokClient(mode="replay", recording=ROOT / "recordings" / "warning.jsonl")
+    warning_files = _invoices(ROOT / "data" / "warning_invoices")
+    assert len(warning_files) == 3
+    assert all(is_recorded(path, warning) for path in warning_files)
+    assert not any(is_recorded(path, warning) for path in provided + extra + loop_files)
     assert samples.usage_summary()["total_tokens"] == 0
 
 

@@ -41,7 +41,7 @@ flowchart TD
 
 ### Why code decides
 
-Grok does the reading and the judging: it extracts the fields, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+Grok does the reading and the judging: it extracts the fields, lists the risks, critiques a large bill, and audits with tools. Code decides reject and approve. Within the warning band, the audit may turn an approve into a hold for a person. It does this by citing a fraud-signal or price-variance warning that code raised on this invoice, giving the innocent reading, and quoting page text that code verifies. So the same findings give the same outcome, except that an approve carrying one of those warnings may become a reviewer-releasable hold. The model can never cause a payment or a reject, and text inside an invoice cannot talk the system into paying it. Every answer stays traceable to a rule or to a quoted line. The trade-off is limited model autonomy. No invoice the pipeline rejected or held was paid in any run.
 
 ### Rules
 
@@ -87,6 +87,18 @@ A model failure goes to `reject_log`. A concern that only restates the dollar th
 ### Audit
 
 Grok returns PASS, SEND_BACK, or ESCALATE. Python will not loosen the result. A PASS on a reject still ends at `reject_log`. While send-backs are under 3, a SEND_BACK returns to ingestion. The fourth send-back is an `AUDIT_ESCALATED` hold.
+
+An ESCALATE that cites only warning codes is dropped and logged as an `AUDIT_NOTE`, unless it carries a `warning_hold` that code accepts. The reply's `warning_hold` names one code, the innocent reading, a quote, and why the quote makes that reading unlikely. Code holds the invoice only when all of these are true:
+
+- The code is `FRAUD_SIGNAL`, or `PRICE_VARIANCE` with at least one price above its reference. A price below its reference is never held.
+- The code is in `cited_codes` and is a finding on this invoice.
+- The innocent reading is not empty.
+- The quote, with whitespace collapsed and case folded, is at least `audit_quote_min_chars` long and appears in the invoice text.
+- The quote is not contained in a line that raised the warning. For a fraud signal that is the line the pattern matched. For a price it is the line that prints the above-reference price.
+
+The hold is `AUDIT_ESCALATED` with the message `Audit held on CODE: "quote". why`. Its action is "Review the quoted text with the vendor, then release or keep the hold." A reviewer can release it. A failed check is kept in the `AUDIT_NOTE` with the reason, and the invoice is decided as if the audit had passed. The hold applies only to an approve. It never changes a reject or a hold, and the audit's other escalation paths are unchanged. `NEAR_THRESHOLD`, `DESCRIPTOR`, and `NONCOMMERCIAL_ADDRESS` are not eligible.
+
+In the recorded run and three live runs of the warning set, the audit gave no `warning_hold`, so the code path has only been exercised by fake-model tests. The results are in [METRICS.md](METRICS.md) and [WARNING_ANSWER_KEY.md](WARNING_ANSWER_KEY.md).
 
 Tools are capped at 3 rounds and 8 calls. A cap hit gets one final reply with no tools. If that reply fails, or any tool fails, the invoice is a `SYSTEM_ERROR` hold and nothing is paid. A replay miss is the same hold, and it does not call the network.
 
@@ -155,6 +167,7 @@ Hold when a person can do something the system cannot. Every hold names that act
 | Unit price 50% or more above reference | Verify the price with the vendor. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
 | Item name not in source text | Check the item name against the invoice. |
+| Audit hold on a quoted fraud-signal or above-reference price warning | Review the quoted text with the vendor, then release or keep the hold. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
 `DUPLICATE_INVOICE` and `SPLIT_INVOICE` read `payments.db`. Only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the invoice number after normalization. The split window is `split_window_days`, 30 days. A date that does not parse is outside the window. Another vendor does not count. How the ledger behaves across files is in [Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard).
@@ -165,7 +178,7 @@ An extracted item name that is not in the invoice text is an `ITEM_NOT_IN_SOURCE
 
 ## Warnings
 
-Warnings are recorded and shown. On their own they do not change the outcome.
+Warnings are recorded and shown. On their own they do not change the outcome. The audit may turn an approve with a single fraud signal, or a price above reference, into a hold. See [Audit](#audit).
 
 - A single fraud signal.
 - A total within 2% under the $10,000 threshold, and still under it.
@@ -178,7 +191,7 @@ Item names are matched after normalizing case, spaces, and hyphens.
 ## Ground rules
 
 - Reject wins over hold. Hold wins over approve. When a reject also has fraud signals or a hold, those findings stay in the reason.
-- The model reads and flags. Code decides. The same findings always give the same outcome. This keeps every payment traceable to a rule, and it means text inside an invoice cannot loosen a decision. The reasoning is in [Why code decides](#why-code-decides).
+- The model reads and flags. Code decides. The same findings always give the same outcome, except that the audit may turn an approve with a fraud-signal or above-reference price warning into a hold, with a quote code has verified. This keeps every payment traceable to a rule, and it means text inside an invoice cannot loosen a decision. The reasoning is in [Why code decides](#why-code-decides).
 - Each invoice is judged on its own facts plus the payments ledger. The ledger can only add a hold. Scored eval gives each invoice a fresh ledger, so a scored result does not depend on order.
 - An OCR number fix is kept only when the math reconciles. An O read as a 0 in an amount or a date is fixed only when the lines and totals add up afterwards.
 - No payment without an audit PASS, or a reviewer release of a payable hold.
@@ -213,6 +226,7 @@ The split and same-text checks run at validation, and the payment write checks t
 | `price_spike_ratio` | 0.50 | `abs(unit_price)` at least 50% above the USD reference is a `PRICE_SPIKE` hold. |
 | `reference_prices` | WidgetA 250, WidgetB 500, GadgetX 750 | USD references. A smaller gap stays a price-variance warning. |
 | `split_window_days` | 30 | Same vendor, printed dates inside this window. |
+| `audit_quote_min_chars` | 12 | The shortest quote, after normalizing, that an audit warning hold may rest on. |
 
 Retries back off 1, 2, 4, 8, then 16 seconds, plus up to 25% jitter. After those attempts, or on HTTP 400, 401, or 403, the invoice is a `SYSTEM_ERROR` hold and nothing is paid.
 
@@ -229,3 +243,5 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
+- The audit can only weigh warnings code already raised, and fraud signals come from keyword patterns. A payment redirection with no keywords, such as "settlement to the account on the attached remittance advice", raises no `FRAUD_SIGNAL`, so it is never eligible for a warning hold. A follow-up could let extraction raise its own flag for code to check.
+- In every run so far the audit gave no warning hold, so the two labeled warning holds, 2121 and 2122, were paid. The prompt was not changed to chase those labels.
