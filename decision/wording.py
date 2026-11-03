@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from models import ExtractedInvoice, Finding, Outcome
 
-from decision.invoice_fields import show_qty, summed_quantities
+from decision.invoice_fields import show_money, show_qty, summed_quantities
 from decision.outcome import (
     PAYMENT_REFUSED,
     REJECT_CODES,
@@ -136,7 +136,6 @@ _FILLER = set(
     ).split()
 )
 _AMOUNT = r"(?:\$\s*)?10[,.]?000|\$?\s*10k"
-_UNPAID_DIFFERENCE = re.compile(r"The unpaid difference is (\d+\.\d{2} [A-Z]{3})")
 _THRESHOLD_PHRASE = re.compile(
     rf"""(?ix)
     \b(?:total|amount|invoice|being)?\s*
@@ -177,6 +176,61 @@ def threshold_only_concern(text: str) -> bool:
     return not [word for word in words if word not in _FILLER]
 
 
+def difference_action(amount: Decimal, currency: str) -> str:
+    """What a reviewer does when the original invoice was already paid."""
+
+    return (
+        f"Pay only the difference of {show_money(amount)} {currency}. "
+        "Do not pay the revised total again."
+    )
+
+
+def difference_rule(amount: Decimal, currency: str) -> str:
+    """Rule text for a revision of an invoice that is already paid."""
+
+    return (
+        "A revised invoice whose original was already paid is a hold. "
+        f"Pay only the unpaid difference of {show_money(amount)} {currency}."
+    )
+
+
+def _owed_amount(finding):
+    value = finding.get("owed") if isinstance(finding, dict) else getattr(finding, "owed", None)
+    if value is None or value == "":
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def rule_for(finding, currency: str | None) -> str | None:
+    """Rule text for one finding. A difference uses its own sentence."""
+
+    owed = _owed_amount(finding)
+    if owed is not None and currency:
+        return difference_rule(owed, currency)
+    code = finding.get("code") if isinstance(finding, dict) else finding.code
+    return RULE_TEXT.get(code)
+
+
+def rules_for(findings, currency: str | None) -> list[str]:
+    """Rule sentences for a decision. A difference replaces the unpaid-original rule."""
+
+    fired = []
+    has_difference = any(_owed_amount(item) is not None for item in findings)
+    for finding in findings:
+        code = finding.get("code") if isinstance(finding, dict) else finding.code
+        if has_difference and code == "REVISED_INVOICE" and _owed_amount(finding) is None:
+            continue
+        text = rule_for(finding, currency)
+        if text and text not in fired:
+            fired.append(text)
+    return fired
+
+
 def explain(
     findings: list[Finding],
     invoice: ExtractedInvoice | None = None,
@@ -186,7 +240,7 @@ def explain(
 
     outcome = outcome_from_findings(findings)
     code = primary_code(findings, outcome)
-    action = _action_text(findings, outcome, code)
+    action = _action_text(findings, outcome, code, invoice)
     if outcome == "approve":
         base = _approve_sentence(invoice, stock)
         extra = [finding.message for finding in findings if finding.code != PAYMENT_REFUSED]
@@ -282,7 +336,9 @@ def _approve_sentence(invoice: ExtractedInvoice | None, stock: dict[str, int] | 
     return f"{detail} within stock and the printed total matches the lines."
 
 
-def _action_text(findings: list[Finding], outcome: Outcome, code: str | None) -> str | None:
+def _action_text(
+    findings: list[Finding], outcome: Outcome, code: str | None, invoice: ExtractedInvoice | None = None,
+) -> str | None:
     if outcome == "approve" or code is None:
         return None
     if outcome == "reject":
@@ -298,12 +354,9 @@ def _action_text(findings: list[Finding], outcome: Outcome, code: str | None) ->
                 steps.append(step)
         return " ".join(steps) or ACTION.get(code)
     if code == "REVISED_INVOICE":
+        currency = None if invoice is None else invoice.currency
         for finding in findings:
-            text = finding.get("message") if isinstance(finding, dict) else finding.message
-            match = _UNPAID_DIFFERENCE.search(text or "")
-            if match:
-                return (
-                    f"Pay only the difference of {match.group(1)}. "
-                    "Do not pay the revised total again."
-                )
+            owed = _owed_amount(finding)
+            if owed is not None and currency:
+                return difference_action(owed, currency)
     return ACTION.get(code)

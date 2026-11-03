@@ -210,6 +210,45 @@ def test_a_failed_difference_payment_is_not_paid_again(tmp_path, monkeypatch):
     assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "failed")]
 
 
+def test_pending_or_failed_original_is_not_a_payable_difference(tmp_path):
+    from ledger.payments import record_payment, settle_payment
+
+    revised_path = ROOT / "data/invoices/invoice_1004_revised.json"
+    for status in ("pending", "failed"):
+        ledger = tmp_path / "payments.db"
+        ledger.unlink(missing_ok=True)
+        held = _run(revised_path, tmp_path, ledger=ledger)
+        assert held["reason_code"] == "REVISED_INVOICE"
+        assert record_payment(
+            ledger,
+            vendor="Precision Parts Ltd.",
+            invoice_number="INV-1004",
+            revision=None,
+            total=Decimal("1890.00"),
+            currency="USD",
+            invoice_date="2026-01-22",
+            source_file="invoice_1004.json",
+            raw_text="original text is not the revision",
+            authorization_key=f"orig-{status}",
+            status="pending",
+        ) is True
+        if status == "failed":
+            assert settle_payment(ledger, f"orig-{status}", "failed") is True
+        for amount in ("5940.00", "4050.00"):
+            refused = _pay(held, tmp_path, amount=amount)
+            assert refused["result"] == "held", refused
+            assert refused["payment_status"] == "not_paid"
+        second = _run(revised_path, tmp_path, ledger=ledger)
+        assert second["reason_code"] == "DUPLICATE_INVOICE"
+        assert "Pay only the difference" not in (second.get("action") or "")
+        text = " ".join(
+            item.message if not isinstance(item, dict) else item.get("message") or ""
+            for item in second["findings"]
+        )
+        assert "was already paid" not in text
+        assert "unpaid difference" not in text
+
+
 def test_prior_payment_and_split_block_release(tmp_path):
     from ledger import record_payment
     result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)

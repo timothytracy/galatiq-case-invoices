@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 
 from llm_client import NEEDS_KEY, REPLAY_NOTICE, MissingAPIKey
-from ui.pay import approve_and_pay, extracted_total, saved_result
+from ui.pay import approve_and_pay, payable_amount, saved_result
 from ui.present import (
     INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail, blank, can_pay, confirm_label,
     detail_index, format_amount, format_money, invoice_view, label, pay_block, pay_message,
@@ -257,6 +257,9 @@ def screen_holds(entries: list[dict], live: bool) -> None:
         st.error(str(exc))
         saved = {}
     for index, (entry, view) in enumerate(queued):
+        pipeline = saved_result(entry)
+        ledger = entry.get("ledger_path") or _session_ledger(live)
+        view = {**view, "amount": payable_amount(pipeline, ledger)}
         st.subheader(view["file"])
         _facts(
             ("Reason code", "Amount", "Payment"),
@@ -514,6 +517,9 @@ def _show_pay_result(view: dict) -> None:
         st.error(text)
 
 def _pay_form(index: int, entry: dict, view: dict, live: bool) -> None:
+    pipeline = saved_result(entry)
+    ledger = entry.get("ledger_path") or _session_ledger(live)
+    view = {**view, "amount": payable_amount(pipeline, ledger)}
     file = view["file"]
     reviewer_key = f"pay-reviewer-{index}-{file}"
     note_key = f"pay-note-{index}-{file}"
@@ -547,7 +553,7 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
         pipeline,
         reviewer=reviewer.strip(),
         note=note.strip(),
-        amount=extracted_total(pipeline),
+        amount=view["amount"],
         ledger_path=ledger,
         demo=not live,
     )

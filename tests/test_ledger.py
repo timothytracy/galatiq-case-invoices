@@ -534,6 +534,28 @@ def test_a_paid_difference_counts_toward_the_split_window(tmp_path):
     assert len(paid_rows(ledger)) == 1
 
 
+def test_a_higher_revision_is_not_a_split_of_its_own_invoice(tmp_path):
+    """5,000 already paid plus a revision of 8,750 is a 3,750 difference, not a split."""
+
+    ledger = tmp_path / "payments.db"
+    _seed(
+        ledger,
+        vendor="Split Synthetic Co.",
+        invoice_number="INV-44",
+        total=Decimal("5000.00"),
+        invoice_date="2026-04-01",
+        source_file="original.json",
+        raw_text="original goods",
+    )
+    raw = "Revised invoice additional goods"
+    revised = _bill("Split Synthetic Co.", "INV-44", "8750.00", "2026-04-01", raw, revision="R1")
+    assert revision_difference(ledger, revised, raw) == Decimal("3750.00")
+    assert _codes_of(arrival_findings(ledger, revised, raw)) == ["REVISED_INVOICE"]
+    copy = _bill("Split Synthetic Co.", "INV-44", "5000.00", "2026-04-01", "another copy of the same bill")
+    assert "SPLIT_INVOICE" not in _codes_of(arrival_findings(ledger, copy, "another copy of the same bill"))
+    assert _codes_of(arrival_findings(ledger, copy, "another copy of the same bill")) == ["DUPLICATE_INVOICE"]
+
+
 def test_ordered_scenario_holds_duplicate_then_split_cases_in_order(db_path, tmp_path):
     ledger = tmp_path / "payments.db"
     report = run_scenario(
@@ -646,10 +668,10 @@ def test_synthetic_split_holds_only_when_the_window_sum_crosses(tmp_path):
         "2026-04-01",
         raw="a different file body",
     )
-    # 6000 + 6000 also crosses the threshold, so the split hold is recorded too.
+    # The same invoice number is not part of its own split window.
     duplicate = next(item for item in same_total if item.code == "DUPLICATE_INVOICE")
     assert "file text differs" in duplicate.message
-    assert "SPLIT_INVOICE" in _codes_of(same_total)
+    assert "SPLIT_INVOICE" not in _codes_of(same_total)
 
     exact = findings(
         "Split Synthetic Co.",

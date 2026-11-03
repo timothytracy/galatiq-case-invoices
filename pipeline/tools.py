@@ -21,6 +21,7 @@ from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES
 from decision.policy import POLICY
 from decision.wording import ACTION, RULE_TEXT
 from ledger import paid_rows, split_window, vendor_key
+from ledger.payments import _covered_amount, supplement_rows
 from tool_loop import parse_tool_arguments
 
 
@@ -282,6 +283,7 @@ def check_payment_ledger(_arguments: dict, invoice, ledger_path) -> dict:
     """
 
     rows = [] if ledger_path is None else paid_rows(ledger_path)
+    supplements = [] if ledger_path is None else supplement_rows(ledger_path)
     key = vendor_key(invoice.vendor)
     number = normalize_invoice_number(invoice.invoice_number)
     match = None
@@ -290,13 +292,17 @@ def check_payment_ledger(_arguments: dict, invoice, ledger_path) -> dict:
             (row for row in rows if row.vendor_key == key and row.invoice_number == number),
             None,
         )
-    paid, over = split_window(invoice, rows)
+    paid, over = split_window(invoice, rows, supplements)
     total = invoice.total
     combined = None if total is None else paid + total
+    match_total = None
+    if match is not None:
+        covered = _covered_amount(match, supplements)
+        match_total = match.total if covered == Decimal(match.total) else show_money(covered)
     return {
         "already_paid": match is not None,
         "match_date": None if match is None else match.invoice_date,
-        "match_total": None if match is None else match.total,
+        "match_total": match_total,
         "same_vendor_paid_in_window": show_money(paid),
         "this_total": None if total is None else show_money(total),
         "combined": None if combined is None else show_money(combined),

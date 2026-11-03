@@ -2,7 +2,7 @@
 
 from models import ApprovalDecision, ApprovalReasoning, PipelineState
 from decision.invoice_fields import show_money
-from decision.wording import RULE_TEXT
+from decision.wording import rules_for
 
 
 def tighten(decision: ApprovalDecision, outcome: str, conclusion: str, extra: list[str]) -> ApprovalDecision:
@@ -39,11 +39,8 @@ def failure_decision(state: PipelineState, reason: str) -> ApprovalDecision:
 def decision_from_validation(state: PipelineState, outcome: str) -> tuple[str, ApprovalDecision]:
     findings = [] if state.validation is None else list(state.validation.findings)
     invoice = state.invoice
-    fired = []
-    for finding in findings:
-        text = RULE_TEXT.get(finding.code)
-        if text and text not in fired:
-            fired.append(text)
+    currency = None if invoice is None else invoice.currency
+    fired = rules_for(findings, currency)
     if not fired:
         fired = ["The invoice did not pass the deterministic rules."]
     evidence = [finding.message for finding in findings] or ["No finding text was recorded."]

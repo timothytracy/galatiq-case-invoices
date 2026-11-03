@@ -126,7 +126,12 @@ def pay_message(view: dict, result: dict) -> tuple[str, str]:
     if result.get("result") == "paid" or result.get("status") == "paid":
         status = payment_text(result.get("payment_status") or "paid") or "Paid"
         text = f"Paid {view.get('file') or 'invoice'}. Payment status: {status}."
-        amount = format_amount(view.get("amount"), view.get("currency"))
+        paid_amount = result.get("amount")
+        currency = result.get("currency") or view.get("currency")
+        amount = format_amount(
+            view.get("amount") if paid_amount in (None, "") else paid_amount,
+            currency,
+        )
         if amount:
             text = f"{text} {amount}."
         if concerns:

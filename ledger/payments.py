@@ -361,7 +361,7 @@ def record_payment(
         if _duplicate_finding(snapshot, raw_text, rows, supplements) is not None:
             connection.execute("ROLLBACK")
             return False
-        _paid, over = split_window(snapshot, _rows_with_supplements(rows, supplements))
+        _paid, over = split_window(snapshot, rows, supplements)
         if over:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
@@ -500,7 +500,7 @@ def record_revision_difference(
         if balance is None or balance[1] != amount:
             connection.execute("ROLLBACK")
             return False
-        _paid, over = split_window(invoice, _rows_with_supplements(rows, supplements))
+        _paid, over = split_window(invoice, rows, supplements)
         if over:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
@@ -570,7 +570,7 @@ def _revision_balance(
         (row for row in rows if row.vendor_key == key and row.invoice_number == number),
         None,
     )
-    if hit is None or hit.currency != invoice.currency:
+    if hit is None or hit.currency != invoice.currency or hit.status != "paid":
         return None
     owed = as_money(invoice.total - _covered_amount(hit, supplements))
     if owed <= 0:
@@ -602,7 +602,7 @@ def arrival_findings(
     else:
         hit, owed = balance
         findings.append(_balance_finding(invoice, hit, owed))
-    split = _split_finding(invoice, _rows_with_supplements(rows, supplements))
+    split = _split_finding(invoice, rows, supplements)
     if split is not None:
         findings.append(split)
     return findings
@@ -618,6 +618,7 @@ def _balance_finding(invoice: ExtractedInvoice, row: PaymentRow, owed: Decimal) 
         ),
         severity="warning",
         item="total",
+        owed=owed,
     )
 
 
@@ -642,7 +643,7 @@ def _duplicate_finding(
     if sha_hit is not None:
         paid_amount = sha_hit.total if isinstance(sha_hit, PaymentRow) else sha_hit.amount
         message = (
-            f"This document was already paid as {sha_hit.source_file} "
+            f"This document {_recorded_as(sha_hit.status)} as {sha_hit.source_file} "
             f"({sha_hit.invoice_number}, {paid_amount} {sha_hit.currency})."
         )
     elif key_hit is not None:
@@ -670,32 +671,52 @@ def _same_key_message(invoice: ExtractedInvoice, raw_text: str, row: PaymentRow)
         else:
             why = "The total differs."
         return (
-            f"Invoice {row.invoice_number} from {row.vendor} was already paid "
+            f"Invoice {row.invoice_number} from {row.vendor} {_recorded_as(row.status)} "
             f"as {row.source_file} for {row.total} {row.currency}. {why} "
             "It is not paid again."
         )
+    lead = "were already paid" if row.status == "paid" else _recorded_as(row.status)
     return (
-        f"The same vendor, invoice number, and total were already paid "
+        f"The same vendor, invoice number, and total {lead} "
         f"as {row.source_file} ({row.total} {row.currency}). The file text differs."
     )
 
 
-def split_window(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> tuple[Decimal, bool]:
+def _recorded_as(status: str) -> str:
+    """How to describe a ledger row. Only a confirmed row was paid."""
+
+    if status == "pending":
+        return "has a pending payment"
+    if status == "failed":
+        return "has an unconfirmed payment"
+    return "was already paid"
+
+
+def split_window(
+    invoice: ExtractedInvoice,
+    rows: list[PaymentRow],
+    supplements: list[SupplementRow] | tuple = (),
+) -> tuple[Decimal, bool]:
     """Same-vendor paid total inside the split window, and whether the rule fires.
 
     The total is this vendor and currency, with printed dates within
     split_window_days. A date that does not parse is outside the window.
-    Another vendor does not count. The rule fires when this invoice is in an
-    allowed currency, at or under the approval threshold, and this total plus
-    the window is over the threshold.
+    Another vendor does not count. This invoice's own number does not count,
+    including a supplement on that number. The rule fires when this invoice
+    is in an allowed currency, at or under the approval threshold, and this
+    total plus the window is over the threshold.
     """
 
     paid = Decimal("0")
     key = vendor_key(invoice.vendor)
+    number = normalize_invoice_number(invoice.invoice_number)
     this_date = parse_printed_date(invoice.invoice_date)
+    counted = _rows_with_supplements(rows, list(supplements))
     if key and this_date is not None:
-        for row in rows:
+        for row in counted:
             if row.vendor_key != key or row.currency != invoice.currency:
+                continue
+            if number and row.invoice_number == number:
                 continue
             paid_on = parse_printed_date(row.invoice_date)
             if paid_on is None or abs((this_date - paid_on).days) > POLICY.split_window_days:
@@ -711,9 +732,13 @@ def split_window(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> tuple[Dec
     return paid, over
 
 
-def _split_finding(invoice: ExtractedInvoice, rows: list[PaymentRow]) -> Finding | None:
+def _split_finding(
+    invoice: ExtractedInvoice,
+    rows: list[PaymentRow],
+    supplements: list[SupplementRow] | tuple = (),
+) -> Finding | None:
     total = invoice.total
-    window_sum, over = split_window(invoice, rows)
+    window_sum, over = split_window(invoice, rows, supplements)
     if not over or total is None:
         return None
     combined = window_sum + total

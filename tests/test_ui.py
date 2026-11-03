@@ -14,6 +14,7 @@ from ui.pay import (
     BACKEND_UNAVAILABLE,
     approve_and_pay,
     extracted_total,
+    payable_amount,
     saved_result,
 )
 from ui.present import (
@@ -1148,6 +1149,44 @@ def test_ensure_db_honors_inventory_db(monkeypatch, tmp_path):
     found = ensure_db()
     assert found == target
     assert target.is_file()
+
+
+def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    release_dir = os.environ["INVOICE_RELEASE_DIR"]
+    ledger = temporary_ledger()
+    original = run_one(
+        ROOT / "data/invoices/invoice_1004.json", db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    revised = run_one(
+        ROOT / "data/invoices/invoice_1004_revised.json", db_path, replay=SAMPLES, ledger_path=ledger,
+    )
+    state = saved_result(revised)
+    assert Decimal(str(payable_amount(state, ledger))) == Decimal("4050.00")
+    assert Decimal(str(payable_amount(saved_result(original), ledger))) == Decimal("1890.00")
+    label = confirm_label({**invoice_view(revised), "amount": payable_amount(state, ledger)})
+    assert label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
+
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
+    app.run()
+    app.session_state["release_dir"] = release_dir
+    app.session_state["entries"] = [original, revised]
+    _show(app, "Hold queue")
+    confirm = app.checkbox(key="pay-confirm-0-invoice_1004_revised.json")
+    assert confirm.label == label
+    app.text_input(key="pay-reviewer-0-invoice_1004_revised.json").set_value("Ada")
+    app.text_area(key="pay-note-0-invoice_1004_revised.json").set_value("Pay the added lines.")
+    confirm.set_value(True)
+    _submit_pay(app, "invoice_1004_revised.json", 0)
+    shown = _visible(app)
+    assert "Paid invoice_1004_revised.json." in shown
+    assert "4,050.00 USD" in shown
+    output = capsys.readouterr().out
+    assert "Paid 4050.00 to Precision Parts Ltd." in output
+    assert "Paid 5940.00" not in output
+    from ledger.payments import paid_rows, supplement_rows
+    assert [row.total for row in paid_rows(ledger)] == ["1890.00"]
+    assert [(row.amount, row.status) for row in supplement_rows(ledger)] == [("4050.00", "paid")]
 
 
 def _process_path(app, path: str) -> None:
