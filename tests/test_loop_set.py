@@ -199,7 +199,8 @@ def test_2120_balance_read_as_the_total_is_not_paid_either(db_path):
     path = LOOP / "invoice_2120.txt"
     handler, _ = scripted(_read("invoice_2120.txt", total="8000.00"))
     result = _run(db_path, path, handler)
-    assert result["outcome"] in {"reject", "hold"}
+    assert result["outcome"] == "reject"
+    assert "TOTAL_MISMATCH" in _codes(result)
     assert "BALANCE_DUE" in _codes(result)
     assert result["payment"].status == "not_paid"
 
