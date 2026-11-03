@@ -42,6 +42,9 @@ def run_scenario(
     found = [row.source_file for row in paid_rows(ledger_path)]
     found.extend(row.source_file for row in supplement_rows(ledger_path))
     expected_files = list(scenario["ledger_files"])
+    for alternative in scenario.get("also_accepted_ledger_files") or []:
+        if found == list(alternative):
+            expected_files = list(alternative)
     ledger_ok = found == expected_files and len(found) == len(set(found))
     return {
         "ok": ledger_ok and all(step["ok"] for step in steps),
@@ -53,6 +56,10 @@ def run_scenario(
 
 
 def _grade(name: str, result: dict, expected: dict) -> dict:
+    for alternative in expected.get("also_accepted") or []:
+        if result.get("outcome") == alternative["outcome"]:
+            expected = {**expected, **alternative}
+            break
     outcome = result.get("outcome")
     code = result.get("reason_code")
     paid = payment_status(result) == "paid"

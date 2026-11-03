@@ -39,6 +39,7 @@ KEY_REASON_TO_CODE = {
     "Labeled credit note whose math reconciles": "CREDIT_NOTE",
     "Renamed vendor": "VENDOR_RENAMED",
     "Two or more fraud signals": "FRAUD_CLUSTER",
+    "Fraud suspected": "FRAUD_SUSPECTED",
     "New remittance account": "NEW_REMITTANCE",
     price_spike_reason(): "PRICE_SPIKE",
     "Grok or system failure after retries": "SYSTEM_ERROR",
@@ -66,6 +67,7 @@ ACTION = {
     "CREDIT_NOTE": "Accounting applies the credit. Nothing is paid.",
     "VENDOR_RENAMED": "Verify it is the same company.",
     "FRAUD_CLUSTER": "Verify with the vendor using contact details already on file.",
+    "FRAUD_SUSPECTED": "Verify payment details with the vendor using contact details already on file.",
     "NEW_REMITTANCE": "Verify the change with the vendor.",
     "PRICE_SPIKE": "Verify the price with the vendor.",
     "SYSTEM_ERROR": "Rerun the invoice or process it by hand.",
@@ -104,6 +106,10 @@ RULE_TEXT = {
     "CREDIT_NOTE": "A labeled credit note whose math reconciles is a hold. Nothing is paid.",
     "FRAUD_CLUSTER": "Two or more fraud signals are a hold.",
     "FRAUD_SIGNAL": "A single fraud signal is a warning.",
+    "FRAUD_SUSPECTED": (
+        "The fraud review holds an invoice when it quotes page text that makes the "
+        "innocent reading of a payment red flag unlikely."
+    ),
     "NEW_REMITTANCE": "A new bank account on a clean invoice over the threshold is a hold.",
     "PRICE_SPIKE": (
         f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "

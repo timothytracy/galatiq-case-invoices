@@ -40,6 +40,10 @@ class CountingClient:
         self._note(messages)
         return self.inner.request(messages, timeout)
 
+    def request_with_model(self, messages, model, timeout=60):
+        self._note(messages)
+        return self.inner.request_with_model(messages, model, timeout)
+
     def request_tools(self, messages, tools, timeout=60):
         self._note(messages)
         return self.inner.request_tools(messages, tools, timeout)
@@ -67,7 +71,7 @@ def disagrees(call: dict) -> bool:
 
 
 KEYS = (
-    "audit_runs", "model_send_backs", "send_backs", "guard_changed_verdict",
+    "fraud_reviews", "fraud_holds", "fraud_holds_dropped", "audit_runs", "model_send_backs", "send_backs", "guard_changed_verdict",
     "critique_runs", "critique_holds", "set_asides_critique", "set_asides_audit",
     "audits_with_tools", "audits_with_tools_not_pass", "tool_calls", "tool_repeats",
     "tool_results_disagreeing", "tool_cap_hits", "retries",
@@ -78,6 +82,10 @@ def tally(results: list[dict], repairs: int) -> dict:
     counts = Counter(dict.fromkeys(KEYS, 0))
     tools = Counter()
     for result in results:
+        frauds = stages(result, "fraud_review")
+        counts["fraud_reviews"] += len(frauds)
+        counts["fraud_holds"] += sum(1 for row in frauds if row.get("reason_code") == "FRAUD_SUSPECTED")
+        counts["fraud_holds_dropped"] += sum(1 for row in frauds if row.get("fraud_note"))
         critiques = stages(result, "critique")
         audits = stages(result, "audit")
         counts["critique_runs"] += len(critiques)

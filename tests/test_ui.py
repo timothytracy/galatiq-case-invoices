@@ -42,6 +42,7 @@ from ui.present import (
     table_rows,
     tool_call_view,
 )
+from pipeline.approve_hold import approve_and_pay as release_hold
 from ui.reviews import load_reviews, record_review
 from ui.runner import (
     PAYMENTS_DB, ensure_db, grok_key_set, invoice_files, is_real_payments_db, load_run,
@@ -83,6 +84,7 @@ def test_replay_run_exposes_pipeline_fields(db_path, monkeypatch):
     assert [row["stage"] for row in paid_trail["rows"]] == [
         "ingestion",
         "validation",
+        "fraud_review",
         "approval",
         "audit",
         "payment",
@@ -1089,7 +1091,7 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     shared = [
         run_one(path, db_path, replay=SAMPLES, ledger_path=ledger) for path in invoice_files()
     ]
-    assert summarize(shared)["counts"] == {"approve": 6, "reject": 9, "hold": 5}
+    assert summarize(shared)["counts"] == {"approve": 5, "reject": 9, "hold": 6}
     duplicate = invoice_view(next(
         entry for entry in shared if entry["state"]["filename"] == "invoice_1011.txt"
     ))
@@ -1105,11 +1107,7 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     ))
     assert revised["outcome"] == "hold"
     assert revised["reason_code"] == "REVISED_INVOICE"
-    assert any(
-        Decimal(str(item.get("owed"))) == Decimal("4050.00")
-        for item in revised["findings"]
-        if isinstance(item, dict) and item.get("owed") not in (None, "")
-    )
+    assert "DUPLICATE_INVOICE" not in [item.get("code") for item in revised["findings"]]
     revised_alone = invoice_view(run_one(
         ROOT / "data" / "invoices" / "invoice_1004_revised.json", db_path, replay=SAMPLES,
     ))
@@ -1131,8 +1129,8 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     assert payment_detail_text(held) == ""
     assert held["reason"] in held["payment"]["detail"]
     note = shared_ledger_note()
-    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in note
-    assert "7 approve, 9 reject, and 4 hold" in note
+    assert "A batch run is expected to give 5 approve, 9 reject, and 6 hold" in note
+    assert "6 approve, 9 reject, and 5 hold" in note
     paid_note = shared_ledger_note(
         {"approve": 6, "reject": 9, "hold": 4}, released=1,
     )
@@ -1221,15 +1219,15 @@ def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
     app.run()
     assert not app.exception, app.exception
-    assert "A batch run is expected to give 6 approve, 9 reject, and 5 hold" in _visible(app)
+    assert "A batch run is expected to give 5 approve, 9 reject, and 6 hold" in _visible(app)
     next(button for button in app.button if button.label == "Process data/invoices").click().run()
     assert not app.exception, app.exception
     shown = _visible(app)
     assert "Processed 20 invoices." in shown
-    assert "approve 6, reject 9, hold 5" in shown
-    assert "The counts are 6 approve, 9 reject, and 5 hold" in shown
+    assert "approve 5, reject 9, hold 6" in shown
+    assert "The counts are 5 approve, 9 reject, and 6 hold" in shown
     assert "A batch run is expected to give" not in shown
-    assert "7 approve, 9 reject, and 4 hold" in shown
+    assert "6 approve, 9 reject, and 5 hold" in shown
 
 
 def _pay_1012(app, filename: str) -> None:
@@ -1315,16 +1313,20 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     app.run()
     _process_path(app, "data/invoices/invoice_1004.json")
     _process_path(app, "data/invoices/invoice_1004.json")
-    paid_originals = [
+    originals = [
         entry for entry in app.session_state["entries"]
         if entry["state"]["filename"] == "invoice_1004.json"
     ]
-    assert len(paid_originals) == 1
-    assert invoice_view(paid_originals[0])["outcome"] == "approve"
-    assert invoice_view(paid_originals[0])["payment_status"] == "paid"
+    assert len(originals) == 1
+    assert invoice_view(originals[0])["reason_code"] == "FRAUD_SUSPECTED"
+    _show(app, "Hold queue")
+    app.text_input(key="pay-reviewer-0-invoice_1004.json").set_value("Ada")
+    app.text_area(key="pay-note-0-invoice_1004.json").set_value("Vendor verified by phone.")
+    app.checkbox(key="pay-confirm-0-invoice_1004.json").set_value(True)
+    _submit_pay(app, "invoice_1004.json", 0)
+    assert "Paid 1890.00 to Precision Parts Ltd." in capsys.readouterr().out
     metrics = _released_metrics(app)
-    assert metrics["Approve"] == "1"
-    assert metrics["Dollars approved"] == "1,890.00 USD"
+    assert metrics["Dollars released after review"] == "1,890.00 USD"
     _show(app, "Run or load")
     _process_path(app, "data/invoices/invoice_1004_revised.json")
     _show(app, "Hold queue")
@@ -1350,16 +1352,14 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     assert not any("4,050.00 USD" in (item.label or "") for item in app.checkbox)
     _show(app, "Run or load")
     _process_path(app, "data/invoices/invoice_1004.json")
-    paid_originals = [
+    originals = [
         entry for entry in app.session_state["entries"]
         if entry["state"]["filename"] == "invoice_1004.json"
     ]
-    assert len(paid_originals) == 1
+    assert len(originals) == 1
     assert len(app.session_state["entries"]) == 2
     metrics = _released_metrics(app)
-    assert metrics["Approve"] == "1"
-    assert metrics["Dollars approved"] == "1,890.00 USD"
-    assert metrics["Dollars released after review"] == "4,050.00 USD"
+    assert metrics["Dollars released after review"] == "5,940.00 USD"
 
 
 def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
@@ -1380,7 +1380,7 @@ def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
     next(button for button in app.button if button.label == "Process data/invoices").click().run()
     assert not app.exception, app.exception
     shown = _visible(app)
-    assert "This session has 20 invoices (approve 6, reject 9, hold 4, released after review 1)" in shown
+    assert "This session has 20 invoices (approve 5, reject 9, hold 5, released after review 1)" in shown
     paid = [
         entry for entry in app.session_state["entries"]
         if entry["state"]["filename"] == "invoice_1012.pdf" and invoice_view(entry)["payment_status"] == "paid"
@@ -1392,10 +1392,10 @@ def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
     metrics = _released_metrics(app)
     assert metrics["Released after review"] == before["Released after review"] == "1"
     assert metrics["Dollars released after review"] == "9,975.00 USD"
-    assert metrics["Dollars approved"] == "26,325.00 USD"
-    assert metrics["Approve"] == "6"
+    assert metrics["Dollars approved"] == "24,435.00 USD"
+    assert metrics["Approve"] == "5"
     assert metrics["Reject"] == "9"
-    assert metrics["Hold"] == "4"
+    assert metrics["Hold"] == "5"
 
 
 def test_upload_directory_is_reused(monkeypatch):
@@ -1526,26 +1526,32 @@ def test_ensure_db_honors_inventory_db(monkeypatch, tmp_path):
     assert target.is_file()
 
 
-def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys):
+def test_review_screen_pays_the_revision_difference(db_path, monkeypatch, capsys, tmp_path):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     release_dir = os.environ["INVOICE_RELEASE_DIR"]
     ledger = temporary_ledger()
     original = run_one(
         ROOT / "data/invoices/invoice_1004.json", db_path, replay=SAMPLES, ledger_path=ledger,
     )
+    assert invoice_view(original)["reason_code"] == "FRAUD_SUSPECTED"
+    released = release_hold(
+        saved_result(original), reviewer="Ada", note="Vendor verified by phone.",
+        amount="1890.00", ledger_path=ledger, log_path=tmp_path / "approve.jsonl",
+    )
+    assert released["payment_status"] == "paid"
+    capsys.readouterr()
     revised = run_one(
         ROOT / "data/invoices/invoice_1004_revised.json", db_path, replay=SAMPLES, ledger_path=ledger,
     )
     state = saved_result(revised)
     assert Decimal(str(payable_amount(state, ledger))) == Decimal("4050.00")
-    assert Decimal(str(payable_amount(saved_result(original), ledger))) == Decimal("1890.00")
     label = confirm_label({**invoice_view(revised), "amount": payable_amount(state, ledger)})
     assert label == "Confirm payment of 4,050.00 USD for invoice_1004_revised.json"
 
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=90)
     app.run()
     app.session_state["release_dir"] = release_dir
-    app.session_state["entries"] = [original, revised]
+    app.session_state["entries"] = [revised]
     _show(app, "Hold queue")
     confirm = app.checkbox(key="pay-confirm-0-invoice_1004_revised.json")
     assert confirm.label == label

@@ -19,7 +19,7 @@ from llm_client import (
 from pipeline.tools import example_registry
 from recording import estimate_cost, request_fingerprint
 from scripts.eval import main as eval_main
-from tests.fakes import ANSWER, Echoed, FakeClock, ZeroRandom, extraction, task_of, write_invoice
+from tests.fakes import ANSWER, FRAUD_PASS, Echoed, FakeClock, ZeroRandom, extraction, task_of, write_invoice
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
@@ -206,6 +206,39 @@ def test_live_payload_matches_the_baseline_and_writes_nothing(tmp_path, monkeypa
     assert seen_record[0] == baseline
 
 
+def test_a_named_model_call_is_sent_recorded_and_replayed_on_that_model(tmp_path, monkeypatch):
+    from llm_client import FRAUD_REVIEW_MODEL, GrokClient
+
+    messages = [{"role": "user", "content": "Return a JSON object."}]
+    path = tmp_path / "named.jsonl"
+    usage = type(
+        "Usage",
+        (),
+        {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 112,
+            "completion_tokens_details": type("Details", (), {"reasoning_tokens": 100})(),
+        },
+    )()
+    seen = install_openai(monkeypatch, [_response('{"n": 1}', usage=usage)])
+    recorder = GrokClient(api_key="test-key", mode="record", recording=path, as_of=date(2026, 11, 1))
+    assert recorder.request_with_model(messages, FRAUD_REVIEW_MODEL) == '{"n": 1}'
+    assert seen[0]["model"] == FRAUD_REVIEW_MODEL
+    rows = _rows(path)
+    assert rows[0]["model"] == DEFAULT_MODEL
+    assert rows[1]["model"] == FRAUD_REVIEW_MODEL
+    assert rows[1]["usage"]["reasoning_tokens"] == 100
+    # 10 input at $1.25 and 102 output at $2.50 per million.
+    assert recorder.usage_summary()["cost_usd"] == Decimal("0.000268")
+
+    install_openai_raise(monkeypatch)
+    replayer = GrokClient(mode="replay", recording=path)
+    with pytest.raises(LLMError, match="replay miss"):
+        replayer.request(list(messages))
+    assert replayer.request_with_model(list(messages), FRAUD_REVIEW_MODEL) == '{"n": 1}'
+
+
 def test_record_then_replay_round_trip_and_a_miss(tmp_path, monkeypatch):
     from llm_client import GrokClient
 
@@ -377,6 +410,7 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
         monkeypatch,
         [
             _response(body),
+            _response(FRAUD_PASS),
             _response('{"risks_considered": ["none"]}'),
             _response('{"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []}'),
         ],
@@ -399,7 +433,7 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
     recorded_out = capsys.readouterr().out
     assert recorded == 0
     assert "score 1/1" in recorded_out
-    assert "tokens total=36 cost_usd=0.000053" in recorded_out
+    assert "tokens total=48 cost_usd=0.000070" in recorded_out
     assert _rows(recording)[0]["as_of"] == "2026-11-01"
     blob = "\n".join(message.get("content") or "" for kwargs in seen for message in kwargs["messages"])
     assert "Today's date is 2026-11-01." in blob
@@ -422,7 +456,7 @@ def test_replay_on_a_later_wall_clock_day_still_hits(tmp_path, monkeypatch, caps
     replayed_out = capsys.readouterr().out
     assert replayed == 0
     assert "score 1/1" in replayed_out
-    assert "tokens total=36 cost_usd=0.000053" in replayed_out
+    assert "tokens total=48 cost_usd=0.000070" in replayed_out
     assert "replay miss:" not in replayed_out
     assert "2027-12-12" not in replayed_out
 
@@ -447,6 +481,7 @@ def test_record_prompt_path_is_repo_relative_and_replays_from_another_directory(
     )
     replies = [
         _response(body),
+        _response(FRAUD_PASS),
         _response('{"risks_considered": ["none"]}'),
         _response('{"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []}'),
     ]
@@ -633,7 +668,7 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     recording = tmp_path / "ordered.jsonl"
     seen = install_openai(
         monkeypatch,
-        [_response(body), _response(reason), _response(audit), _response(body)],
+        [_response(body), _response(FRAUD_PASS), _response(reason), _response(audit), _response(body)],
     )
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     recorded = eval_main(
@@ -656,7 +691,7 @@ def test_ordered_replay_ignores_a_new_temp_ledger(tmp_path, monkeypatch, capsys)
     assert "MISS" not in replayed_out
 
 
-_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl"}
+_RECORDINGS = {"samples.jsonl", "unseen.jsonl", "ordered.jsonl", "loop.jsonl", "fraud.jsonl"}
 _RECORDING = re.compile(r"recordings/([A-Za-z0-9_.-]+\.jsonl)")
 
 
@@ -691,7 +726,7 @@ def test_documented_replay_commands_match_the_recording():
     for path in docs:
         commands.extend(_eval_commands(path.read_text(encoding="utf-8")))
     ci = _ci_commands((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    assert len(ci) == 4
+    assert len(ci) == 5
     for command, name in commands + ci:
         assert name in _RECORDINGS, command
         assert (ROOT / "recordings" / name).is_file(), command
@@ -702,7 +737,7 @@ def test_documented_replay_commands_match_the_recording():
         assert command in readme_replay[start:], command
         start = readme_replay.index(command, start) + 1
     recorded = (ROOT / "recordings" / "README.md").read_text(encoding="utf-8")
-    assert "These three were recorded on 2026-11-01 PT." in recorded
+    assert "These five were recorded on 2026-11-02 PT." in recorded
 
 
 def _invoices(folder: Path) -> list[Path]:

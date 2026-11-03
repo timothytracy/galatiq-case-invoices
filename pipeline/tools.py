@@ -156,6 +156,7 @@ _ITEM = {
 # Not a business rule. The model does not look these up.
 _PROCESS_CODES = {
     "CRITIQUE_HOLD",
+    "FRAUD_SUSPECTED",
     "AUDIT_ESCALATED",
     "SYSTEM_ERROR",
     "BAD_REASONING",

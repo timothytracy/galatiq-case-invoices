@@ -1,4 +1,5 @@
-"""LangGraph wiring. Critique returns to approval. Audit can return to ingestion."""
+"""LangGraph wiring. Fraud review runs once after validation. Critique returns to approval.
+Audit can return to ingestion."""
 
 import os
 import random
@@ -11,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from db import ensure_inventory_db
 from llm_client import SleepClock, read_max_attempts
 from models import PipelineState
-from pipeline import approve, audit, critique, ingest, payment, reject_log, validate
+from pipeline import approve, audit, critique, fraud_review, ingest, payment, reject_log, validate
 from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, POLICY
 from decision.wording import resolve_as_of
 
@@ -41,6 +42,10 @@ def build_graph(
         lambda state: validate(state, db_path, as_of, ledger_path),
     )
     graph.add_node(
+        "fraud_review",
+        lambda state: fraud_review(state, llm, clock, rng, attempts, as_of),
+    )
+    graph.add_node(
         "approval",
         lambda state: approve(state, llm, db_path, clock, rng, attempts, as_of),
     )
@@ -66,6 +71,11 @@ def build_graph(
     graph.add_conditional_edges(
         "validation",
         route_after_validation,
+        {"fraud_review": "fraud_review", "approval": "approval", "reject_log": "reject_log"},
+    )
+    graph.add_conditional_edges(
+        "fraud_review",
+        route_after_fraud_review,
         {"approval": "approval", "reject_log": "reject_log"},
     )
     graph.add_conditional_edges(
@@ -95,6 +105,14 @@ def route_after_ingestion(state: PipelineState) -> str:
 
 
 def route_after_validation(state: PipelineState) -> str:
+    if state.agent_error or state.outcome in ("reject", "hold"):
+        return "reject_log"
+    if state.fraud_reviewed:
+        return "approval"
+    return "fraud_review"
+
+
+def route_after_fraud_review(state: PipelineState) -> str:
     if state.agent_error or state.outcome in ("reject", "hold"):
         return "reject_log"
     return "approval"

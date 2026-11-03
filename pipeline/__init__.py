@@ -3,6 +3,7 @@
 from pipeline.approval import approve
 from pipeline.audit import audit
 from pipeline.critique import critique
+from pipeline.fraud_review import fraud_review
 from pipeline.ingestion import ingest
 from pipeline.payment import payment
 from pipeline.reject_log import reject_log
@@ -12,6 +13,7 @@ __all__ = [
     "approve",
     "audit",
     "critique",
+    "fraud_review",
     "ingest",
     "payment",
     "reject_log",

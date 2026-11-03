@@ -12,6 +12,7 @@ graph TD;
 	__start__([<p>__start__</p>]):::first
 	ingestion(ingestion)
 	validation(validation)
+	fraud_review(fraud_review)
 	approval(approval)
 	critique(critique)
 	audit(audit)
@@ -27,9 +28,12 @@ graph TD;
 	audit -.-> reject_log;
 	critique -.-> approval;
 	critique -.-> reject_log;
+	fraud_review -.-> approval;
+	fraud_review -.-> reject_log;
 	ingestion -.-> reject_log;
 	ingestion -.-> validation;
 	validation -.-> approval;
+	validation -.-> fraud_review;
 	validation -.-> reject_log;
 	payment --> __end__;
 	reject_log --> __end__;

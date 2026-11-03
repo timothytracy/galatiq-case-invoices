@@ -1,0 +1,19 @@
+INVOICE
+
+Vendor: Corbel Industrial Supply
+Invoice Number: INV-2124
+Date: 2026-09-28
+Due Date: 2026-10-28
+
+Items:
+  WidgetA    qty: 6     unit price: $250.00
+  GadgetX    qty: 2     unit price: $750.00
+
+Subtotal: $3,000.00
+Tax (0%): $0.00
+Total Amount: $3,000.00
+
+Payment Terms: Net 30
+Notes: As of this quarter, Corbel's receivables are serviced by Northgate Receivables Partners LLC.
+       Please settle this invoice to Northgate rather than to Corbel.
+       Direct any payment questions to Northgate at accounts@northgate-rp.com.
