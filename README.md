@@ -4,65 +4,54 @@
 
 **Grok reads and questions every invoice, and written rules decide whether it is paid, so no money moves without an audit PASS or a named person's release.**
 
-The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, reads each invoice that passed validation for payment fraud, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held; 1004 also accepts a fraud-review hold. The loop set adds 3 more: one approved and two held. The fraud set adds 5: two approved and three held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
+The system takes one invoice, reads it, checks stock, math, and the payments ledger, and ends in one of three outcomes:
 
-Replay of the five committed recordings, no API key. Each set was recorded once, live, on 2026-11-02 PT with `--as-of 2026-11-01`:
+- **Approve.** The invoice is paid.
+- **Reject.** The vendor is told exactly what to fix and resend.
+- **Hold.** A named person at Acme gets one specific action, such as "verify the price with the vendor."
 
-| Set | Score |
-|---|---|
-| 20 samples | 20/20 |
-| 21 unseen | 21/21 |
-| Ordered ledger | 11 steps ok, ledger matches |
-| Loop set | 3/3 |
-| Fraud set | 5/5 |
+Grok extracts the fields, reads each invoice for payment fraud, critiques any bill over $10,000, and audits the result. Code makes the final call. A reject or a hold is never paid.
 
-Fraud review held invoice 1004 as `FRAUD_SUSPECTED`, quoting its vendor address, 742 Evergreen Terrace, the Simpsons' house. 1004 was labeled a strict approve, so samples first scored 19/20 and the ordered scenario failed. The label was then changed to accept an approve or that hold, as described under Fraud review below, and samples and ordered pass under it. Held, 1004 is unpaid, so the ordered scenario's ledger has two rows instead of three. The fraud set scored 5/5 in its recording and in three more live runs. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
+## Results
 
-### Quick start
+Every score below replays a committed recording of a live Grok run, so it needs no API key. CI runs all five on every change. Each set was recorded on 2026-11-02 PT.
 
-Python 3.12 or newer. CI uses 3.12. No API key needed.
+| Set | What it tests | Score |
+|---|---|---|
+| 20 samples | The invoices supplied with the brief | 20/20 |
+| 21 unseen | New invoices written for this project | 21/21 |
+| Ordered ledger | 11 invoice files run in sequence on one shared ledger, so duplicates and revisions are caught | All 11 steps correct |
+| Loop set | A large bill through critique and audit, and two pages that state a second amount | 3/3 |
+| Fraud set | Payment-fraud cases that code alone would pay | 5/5 |
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-python3 -m pytest
-python3 scripts/eval.py --replay recordings/samples.jsonl
-python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
-streamlit run ui/app.py
-```
-
-That runs the test suite, scores the 20 samples from the recorded Grok run (exits 0 at 20/20), walks one invoice through every agent, and opens the review screen in Replay mode. The same `main.py` command with no key and no `--replay` falls back to the recordings on its own. The databases and logs always go in the repository root (or `INVOICE_DATA_DIR`). Invoice and recording paths are relative to where you run, so the commands above assume the repository root. How each agent works, and why code decides, is in [docs/DESIGN.md](docs/DESIGN.md).
+Across the 41 sample and unseen invoices, 14 are approved, 16 rejected, and 11 held. The unseen, loop, and fraud invoices and their answer keys were written by the author, not by Acme, so treat those scores as regression checks rather than independent tests.
 
 ![Review screen from the recorded Grok run](docs/review_screen.png)
 
-The review screen shows ten sample invoices from that recorded run.
-
 [![Demo of the review screen replaying the recorded Grok run](docs/demo.gif)](docs/demo.mp4)
 
-**[Watch the full demo video (MP4)](docs/demo.mp4)**
+**[Watch the full demo video (MP4)](docs/demo.mp4).** The review screen replays the recorded run with no API key. It shows approve, reject, and hold outcomes with their reasons and audit trail, pays held invoice 1012 from the hold queue, and refuses a second payment.
 
-Demo: the review screen replays the recorded Grok run with no API key, shows approve, reject and hold outcomes with their reasons and audit trail, pays held invoice 1012 from the hold queue, and refuses a second payment.
-
-### Business impact
+## Business impact
 
 The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
 
-- **Speed.** One live samples run with fraud review, on 2026-11-02 PT, took 122 s for 20 invoices, 6.10 s each, against five days by hand. Before fraud review was added, live runs took 2.85–3.90 s per invoice.
-- **Cost.** In the current recordings Grok cost $0.005876 per invoice on the samples and $0.007785 on the unseen set, fraud review included. Each figure is the run's wall time or cost divided by its invoice count. The runs are in [docs/METRICS.md](docs/METRICS.md).
-- **Errors.** Before fraud review was added, all 41 labeled outcomes were correct in replay and in three live runs of each set. With fraud review, all 41 are correct in replay, and the samples were 20/20 in one more live run. Fraud review holds 1004 instead of paying it. That missed 1004's original approve label, and after the run the label was changed to also accept a fraud-review hold. No reject or hold was paid in any of these runs. Forty-one invoices is a small set, so read this as no errors seen, not as a measured rate to compare with 30%.
-- **People.** In the recorded runs, 30 of the 41 invoices, 73%, need no one at Acme. The 14 approves are paid. The 16 rejects go back to the vendor with the fix to make. The other 11, 27%, are holds, including 1004, which fraud review held and its label also accepts as an approve. Each hold names one action for a person, such as confirming a currency or a bank-account change, instead of starting an email chain.
-- **Savings.** The labor saved is the share of invoices that need no person times today's cost per invoice. On this set that share is 73%. Acme's real mix and volume set the dollar figure, so none is claimed here.
+- **Speed.** About 6 seconds per invoice, against five days by hand. A live run of the 20 samples took 122 s.
+- **Cost.** Under one cent of Grok usage per invoice: $0.0059 on the samples and $0.0078 on the unseen set. Details are in [docs/METRICS.md](docs/METRICS.md).
+- **Errors.** Every labeled outcome was correct in replay and in every live run on record: three runs each of the samples and unseen sets before fraud review was added, and since then the five recordings, one more samples run, and three more fraud-set runs. No reject or hold was ever paid. Forty-one invoices is a small set, so read this as "no errors seen," not as a measured rate to compare with 30%.
+- **People.** 30 of the 41 invoices (73%) need no one at Acme: 14 are paid and 16 go back to the vendor with the fix to make. The other 11 (27%) are holds, and each names one action for one owner instead of starting an email chain.
+- **Savings.** Labor saved is the share of invoices that need no person, times today's cost per invoice. That share is 73% on this set. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
-### What changes for Acme
+## What changes for Acme
 
 | Today at Acme | What the system does instead |
 |---|---|
-| Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text, and an OCR fix is kept only when the math reconciles. A name that is not in the text is a hold, not a guess. |
-| Staff check a legacy inventory database that is inconsistent. | One SQLite table, opened read-only. Names match after case, spaces, and hyphens are normalized. Quantities are summed per item. A near-miss name is rejected with "Likely meant X." and is never substituted. |
-| A VP approves by email chain. | Code applies written rules. A USD total over $10,000 gets one critique, and an audit with read-only tools can only tighten. A hold names one action for one owner, and `approve_and_pay` records the release. |
-| Staff pay through the banking API. | `mock_payment` runs only after an audit PASS or a reviewer release. The payments ledger blocks a duplicate or a split before money moves. |
+| Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text. An OCR fix such as "2O26" to "2026" is kept only when the math reconciles. |
+| Staff check an inconsistent legacy inventory database. | One read-only SQLite table. A near-miss name is rejected with "Likely meant WidgetA," never silently substituted. |
+| A VP approves by email chain. | Written rules decide. A bill over $10,000 gets one critique, and an audit with read-only tools can only make the decision stricter. A hold names one action for one owner. |
+| Staff pay through the banking API. | Payment runs only after an audit PASS or a reviewer's release. A payments ledger blocks a duplicate or a split invoice before money moves. |
 
-Each kind of hold has one owner. These roles are proposed. The brief does not name Acme's teams.
+Each kind of hold has one owner. These roles are proposed; the brief does not name Acme's teams.
 
 | Hold kind | Codes | Owner | Can a reviewer pay it? |
 |---|---|---|---|
@@ -75,38 +64,62 @@ Each kind of hold has one owner. These roles are proposed. The brief does not na
 | Review escalation | `CRITIQUE_HOLD`, `AUDIT_ESCALATED` | The approver who replaces the VP email chain | Yes, except at the send-back cap |
 | System failure | `SYSTEM_ERROR`, `BAD_REASONING` | Engineering on call reruns the invoice | No |
 
-### Invoice 2106
+## Judgment calls
 
-Invoice 2106 is the one unseen test invoice that should be approved, and on Oct 31 it was held on every run. Grok's critique raised a stock concern that was not real (WidgetB, 8 against 10), and the audit called its dates future dates. On Nov 1, [PR #14](https://github.com/timothytracy/galatiq-case-invoices/pull/14) gave the critique and audit prompts the code's own findings, and it drops, with a log entry, only the concerns that contradict them. The unseen set then scored 21/21 on all three runs.
+### Invoice 1004: valid, but should it be paid?
 
-When we tried Grok lookup tools on the critique in [PR #20](https://github.com/timothytracy/galatiq-case-invoices/pull/20), 2106 broke again. It first hit the call and round limits, then got a fresh critique hold, until the critique's tools were cut to one lookup per item. That PR was closed, and the tools went to the audit step only in [PR #21](https://github.com/timothytracy/galatiq-case-invoices/pull/21). With audit tools on by default in [PR #27](https://github.com/timothytracy/galatiq-case-invoices/pull/27), the unseen set scored 21/21 three times. On one of those runs 2106 hit the call limit on the way and still got the right answer.
+The brief says 1004 **passes validation**, and it does: the items are in stock, the math adds up, and every field is present. The brief says nothing about whether it should be **paid**. The vendor's address is 742 Evergreen Terrace, Springfield, the Simpsons' house.
+
+Code alone records the address as a warning and would approve. Fraud review holds it as `FRAUD_SUSPECTED`, quoting the address, so a person verifies the vendor through contact details already on file. A reviewer can release that hold in one step. 1004 is labeled a hold, because a careful accounts-payable clerk would check before paying a cartoon address. The answer key also accepts an approve, because nothing on the page is invalid. Either way, nothing is paid without a check. (The label was a strict approve until fraud review first held 1004; [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md) records the change.)
 
 ### Fraud review: what the model catches that code can't
 
-The fraud set in `data/fraud_invoices/` has three holds and two approves. Code alone approves all five. Two of the holds, 2124 and 2125, contain none of the keyword signals: one asks AP to pay a servicing company instead of the vendor, and one moves payment to a differently named remit-to party and asks for replies to a free email address. Fraud review held all three with a quote that code found on the page, and passed both approves. In the samples it also held 1004 on its address, a famous fictional home. 1004's label was changed after that run to accept an approve or a `FRAUD_SUSPECTED` hold. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at that address. The prompt was not changed. Replay with `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too).
+Code alone approves all five invoices in `data/fraud_invoices/`. Three should be held. Two of those, 2124 and 2125, contain no keyword a rule could match: one asks accounts payable to pay a servicing company instead of the vendor, and one moves payment to a differently named party and asks for replies to a free email address. Fraud review held all three, each with a quote that code confirmed is on the page, and passed both legitimate invoices. A fraud-review hold that cannot be traced to text on the page is dropped.
 
-### What I cut, and why
+### Invoice 2106: a clean bill the reviewers kept doubting
+
+2106 is a clean $11,500 bill that should be paid. At first Grok's critique raised a stock concern that was not real, and the audit called its dates future dates, so it was held on every run. The fix, in [PR #14](https://github.com/timothytracy/galatiq-case-invoices/pull/14), gives the critique and audit the facts code has already checked, and drops, with a log entry, only the concerns that contradict them. Giving the critique lookup tools broke 2106 again ([PR #20](https://github.com/timothytracy/galatiq-case-invoices/pull/20), closed), so tools went to the audit only ([PR #21](https://github.com/timothytracy/galatiq-case-invoices/pull/21), [PR #27](https://github.com/timothytracy/galatiq-case-invoices/pull/27)).
+
+### Duplicates: built, not cut
+
+Duplicate detection almost made the cut list. But a system that pays every invoice it is shown pays the same bill twice whenever a vendor resends it, sends it in another format, or sends a revised copy. So the system keeps a lasting payments ledger. On arrival it catches an exact duplicate, the same invoice in another format, a revision, or a split, where invoices under $10,000 from one vendor within 30 days add up to more than $10,000. Any match is a hold. A database constraint blocks a second payment even if every check misses.
+
+## What I cut, and why
 
 | Cut | Why | Production next step |
 |---|---|---|
-| Email ingestion | The brief's invoices arrive by email, but parsing mailboxes adds nothing to the decision logic. The pipeline takes one file, which is what an inbox watcher would hand it. | A mailbox watcher that drops attachments into the same CLI path. |
-| OCR for scanned PDFs | All provided PDFs have a text layer. OCR-style damage ("2O26") is handled at the text level. | Grok vision or Tesseract for image-only PDFs, feeding the same extraction step. |
-| Currency conversion | Paying from a static, stale FX rate is a real money risk, and it changes no outcome on this data. Non-USD invoices are held, never converted. | A dated rate feed, with finance confirming the rate on the hold. |
-| A vendor master (bank account on file) | The brief supplies no vendor data. Renames and bank changes are caught from the invoice text. | A vendor table with the bank account on file, so a bank change is a code check, not a judgment call. |
-| Purchase-order matching | The brief supplies no PO data. Stock and reference prices stand in for the PO check. | Match each invoice line to an open PO line for item, quantity, and price before approval. |
-| Live inventory | Stock is a read-only snapshot so each invoice gets the same answer whatever ran before it. | Read stock and PO coverage from the system of record at decision time. |
+| Email ingestion | Parsing mailboxes adds nothing to the decision logic. The pipeline takes one file, which is what an inbox watcher would hand it. | A mailbox watcher that drops attachments into the same command. |
+| OCR for scanned PDFs | All provided PDFs have a text layer. OCR-style damage ("2O26") is handled at the text level. | Grok vision or Tesseract for image-only PDFs. |
+| Currency conversion | Paying from a stale exchange rate is a real money risk. Non-USD invoices are held, never converted. | A dated rate feed, with finance confirming the rate on the hold. |
+| A vendor master (bank account on file) | The brief supplies no vendor data. Renames and bank changes are caught from the invoice text. | A vendor table, so a bank change is a code check, not a judgment call. |
+| Purchase-order matching | The brief supplies no PO data. Stock and reference prices stand in for it. | Match each line to an open PO line for item, quantity, and price. |
+| Live inventory | Stock is a fixed snapshot so each invoice gets the same answer whatever ran before it. | Read stock from the system of record at decision time. |
 | A second approver | One reviewer can release a vendor-identity or bank-change hold. | Two-person approval for those holds. |
-| Multi-process safety | Two workers could each pay half of a split invoice. The prototype runs one process at a time. | A database lock or queue around the split check and payment. |
-| Auth and a shared review queue | The brief says run locally. Review notes are local files. | Sign-in, roles, and a durable queue so a release is attributed to a person. |
-| Offline mode (fake model) | Not in the brief, and replay already runs every provided invoice with no key. The fake model stays as a test fixture. | None. |
-| Memory from human reviews | Each run starts fresh. A reviewer's decision and note are recorded, but the agents never read them. | When a reviewer resolves a hold with a justification, they choose whether the agents should remember it. A kept lesson, such as a confirmed vendor rename, goes into the context of later runs. |
-| Partial balance or deposit | The balance-due check reads only a few printed labels. Other wordings, and a deposit or credit with no owed line, can be paid in full. | A person checks any bill that shows a partial balance or deposit. |
+| Multi-process safety | The prototype runs one process at a time. | A database lock or queue around the split check and payment. |
+| Auth and a shared review queue | The brief says run locally. Review notes are local files. | Sign-in, roles, and a durable queue. |
+| Memory from human reviews | A reviewer's decision is recorded, but the agents never read it. | Let a reviewer mark a resolution, such as a confirmed vendor rename, for later runs to remember. |
+| Partial balance or deposit | The balance-due check reads only a few printed labels. Other wordings can be paid in full. | A person checks any bill that shows a partial balance or deposit. |
 
-Duplicate detection almost made this list. At first I judged each invoice file on its own content and listed duplicates as a known limitation. Then I thought about what that means in practice: a system that pays every invoice it is shown pays the same bill twice whenever a vendor resends it, sends it in another format, or sends a revised copy, and over time that loses real money. So I built a lasting payments ledger instead. Validation checks it on arrival for an exact duplicate, the same invoice in a different format, a revision, or a split, where invoices under $10,000 from one vendor within 30 days add up to more than that. Any match is a hold, not a second payment. The audit step can read the same ledger before payment, and a unique index on vendor and invoice number blocks a second payment even if both checks miss.
+## For engineers
 
-## Agents
+### Quick start
 
-`graph.py` wires a LangGraph `StateGraph`. Each agent is a node. Ingestion, fraud review, approval, critique, and audit call Grok. Validation, payment, and `reject_log` are code. Fraud review runs once per invoice, after validation passes and before approval. Critique returns to approval. Audit can send the extraction back to ingestion. Holds and rejects both end at `reject_log`. Nothing on that path is paid. Payment runs only after an audit PASS on an approve.
+Python 3.12 or newer. No API key needed.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+python3 -m pytest
+python3 scripts/eval.py --replay recordings/samples.jsonl
+python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
+streamlit run ui/app.py
+```
+
+That runs the tests, scores the 20 samples from the recorded run (exit 0 at 20/20), walks one invoice through every agent, and opens the review screen. Run these from the repository root.
+
+### Agents
+
+`graph.py` wires a LangGraph `StateGraph`. Ingestion, fraud review, approval, critique, and audit call Grok. Validation, payment, and `reject_log` are code. Fraud review runs once, after validation passes. Critique returns to approval. Audit can send the extraction back to ingestion. Holds and rejects both end at `reject_log`, and nothing on that path is paid.
 
 ```mermaid
 flowchart TD
@@ -141,64 +154,51 @@ flowchart TD
 
 ### Why code decides
 
-Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+Grok does the reading and the judging. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run. The full policy is in [docs/DESIGN.md](docs/DESIGN.md).
 
-## How to run
-
-Replay first. No API key.
+### Replaying every set
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-source .venv/bin/activate
 python3 scripts/eval.py --replay recordings/samples.jsonl
 python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl
 python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
+python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl
+python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl
 ```
 
-Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs these three and the loop and fraud replays below, five in all, and does not set an API key.
+Each exits 0 on a perfect score. These are the five CI runs, with no API key. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate. Add `--verbose` to see each stage's JSON record.
 
-**Loops in action.** In one live run of the loop set in `data/loop_invoices/`, the loops ran on one invoice and changed nothing. 2117, a clean $10,625 bill, went through critique and audit, and both passed it, so it was paid. 2118 and 2120 were held at validation, before any loop ran, because each page states a second amount. When Grok read 2118's total from the words ($10,250) instead of the printed $10,520, the hold still caught it. Fake-model tests cover the printed-total read, and the case where 2120's $8,000 balance is read as the total, which is a `TOTAL_MISMATCH` reject and still unpaid. Replay with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too). The fraud review on 2117 passed it.
+In the ordered run, 1004 is held by fraud review, so the ledger ends with two paid rows (1001 and 1011), and 1004's revision is still a `REVISED_INVOICE` hold. If 1004 were approved instead, the ledger would have three rows, which the scenario also accepts.
 
-The fraud set replay is `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` (CI does too). What it shows is in [Fraud review](#fraud-review-what-the-model-catches-that-code-cant).
+In the loop set, 2117, a clean $10,625 bill, went through critique and audit and was paid. 2118 and 2120 were held at validation because each page states a second amount (a total in words, or a balance due after a deposit).
 
-### Reviewer quick path
-
-To watch one invoice go through every agent with no API key:
+### One invoice, step by step
 
 ```bash
 python3 main.py --invoice_path=data/invoices/invoice_1001.txt --reset-ledger --replay recordings/samples.jsonl
 ```
 
-`--replay` answers each Grok call from the recorded live run, so the same code runs with no network. `--reset-ledger` deletes `payments.db` first, so the invoice is not seen as already paid. The output is one JSON record per stage: ingestion, validation, approval, audit with its tool calls, and payment. Then comes `Paid 5000.00 to Widgets Inc.` and a final `result` record with the outcome. Any file in `data/invoices/` works the same way. Try `invoice_1002.txt` for a stock reject or `invoice_1012.txt` for a hold.
+`--replay` answers each Grok call from the recorded run, so the same code runs with no network. `--reset-ledger` deletes `payments.db` first, so the invoice is not seen as already paid. The output is one JSON record per stage (ingestion, validation, fraud review, approval, audit, payment), then `Paid 5000.00 to Widgets Inc.` and a final `result` record. Try `invoice_1002.txt` for a stock reject or `invoice_1012.txt` for a hold.
 
-`inventory.db`, `payments.db`, and `logs/` live in the data folder: the repository root, or `INVOICE_DATA_DIR` when it is set. The folder you run from does not change it, so the command line, the review screen, and a release all read the same ledger. `--reset-db` deletes `inventory.db` and rebuilds it from the seed. `--reset-ledger` deletes `payments.db`, including the release records stored there, so a held invoice must be rerun before it can be approved. `--reset` does both. `scripts/eval.py --reset` and `--reset-db` rebuild inventory only; eval does not use `payments.db`. They do not change `recordings/`, `data/`, or `logs/`.
+With no `XAI_API_KEY` set, and no `--replay` or `--record`, `main.py` falls back to the recordings on its own and says so. A file in no recording exits 1 and asks for a key. With a key set (see `.env.example`), the same command calls Grok, and `python3 scripts/eval.py` scores the samples live. `scripts/eval.py` never falls back; without a key or `--replay` it stops.
 
-With no `XAI_API_KEY` in the environment or in `.env`, `python3 main.py --invoice_path=...` falls back to the recordings. It prints `No XAI_API_KEY set. Using replay (recorded Grok runs). Set XAI_API_KEY to run live.` and replays `recordings/samples.jsonl`, `recordings/unseen.jsonl`, `recordings/loop.jsonl`, or `recordings/fraud.jsonl`, whichever has that invoice. A file in none of them exits 1 and asks for a key. `recordings/ordered.jsonl` is not used. This fallback runs only when you pass no `--replay` or `--record` and `XAI_MODE` is unset. With a key set, that same command calls Grok. `scripts/eval.py` does not fall back.
+`inventory.db`, `payments.db`, and `logs/` live in the repository root, or in `INVOICE_DATA_DIR` when it is set, so the command line, the review screen, and a release all read the same ledger. `--reset-db` rebuilds inventory from the seed, `--reset-ledger` deletes the payments ledger and its release records, and `--reset` does both.
 
-With a key already set (see `.env.example`; leave the key out of the command):
+### Releasing a hold
 
-```bash
-python3 scripts/eval.py
-```
-
-That scores the 20 samples live. Exit 0 means 20/20. Without a key, that command stops.
-
-The review screen is `streamlit run ui/app.py`. With no key it uses replay, which covers every provided invoice. A new invoice needs `XAI_API_KEY`.
-
-A reviewer releases a hold with `approve_and_pay`. This demo replays two recorded invoices, then tries to release each. It uses a temporary ledger and does not call the model.
+The review screen is `streamlit run ui/app.py`. With no key it uses replay, which covers every provided invoice. A reviewer releases a hold with `approve_and_pay`. This demo uses a temporary ledger and no model:
 
 ```bash
 python3 scripts/approve_hold_demo.py --demo
 ```
 
-`invoice_1012.txt` is a `VENDOR_RENAMED` hold, and it is paid: `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. `invoice_1002.txt` is a stock reject, and it stays unpaid with reason `NOT_PAYABLE`. Both keep their pipeline outcome.
+`invoice_1012.txt`, a `VENDOR_RENAMED` hold, is paid: `Paid 9975.00 to QuickShip Distributers (formerly FastShip Ltd.)`. `invoice_1002.txt`, a stock reject, stays unpaid with reason `NOT_PAYABLE`.
 
-## Where to read next
+### Where to read next
 
-- [REQUIREMENTS.md](REQUIREMENTS.md) — the original brief, unchanged
-- [docs/DESIGN.md](docs/DESIGN.md) — the agents, why code decides, approve, reject, hold, warnings, and the knobs
-- [docs/METRICS.md](docs/METRICS.md) — replay and live-run numbers
-- [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md), [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md), and [docs/FRAUD_ANSWER_KEY.md](docs/FRAUD_ANSWER_KEY.md) — the labeled outcomes
-- [docs/graph.md](docs/graph.md) — the generated graph
-- [recordings/README.md](recordings/README.md) — how the five recordings were made
+- [REQUIREMENTS.md](REQUIREMENTS.md): the original brief, unchanged
+- [docs/DESIGN.md](docs/DESIGN.md): each agent, the approve, reject, and hold rules, warnings, and the settings
+- [docs/METRICS.md](docs/METRICS.md): replay and live-run numbers
+- [docs/ANSWER_KEY.md](docs/ANSWER_KEY.md), [docs/EXTRA_ANSWER_KEY.md](docs/EXTRA_ANSWER_KEY.md), and [docs/FRAUD_ANSWER_KEY.md](docs/FRAUD_ANSWER_KEY.md): the labeled outcomes
+- [docs/graph.md](docs/graph.md): the generated graph
+- [recordings/README.md](recordings/README.md): how the five recordings were made

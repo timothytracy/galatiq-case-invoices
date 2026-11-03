@@ -1,5 +1,5 @@
 {
-  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "policy": "docs/DESIGN.md (with the Reject > Hold > Approve precedence rule)",
   "invoices": {
     "data/extra_invoices/invoice_2001.pdf": {
       "invoice_number": "INV-2001",
@@ -210,7 +210,7 @@
   },
   "notes": [
     "Same fields as data/answer_key.json, plus also_accepted_reasons on invoice_2115.txt only. primary_reason uses the policy finding names.",
-    "Labels follow docs/DECISION_POLICY.md. Reference prices are policy.toml: WidgetA 250, WidgetB 500, GadgetX 750. abs(unit_price) >= reference * 1.50 is a hold (Unit price 50% or more above reference) and is not a fraud signal. A smaller difference is a price warning. Non-USD invoices are not price-checked. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.",
+    "Labels follow docs/DESIGN.md. Reference prices are policy.toml: WidgetA 250, WidgetB 500, GadgetX 750. abs(unit_price) >= reference * 1.50 is a hold (Unit price 50% or more above reference) and is not a fraud signal. A smaller difference is a price warning. Non-USD invoices are not price-checked. Stock is the four README rows: WidgetA 15, WidgetB 10, GadgetX 5, FakeItem 0. A quantity equal to stock passes.",
     "No pipeline, main.py, scripts/eval.py, or Grok call was run on these files. pypdf (already pinned) was used only to read the text layer of the two PDFs.",
     "invoice_2109.json and invoice_2110.xml compare abs(unit_price) with the reference. Both magnitudes match the reference, so there is no price warning and no price spike. Outcomes are unchanged.",
     "invoice_2115.txt accepts either Missing required field or Total or line-math mismatch. Primary recorded is Missing required field. also_accepted_reasons is [\"Total or line-math mismatch\"]. No other row has that field.",

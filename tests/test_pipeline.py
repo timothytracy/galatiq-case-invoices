@@ -44,6 +44,7 @@ from decision.invoice_fields import resolve_currency
 from decision.outcome import HOLD_CODES, REJECT_CODES, WARNING_CODES, outcome_from_findings
 from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, MAX_SEND_BACKS
 from decision.findings import assess
+from tests.fake_llm_eval import code_only
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, extraction, scripted, write_invoice
 
 pytestmark = pytest.mark.usefixtures("no_network")
@@ -806,7 +807,7 @@ def test_answer_key_covers_the_sample_files():
     stock = dict(SEED)
     counts = {"approve": 0, "reject": 0, "hold": 0}
     for filename in sample:
-        expected = key[f"data/invoices/{filename}"]
+        expected = code_only(key[f"data/invoices/{filename}"])
         if filename in README_OUTCOMES:
             assert expected["outcome"].lower() == README_OUTCOMES[filename]
         invoice = parse_file(INVOICES / filename)

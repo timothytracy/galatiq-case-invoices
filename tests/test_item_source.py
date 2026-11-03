@@ -19,7 +19,7 @@ from graph import run_invoice
 from models import ExtractedInvoice, LineItem, SourceInfo
 from parsers import SUFFIXES, parse_file
 from scripts.eval import grade, load_answer_key
-from tests.fake_llm_eval import handler_for
+from tests.fake_llm_eval import code_only, handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -314,8 +314,8 @@ def test_offline_runs_keep_the_41_answer_key_outcomes(db_path):
             assert "ITEM_NOT_IN_SOURCE" not in _codes(assessed), path.name
             # The parser alone never sets embedded_instructions; only the extraction step does.
             if path.name != "invoice_2107.pdf":
-                assert assessed.outcome.upper() == expected["outcome"], path.name
-                assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]], path.name
+                assert assessed.outcome.upper() == code_only(expected)["outcome"], path.name
+                assert assessed.reason_code == KEY_REASON_TO_CODE[code_only(expected)["primary_reason"]], path.name
             result = run_invoice(
                 path,
                 db_path,

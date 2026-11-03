@@ -1,5 +1,5 @@
 {
-  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "policy": "docs/DESIGN.md (with the Reject > Hold > Approve precedence rule)",
   "notes": "Loop set: a clean invoice over $10,000 that goes through critique and audit, and two pages that state an amount other than the one a reader would pay.",
   "invoices": {
     "data/loop_invoices/invoice_2117.txt": {

@@ -15,7 +15,7 @@ from graph import run_invoice
 from llm_client import LLMError
 from parsers import parse_file
 from scripts.eval import grade, invoice_lookup, load_answer_key
-from tests.fake_llm_eval import handler_for
+from tests.fake_llm_eval import code_only, handler_for
 from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -944,8 +944,8 @@ def test_sample_invoices_match_the_answer_key(db_path):
         expected = key[f"data/invoices/{path.name}"]
         parsed = parse_file(path)
         assessed = assess(parsed, parsed.source.raw_text or "", stock)
-        assert assessed.outcome.upper() == expected["outcome"]
-        assert assessed.reason_code == KEY_REASON_TO_CODE[expected["primary_reason"]]
+        assert assessed.outcome.upper() == code_only(expected)["outcome"]
+        assert assessed.reason_code == KEY_REASON_TO_CODE[code_only(expected)["primary_reason"]]
         result = run_invoice(
             path,
             db_path,

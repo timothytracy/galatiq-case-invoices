@@ -10,7 +10,7 @@ Every replay number is from a committed recording, with no API key. Each set was
 | Loop | `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` | 3/3 | 15073 | 0.021749 | 8 | 0 |
 | Fraud | `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` | 5/5 | 31908 | 0.051323 | 10 | 0 |
 
-Each command exited 0. Fraud review held invoice 1004 as `FRAUD_SUSPECTED` on its vendor address. Under its original strict-approve label, samples scored 19/20 and the ordered scenario failed. After the run the label was changed to accept an approve or that hold; the prompt and the recordings were not changed. The ordered scenario accepts either path: 1004 paid and a ledger of three rows, or 1004 held and a ledger of two. Either way `invoice_1004_revised.json` is a `REVISED_INVOICE` hold. This run took the held path, and the ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf`.
+Each command exited 0. Fraud review held invoice 1004 as `FRAUD_SUSPECTED` on its vendor address, which is its label; an approve is also accepted ([why](ANSWER_KEY.md#rulings-on-1003-and-1004)). Under the strict-approve label 1004 had when these sets were recorded, samples scored 19/20 and the ordered scenario failed; the recordings were not changed. The ordered scenario expects 1004 held and a ledger of two rows, and also accepts 1004 paid and a ledger of three. Either way `invoice_1004_revised.json` is a `REVISED_INVOICE` hold. The ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf`.
 
 The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key.
 

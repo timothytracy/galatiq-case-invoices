@@ -56,7 +56,7 @@ Grok does the reading and the judging: it extracts the fields, reads each invoic
 - Replay runs this code on saved replies with no API key and no network, and a miss is a `SYSTEM_ERROR` hold that pays nothing.
 - A non-USD invoice is a hold, and nothing is converted.
 - Invoice 1003 is a stock reject, and its fraud signals stay on the record.
-- Invoice 1004 passes validation, and code records its non-commercial address as a warning. Its label accepts an approve or a `FRAUD_SUSPECTED` hold, and fraud review holds it.
+- Invoice 1004 passes validation, and code records its non-commercial address as a warning. Fraud review holds it as `FRAUD_SUSPECTED`, which is its label; an approve is also accepted.
 - Fraud review can only add a hold, and the hold stands only when its quote is on the page. A failed fraud call is a `SYSTEM_ERROR` hold.
 
 ## Extended details
@@ -134,7 +134,15 @@ The four tools are `lookup_item`, `recompute_totals`, `get_policy_rule`, and `ch
 
 `check_payment_ledger` takes no arguments. It reports prior payments for this vendor and invoice number, plus that vendor's paid total inside the split window. Two workers, or a payment made outside this run, can write the ledger after validation and before audit. The tool reads that payment. In one process, validation already holds a duplicate or a split, so those invoices never reach the tool.
 
-`payments.db` sits next to `inventory.db`. Only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the normalized invoice number. `INV 1004` and `INV-1004` are the same number. The same raw text is the same match. A revision of a number that has not been paid is still only `REVISED_INVOICE`. After that original is paid, a revision with a higher total stays `REVISED_INVOICE`. A reviewer can pay only the difference. The payments table keeps one row for that vendor and number, and the difference is a supplement row. The same document, a revision that is not higher, or a different total that is not marked as a revision is `DUPLICATE_INVOICE`. A name-order pass of `data/invoices` on one `payments.db` holds `invoice_1004_revised.json` after `invoice_1004.json` is paid (Precision Parts Ltd., INV-1004, difference only) and holds `invoice_1011.txt` after `invoice_1011.pdf` is paid (Summit Manufacturing Co., INV-1011, $3,000.00). The split window is 30 days. An invoice's own number, including a supplement on that number, is not part of its window, so a higher revision is not a split of the original. No sample file is a split. The row is reserved as `pending` inside the write lock, before the mock payment, so two writers cannot both pay. It becomes `paid` when the gateway confirms. If the gateway raises or does not confirm, the row becomes `failed` and the invoice is a `SYSTEM_ERROR` hold. A pending or failed row still blocks a second payment, and it is not a payable difference, because a failed call may have reached the bank. A person checks with the bank and clears it. `python3 main.py --reset-ledger` deletes `payments.db` before that one file.
+`payments.db` sits next to `inventory.db`. Only the payment step writes it.
+
+- **Match key.** The vendor name, casefolded with whitespace collapsed, plus the normalized invoice number. `INV 1004` and `INV-1004` are the same number. The same raw text is the same match.
+- **Revisions.** A revision of an unpaid number is `REVISED_INVOICE`. After the original is paid, a revision with a higher total is still `REVISED_INVOICE`, and a reviewer can pay only the difference, stored as a supplement row. The same document, a revision that is not higher, or a different total not marked as a revision is `DUPLICATE_INVOICE`.
+- **Splits.** The window is 30 days. An invoice's own number, including a supplement on it, is not part of its window, so a higher revision is not a split of the original. No sample file is a split.
+- **Example.** A name-order pass of `data/invoices` on one ledger holds `invoice_1011.txt` as a duplicate after `invoice_1011.pdf` is paid. If `invoice_1004.json` is paid, `invoice_1004_revised.json` is held with the difference payable.
+- **Payment states.** The row is reserved as `pending` inside the write lock, before the mock payment, so two writers cannot both pay. It becomes `paid` when the gateway confirms. If the gateway raises or does not confirm, the row becomes `failed` and the invoice is a `SYSTEM_ERROR` hold. A pending or failed row still blocks a second payment and is not a payable difference, because a failed call may have reached the bank. A person checks with the bank and clears it.
+
+`python3 main.py --reset-ledger` deletes `payments.db` before that one file.
 
 Critique and audit receive the facts the code already checked: today's date, stock, whether the totals reconcile, the reference prices, and whether the dates are after today. On a critique, the guard sets aside a stock claim whose summed quantity is covered, a totals-mismatch claim when the totals already reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. On an audit, the same future-date claim can be set aside. Every other concern is kept. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
 
@@ -184,7 +192,7 @@ Hold when a person can do something the system cannot. Every hold names that act
 | Item name not in source text | Check the item name against the invoice. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
-`DUPLICATE_INVOICE` and `SPLIT_INVOICE` read `payments.db`. Only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the invoice number after normalization. The split window is `split_window_days`, 30 days. A date that does not parse is outside the window. Another vendor does not count. The invoice's own number does not count. How the ledger behaves across files is in [Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard).
+`DUPLICATE_INVOICE` and `SPLIT_INVOICE` read `payments.db`; the rules are in [Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard). For a split, a date that does not parse is outside the window, and another vendor does not count.
 
 Compare `abs(unit_price)` with the reference price. If `abs(unit_price) >= reference * 1.50`, the invoice is a `PRICE_SPIKE` hold on its own. That spike is not a fraud signal. A smaller difference, including a price below the reference, stays a price-variance warning. A spike line still records that warning. Non-USD invoices are not price-checked. Reject still beats this hold.
 
@@ -212,7 +220,7 @@ Item names are matched after normalizing case, spaces, and hyphens.
 - Non-USD is never paid. Nothing is converted.
 - Critique and audit can only tighten. Critique sets aside a stock claim whose summed quantity is covered by available stock, a totals-mismatch claim when the totals reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. Audit sets aside that same future-date claim. Every other concern is kept, including a disagreement between the raw text and the extraction. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
 
-Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 passes validation. A non-commercial address on a clean invoice the brief lists as passing is a warning. Fraud review holds it, and its label accepts that hold or an approve. The revised file stays a hold because it is a revision.
+Invoice 1003 is a reject for the stock shortfall. Its urgency and wire-transfer signals stay on the record. Invoice 1004 passes validation, and code alone would approve it. Fraud review holds it on its address. The reasoning is in [Rulings on 1003 and 1004](ANSWER_KEY.md#rulings-on-1003-and-1004). The revised file stays a hold because it is a revision.
 
 ## Releasing a hold
 
@@ -258,6 +266,6 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
 - `BALANCE_DUE` reads only a few printed labels: balance, balance due, balance owing, balance payable, amount due, amount payable, remaining to pay, total due, and please remit. Whitespace (including a line break) or an underscore must separate the words, so `amount_due` and `balance_due` count but `AmountDue` and `PayableAmount` do not. Previous, prior, account, and credit balances are deliberately not counted. It misses many other wordings, including OCR-damaged labels such as Ba1ance and non-English labels such as Saldo. It also misses structured payable fields in JSON, XML, or CSV that do not use those labels, such as `payable_amount`, `due_amount`, `net_payable`, or `owed`, any layout where other words or columns sit between the label and the amount, such as PDF or text tables and wrapped sentences, and a deposit or credit line with no owed line. Such a bill can be paid in full. A person has to check any bill that shows a partial balance or deposit.
-- Fraud review held 1004, then labeled a strict approve, on its address. The quote check proves the text is on the page, not that it is fraud. The prompt says one routine detail such as an address is not enough, and the model held anyway. The label was changed after the run to accept the hold; the prompt was not changed.
+- The quote check proves the text is on the page, not that it is fraud. The prompt says one routine detail such as an address is not enough, and the model still held 1004 on its address alone. That hold is defensible and is now the label, but it shows the model can hold on a single detail.
 - The fraud set is five invoices written by the author. A 5/5 score there is a regression check, not a measured detection rate.
 - Fraud review cannot see a vendor master or the bank account on file, so "differs from the vendor's established payee" is judged from the page alone.
