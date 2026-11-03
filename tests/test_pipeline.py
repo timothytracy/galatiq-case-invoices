@@ -635,6 +635,29 @@ def test_schema_repair_then_success_does_not_sleep(tmp_path, db_path):
     assert status(result) == "paid"
 
 
+def test_null_flags_are_false_and_a_clean_invoice_still_pays(tmp_path, db_path):
+    path = write_invoice(tmp_path, "clean.txt", "WidgetA\nTotal: 500.00\n")
+    body = extraction(embedded_instructions=None, noncommercial_address=None)
+    handler, _counts = scripted(body)
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "approve"
+    assert status(result) == "paid"
+
+
+def test_a_null_quantity_is_a_bad_quantity_reject_not_a_system_error(tmp_path, db_path):
+    path = write_invoice(tmp_path, "null.txt", "WidgetA\nTotal: 500.00\n")
+    body = extraction(
+        line_items=[
+            {"item": "WidgetA", "description": "WidgetA", "quantity": None, "unit_price": 250, "amount": 500}
+        ]
+    )
+    handler, _counts = scripted(body)
+    result = run(path, db_path, handler)
+    assert result["outcome"] == "reject"
+    assert result["reason_code"] == "BAD_QUANTITY"
+    assert status(result) == "not_paid"
+
+
 def test_data_folder_is_the_repo_root_unless_overridden(monkeypatch, tmp_path):
     from db import data_dir, inventory_db_path, log_dir, payments_db_path
 

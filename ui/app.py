@@ -19,7 +19,7 @@ from ui.pay import approve_and_pay, payable_amount, saved_result
 from ui.present import (
     INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail,
     already_paid_notice, blank, can_pay, concern_text, confirm_label, detail_index, format_amount,
-    format_money, invoice_view, label, pay_block, pay_message, payment_detail_text, payment_text,
+    format_money, invoice_view, label, pass_list_rows, pay_block, pay_message, payment_detail_text, payment_text,
     reason_code_text, released, shared_ledger_note, show_text, summarize, table_rows,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
@@ -435,7 +435,15 @@ def _tool_heading(call: dict) -> str:
     marks = f" {''.join(markers)}" if markers else ""
     return f"<div class='tool-call file'>{title}{marks}</div>"
 
+def _pass_list_block(view: dict) -> None:
+    rows = pass_list_rows(view)
+    if rows:
+        st.subheader("Pass list")
+        st.caption("An invoice is paid only when all six are true.")
+        st.dataframe(rows, hide_index=True, width="stretch")
+
 def _trail_block(view: dict) -> None:
+    _pass_list_block(view)
     trail = agent_trail(view["logs"], view["amount"])
     if trail["rows"]:
         st.dataframe(
@@ -577,13 +585,28 @@ def _replace_entry(entry: dict) -> None:
     st.session_state["entries"] = kept
 
 def _difference_still_owed(view: dict) -> bool:
-    """True when this revision hold still has a positive unpaid difference."""
+    """True when this revision hold still has a positive unpaid difference.
+
+    view["amount"] is read from the live ledger, so an original released later
+    in this session still offers the difference without rerunning the revision.
+    """
 
     if view.get("payment_status") == "paid":
         return False
-    for item in view.get("findings") or []:
-        if not isinstance(item, dict) or item.get("code") != "REVISED_INVOICE":
-            continue
+    revisions = [
+        item for item in view.get("findings") or []
+        if isinstance(item, dict) and item.get("code") == "REVISED_INVOICE"
+    ]
+    if not revisions:
+        return False
+    total = (view.get("invoice") or {}).get("total")
+    try:
+        live = Decimal(str(view.get("amount")))
+        if total is not None and Decimal("0") < live < Decimal(str(total)):
+            return True
+    except Exception:
+        pass
+    for item in revisions:
         try:
             owed = Decimal(str(item.get("owed")))
         except Exception:

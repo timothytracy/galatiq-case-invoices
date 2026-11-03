@@ -20,6 +20,7 @@ from decision.invoice_fields import (
 from decision.outcome import REJECT_CODES
 from decision.policy import APPROVAL_THRESHOLD_USD, POLICY
 from decision.printed_amounts import amount_in_words, balances_due, printed_totals
+from decision.vendors import known_vendor
 from decision.wording import explain
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%d-%b-%Y", "%d-%B-%Y", "%B %d, %Y", "%b %d, %Y")
@@ -33,10 +34,10 @@ _FORMERLY = re.compile(r"\bformerly\b", re.IGNORECASE)
 _URGENCY = re.compile(r"\burgent\b|\bimmediate(?:ly)?\b|pay\s+immediately", re.IGNORECASE)
 _WIRE = re.compile(r"\bwire\s+(?:transfer|only)\b|\bwire\s+to\b", re.IGNORECASE)
 _NEW_ACCOUNT = re.compile(
-    r"new\s+(?:bank|remittance)\s+account"
-    r"|remittance\s+(?:account|details)\s+(?:changed|updated)"
-    r"|bank\s+account\s+(?:changed|updated|is new)"
-    r"|updated\s+bank\s+details",
+    r"new\s+(?:bank|banking|remittance)\s+(?:account|details)"
+    r"|(?:remittance|bank|banking|payment)\s+(?:account|details|instructions)\s+"
+    r"(?:have\s+|has\s+)?(?:been\s+)?(?:changed|updated|is new)\b"
+    r"|updated\s+(?:bank|banking|remittance)\s+details",
     re.IGNORECASE,
 )
 _REVISED_PHRASE = re.compile(r"revised\s+invoice", re.IGNORECASE)
@@ -48,9 +49,12 @@ _REVISED_FIELD = re.compile(
 _CREDIT = re.compile(r"\bcredit\s+(?:note|memo)\b", re.IGNORECASE)
 # Imperative phrases aimed at the system. The bare word "approve" is not here.
 _INJECTION = re.compile(
-    r"ignore\s+(?:all\s+)?previous\s+instructions"
+    r"(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|guidance|rules)"
     r"|approve\s+this\s+invoice"
-    r"|skip\s+review"
+    r"|skip\s+(?:the\s+)?(?:review|audit|approval)"
+    r"|bypass\s+(?:the\s+)?(?:review|audit|approval|checks)"
+    r"|auto-?approve"
+    r"|do\s+not\s+(?:review|audit|flag)\s+this"
     r"|\bsystem\s*:",
     re.IGNORECASE,
 )
@@ -98,6 +102,7 @@ def collect_findings(
         *_source_findings(invoice, raw_text),
         *_math_findings(invoice),
         *_amount_findings(invoice, raw_text),
+        *_pass_list_findings(invoice, raw_text),
         *_identity_findings(invoice, raw_text, currency, blob),
         *fraud,
         *_price_findings(invoice, stock, currency),
@@ -240,6 +245,33 @@ def _amount_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
     return findings
 
 
+def _pass_list_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
+    """Holds for the pass-list checks that the other rules do not already cover.
+
+    A zero total has nothing to pay. An extracted total that matches no printed
+    total line means the extraction did not read the bill's total. A missing
+    total is MISSING_FIELD, and a page with no total line is not compared.
+    """
+
+    findings: list[Finding] = []
+    total = invoice.total
+    if total is None:
+        return findings
+    if total == 0 and not _is_credit_label(invoice, raw_text):
+        findings.append(_finding("ZERO_TOTAL", "The invoice total is 0.00, so there is nothing to pay.", item="total"))
+    printed = printed_totals(raw_text)
+    if printed and all(different(value, total) for value in printed):
+        shown = ", ".join(show_money(value) for value in printed)
+        findings.append(
+            _finding(
+                "PRINTED_TOTAL_MISMATCH",
+                f"Extracted total {show_money(total)} does not match the printed total ({shown}).",
+                item="total",
+            )
+        )
+    return findings
+
+
 def _words_explain_total(
     findings: list[Finding], invoice: ExtractedInvoice, raw_text: str
 ) -> list[Finding]:
@@ -271,6 +303,10 @@ def _identity_findings(
         findings.append(_finding("REVISED_INVOICE", "This invoice is marked as a revision."))
     if _FORMERLY.search(blob):
         findings.append(_finding("VENDOR_RENAMED", "The vendor name says formerly.", item="vendor"))
+    if invoice.vendor and not known_vendor(invoice.vendor):
+        findings.append(
+            _finding("NEW_VENDOR", f"{invoice.vendor} is not on the vendor master.", item="vendor")
+        )
     return findings
 
 
@@ -376,7 +412,9 @@ def _note_findings(invoice: ExtractedInvoice, raw_text: str, currency: str) -> l
                 "info",
             )
         )
-    if invoice.embedded_instructions and injection_phrase(_blob(raw_text, invoice.notes)):
+    flagged = invoice.embedded_instructions
+    phrase = injection_phrase(_blob(raw_text, invoice.notes))
+    if flagged and phrase:
         findings.append(
             _finding(
                 "EMBEDDED_INSTRUCTIONS",
@@ -384,7 +422,30 @@ def _note_findings(invoice: ExtractedInvoice, raw_text: str, currency: str) -> l
                 "blocking",
             )
         )
+    elif flagged or phrase:
+        source = "The extraction model flagged" if flagged else "The text check matched"
+        findings.append(
+            _finding(
+                "INJECTION_SUSPECTED",
+                f"{source} wording that may be aimed at the system.",
+            )
+        )
     return findings
+
+
+_PAYMENT_ACTIONS = {"approve", "pay", "skip_review", "ignore_rules"}
+
+
+def model_flag_stands(invoice: ExtractedInvoice, raw_text: str) -> bool:
+    """A model-only injection flag needs a quote from the page that asks for a payment action."""
+
+    def squash(text: str) -> str:
+        return re.sub(r"\s+", " ", text or "").strip().casefold()
+
+    if (invoice.embedded_action or "").strip().casefold() not in _PAYMENT_ACTIONS:
+        return False
+    quote = squash(invoice.embedded_quote or "")
+    return len(quote) >= POLICY.fraud_quote_min_chars and quote in squash(raw_text)
 
 
 def _cluster_finding(
@@ -399,15 +460,10 @@ def _cluster_finding(
     rejected = any(item.severity == "blocking" and item.code in REJECT_CODES for item in findings)
     if rejected:
         return None
-    over = (
-        invoice.total is not None
-        and currency in POLICY.allowed_currencies
-        and invoice.total > APPROVAL_THRESHOLD_USD
-    )
-    if new_account and over:
+    if new_account:
         return _finding(
             "NEW_REMITTANCE",
-            "Clean invoice over the threshold with a new remittance or bank account.",
+            "The invoice names a new or changed remittance or bank account.",
         )
     if len(fraud) >= 2:
         return _finding("FRAUD_CLUSTER", "Two or more fraud signals.")

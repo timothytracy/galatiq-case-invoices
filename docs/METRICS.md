@@ -4,17 +4,25 @@ Every replay number is from a committed recording, with no API key. Each set was
 
 | Run | Command | Score | Tokens | Cost USD | Calls | Repeats |
 |---|---|---|---|---|---|---|
-| Samples | `python3 scripts/eval.py --replay recordings/samples.jsonl` | 20/20 | 78797 | 0.117528 | 38 | 0 |
-| Unseen | `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl` | 21/21 | 112186 | 0.163493 | 56 | 0 |
-| Ordered | `python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | 11 steps, all ok | 31413 | 0.048786 | 12 | 0 |
-| Loop | `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` | 3/3 | 15073 | 0.021749 | 8 | 0 |
-| Fraud | `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` | 5/5 | 31908 | 0.051323 | 10 | 0 |
+| Samples | `python3 scripts/eval.py --replay recordings/samples.jsonl` | 20/20 | 79866 | 0.117968 | 36 | 0 |
+| Unseen | `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl` | 21/21 | 106322 | 0.155498 | 47 | 0 |
+| Ordered | `python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | 11 steps, all ok | 32572 | 0.050256 | 12 | 0 |
+| Loop | `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` | 3/3 | 15577 | 0.022305 | 8 | 0 |
+| Fraud | `python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl` | 5/5 | 34641 | 0.057444 | 10 | 0 |
+| Pass list | `python3 scripts/eval.py --invoices data/passlist_invoices --answer-key data/passlist_answer_key.json --replay recordings/passlist.jsonl` | 5/5 | 14088 | 0.020765 | 5 | 0 |
 
-Each command exited 0. Fraud review held invoice 1004 as `FRAUD_SUSPECTED` on its vendor address, which is its label; an approve is also accepted ([why](ANSWER_KEY.md#rulings-on-1003-and-1004)). Under the strict-approve label 1004 had when these sets were recorded, samples scored 19/20 and the ordered scenario failed; the recordings were not changed. The ordered scenario expects 1004 held and a ledger of two rows, and also accepts 1004 paid and a ledger of three. Either way `invoice_1004_revised.json` is a `REVISED_INVOICE` hold. The ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf`.
+Each command exited 0. Fraud review held invoice 1004 as `FRAUD_SUSPECTED` on its vendor address, which is its label; an approve is also accepted ([why](ANSWER_KEY.md#rulings-on-1003-and-1004)). The ordered scenario expects 1004 held and a ledger of two rows, and also accepts 1004 paid and a ledger of three. Either way `invoice_1004_revised.json` is a `REVISED_INVOICE` hold. The ledger line was `ledger 2 rows: invoice_1001.txt, invoice_1011.pdf`.
 
 The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key.
 
 No replay call was blocked by the tool cap. No replay result had `tool_cap_hit` or `forced_final_turn`.
+
+## What recording these sets changed
+
+These six recordings replace the earlier five because the prompts changed: critique now sees the page, and extraction returns the quote and the action behind an instructions flag. Two first attempts missed a label, and neither label was changed:
+
+- In the first two recordings of the unseen set, Grok flagged 2003's `VOID quote Q-1844…` line as instructions to the system, with that line as its quote. A model-only flag then held a clean invoice. The fix was a structured field: extraction says what the wording asks for (approve, pay, skip the review, ignore the rules, or other), and code accepts a model-only flag only for one of the first four. Grok calls 2003's line `other` and 2134's `skip_review` or `pay`.
+- In the next recording, the unaccepted flag still reached the audit prompt, and audit sent 2003 back twice before it passed. Ingestion now clears a flag code did not accept, keeping the quote and action in the record. The unseen set was recorded again with no send-back.
 
 ## Cost method
 
@@ -26,33 +34,27 @@ Fraud review's share of each recording:
 
 | Set | Reviews | Tokens | Reasoning tokens | Cost USD |
 |---|---|---|---|---|
-| Samples | 7 | 13217 | 6707 | 0.025608 |
-| Unseen | 8 | 16692 | 8883 | 0.032788 |
-| Ordered | 3 | 6026 | 3239 | 0.011908 |
-| Loop | 1 | 1844 | 895 | 0.003536 |
-| Fraud | 5 | 11647 | 6549 | 0.023409 |
+| Samples | 7 | 12323 | 5835 | 0.023373 |
+| Unseen | 8 | 16504 | 8683 | 0.032318 |
+| Ordered | 3 | 5831 | 3036 | 0.011420 |
+| Loop | 1 | 1719 | 781 | 0.003224 |
+| Fraud | 5 | 13724 | 8649 | 0.028601 |
+| Pass list | 1 | 1718 | 785 | 0.003245 |
 
 ## Live runs
 
-The five recordings above are live runs. The fraud set also ran live three more times on 2026-11-02 PT, without recording, and scored 5/5 each time: 2121, 2124, and 2125 were `FRAUD_SUSPECTED` holds, and 2123 and 2126 were paid. Those runs kept only their score lines.
+The six recordings above are live runs. Samples and unseen also ran live three more times on 2026-11-02 PT, without recording, and scored perfectly each time. 1004 was a `FRAUD_SUSPECTED` hold in all four samples runs. The unseen runs used the final code. The samples runs came before the last ingestion change, which only clears an instructions flag code did not accept; the samples recording replays unchanged under it. A run without `--record` does not print a cost, so these rows have none. Wall time is the whole CLI command, with the invoices run one after another.
 
-Before fraud review, main's live runs were on 2026-11-01 PT, commit `400d7b9`. Each cost is the captured usage priced at the rates above. Wall time is the whole CLI command, end minus start, with the invoices run one after another.
+| Set | Score | Wall s |
+|---|---|---|
+| samples | 20/20 | 98 |
+| samples | 20/20 | 136 |
+| samples | 20/20 | 106 |
+| unseen | 21/21 | 143 |
+| unseen | 21/21 | 134 |
+| unseen | 21/21 | 133 |
 
-| Set | Score | Cost USD | Wall s |
-|---|---|---|---|
-| samples | 20/20 | 0.102653 | 62 |
-| samples | 20/20 | 0.098994 | 58 |
-| samples | 20/20 | 0.098465 | 57 |
-| unseen | 21/21 | 0.134998 | 82 |
-| unseen | 21/21 | 0.119826 | 63 |
-| unseen | 21/21 | 0.118861 | 62 |
-| ordered | 11 steps ok, ledger matches | 0.047564 | 28 |
-
-One unseen run hit the tool-call cap on `invoice_2106`. The forced final turn still gave the correct outcome.
-
-Per-invoice time is wall seconds divided by the invoice count, to two decimal places. Per-invoice cost is the run cost divided by the invoice count, half up to six decimal places. Samples are 20 invoices. Unseen are 21.
-
-Main, live: 2.85–3.90 s and $0.004923–$0.006428 per invoice. The low time is 57/20. The high time is 82/21. The low cost is $0.098465/20. The high cost is $0.134998/21.
+Per invoice that is 4.90–6.81 s: 98/20 is the low and 143/21 is the high. From the recordings, per-invoice cost is $0.005898 for samples ($0.117968/20) and $0.007405 for unseen ($0.155498/21).
 
 ## How often each loop fired
 
@@ -64,23 +66,27 @@ python3 scripts/loop_stats.py --replay recordings/unseen.jsonl --invoices data/e
 python3 scripts/loop_stats.py --replay recordings/ordered.jsonl --ordered
 python3 scripts/loop_stats.py --replay recordings/loop.jsonl --invoices data/loop_invoices
 python3 scripts/loop_stats.py --replay recordings/fraud.jsonl --invoices data/fraud_invoices
+python3 scripts/loop_stats.py --replay recordings/passlist.jsonl --invoices data/passlist_invoices
 ```
 
-| Loop | Samples (20) | Unseen (21) | Ordered (11) | Loop (3) | Fraud (5) |
-|---|---|---|---|---|---|
-| Fraud reviews run | 7 | 8 | 3 | 1 | 5 |
-| Fraud-review holds | 1 | 0 | 1 | 0 | 3 |
-| Fraud-review holds dropped by code | 0 | 0 | 0 | 0 | 0 |
-| Audits run | 6 | 9 | 2 | 1 | 2 |
-| Audit send-backs | 0 | 1 | 0 | 0 | 0 |
-| Schema repairs | 0 | 1 | 0 | 0 | 0 |
-| Critiques run | 0 | 1 | 0 | 1 | 0 |
-| Critique holds | 0 | 0 | 0 | 0 | 0 |
-| Fact-guard set-asides | 0 | 2 | 0 | 0 | 0 |
-| Audit tool calls | 38 | 56 | 12 | 8 | 10 |
-| Audits with tools whose verdict was not PASS | 0 | 1 | 0 | 0 | 0 |
-| Model retries | 0 | 0 | 0 | 0 | 0 |
+| Loop | Samples (20) | Unseen (21) | Ordered (11) | Loop (3) | Fraud (5) | Pass list (5) |
+|---|---|---|---|---|---|---|
+| Fraud reviews run | 7 | 8 | 3 | 1 | 5 | 1 |
+| Fraud-review holds | 1 | 0 | 1 | 0 | 3 | 0 |
+| Fraud-review holds dropped by code | 0 | 0 | 0 | 0 | 0 | 0 |
+| Audits run | 6 | 8 | 2 | 1 | 2 | 1 |
+| Audit send-backs | 0 | 0 | 0 | 0 | 0 | 0 |
+| Schema repairs | 0 | 1 | 0 | 0 | 0 | 0 |
+| Critiques run | 0 | 1 | 0 | 1 | 0 | 0 |
+| Critique holds | 0 | 0 | 0 | 0 | 0 | 0 |
+| Fact-guard set-asides | 0 | 2 | 0 | 0 | 0 | 0 |
+| Audit tool calls | 36 | 47 | 12 | 8 | 10 | 5 |
+| Audits with tools whose verdict was not PASS | 0 | 0 | 0 | 0 | 0 | 0 |
+| Model retries | 0 | 0 | 0 | 0 | 0 | 0 |
+| Outcomes changed by fraud review | 1 | 0 | 1 | 0 | 3 | 0 |
+| Outcomes changed by critique | 0 | 0 | 0 | 0 | 0 | 0 |
+| Outcomes changed by audit | 0 | 0 | 0 | 0 | 0 | 0 |
 
-Fraud review runs only on invoices that validation passed. The one hold in samples, and the one in ordered, is 1004. Every fraud-review hold in these runs quoted text that code found on the page, so none was dropped.
+An outcome is changed by a step when validation decided one outcome and the final outcome is different, with that step's code as the primary reason (`outcomes_changed` in the script's output). Fraud review runs only on invoices that validation passed. The one hold in samples, and the one in ordered, is 1004. Every fraud-review hold in these runs quoted text that code found on the page, so none was dropped.
 
-The one audit in unseen that was not PASS is the send-back. The next pass gave the labeled outcome. No tool result disagreed with what code had already checked.
+Critique and audit changed no outcome in these runs. Critique ran on the two invoices over $10,000 that validation passed (2106 and 2117). On 2106 it raised two concerns that the invoice and due dates were in the future, and the fact guard set both aside because neither date is after 2026-11-01. Audit passed every invoice it saw. In these sets both are a second reader that found nothing code had missed. The unit tests cover what happens when one does.

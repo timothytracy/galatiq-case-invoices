@@ -8,6 +8,7 @@ from models import ExtractedInvoice, Finding, PaymentAuthorization, PaymentRecor
 from pipeline.release_record import remember
 from pipeline.stage_log import stage_log
 from decision.invoice_fields import non_usd_message
+from decision.pass_list import failed_checks, pass_checks
 from decision.outcome import HOLD_CODES, PAYMENT_REFUSED, REJECT_CODES, finding_codes
 from decision.policy import POLICY
 from decision.wording import explain
@@ -121,6 +122,8 @@ def _log_payment(state: PipelineState, record: PaymentRecord, findings: list, re
         "outcome": state.outcome,
         "codes": finding_codes(findings),
     }
+    if not release:
+        result["pass_list"] = pass_checks(state.invoice, findings, state.audit_verdict)
     return {
         "payment": record,
         "findings": findings,
@@ -247,6 +250,9 @@ def _payment_blocked(state: PipelineState) -> str:
         for finding in state.validation.findings:
             if finding.code in REJECT_CODES or finding.code in HOLD_CODES:
                 return finding.message
+    failed = failed_checks(invoice, state.findings, state.audit_verdict)
+    if failed:
+        return "pass list failed: " + ", ".join(failed)
     return ""
 
 

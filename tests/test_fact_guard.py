@@ -422,6 +422,15 @@ def _run(path, db_path, handler, as_of=AS_OF):
     )
 
 
+def test_critique_sees_the_page_as_read(tmp_path, db_path):
+    path, body = _big_invoice(tmp_path)
+    fake = FakeLLM(_scripted(body))
+    _run(path, db_path, fake)
+    call = next(messages for messages in fake.calls if task_of(messages) == "critique")
+    assert "invoice_text" in call[0]["content"]
+    assert json.loads(call[1]["content"])["invoice_text"] == path.read_text(encoding="utf-8")
+
+
 def _codes(result) -> list[str]:
     return [finding.code for finding in result["findings"]]
 

@@ -107,10 +107,16 @@ def stage_upload(name: str, data: bytes) -> Path:
 
 
 def _upload_folder() -> Path:
-    """One directory for uploaded invoices. Later uploads reuse it."""
+    """One directory for uploaded invoices. Later uploads reuse it.
+
+    It sits inside the repository (git-ignored output/) because release records
+    are keyed by repo-relative path; a hold outside the repository cannot be released.
+    """
     global _UPLOADS
     if _UPLOADS is None or not _UPLOADS.is_dir():
-        _UPLOADS = Path(tempfile.mkdtemp(prefix="review-upload-"))
+        parent = ROOT / "output" / "uploads"
+        parent.mkdir(parents=True, exist_ok=True)
+        _UPLOADS = Path(tempfile.mkdtemp(prefix="review-upload-", dir=parent))
     return _UPLOADS
 
 

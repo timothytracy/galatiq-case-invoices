@@ -27,6 +27,8 @@ REJECT_CODES = (
 # when a spiked price is present too.
 # AMOUNT_WORDS_MISMATCH and BALANCE_DUE are questions about which amount the
 # vendor bills. They come after the do-not-pay holds and are never payable.
+# ZERO_TOTAL has nothing to pay. PRINTED_TOTAL_MISMATCH means the extraction
+# did not read the printed total; rerun it. Neither is payable.
 HOLD_CODES = (
     "SYSTEM_ERROR",
     "BAD_REASONING",
@@ -37,11 +39,15 @@ HOLD_CODES = (
     "SPLIT_INVOICE",
     "AMOUNT_WORDS_MISMATCH",
     "BALANCE_DUE",
+    "ZERO_TOTAL",
+    "PRINTED_TOTAL_MISMATCH",
     "REVISED_INVOICE",
     "VENDOR_RENAMED",
+    "NEW_VENDOR",
     "NEW_REMITTANCE",
     "FRAUD_CLUSTER",
     "FRAUD_SUSPECTED",
+    "INJECTION_SUSPECTED",
     "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",
@@ -54,10 +60,13 @@ HOLD_CODES = (
 #   REVISED_INVOICE — confirm an unpaid original, or pay only the difference
 #     when that original was already paid.
 #   VENDOR_RENAMED — confirm it is the same company.
+#   NEW_VENDOR — set the vendor up in the vendor master first.
 #   NEW_REMITTANCE — confirm the bank change with the vendor.
 #   FRAUD_CLUSTER — confirm the signals with the vendor, using contacts on file.
 #   FRAUD_SUSPECTED — the fraud review quoted the page; confirm payment details
 #     with the vendor, using contacts on file.
+#   INJECTION_SUSPECTED — one of the two injection checks fired; read the
+#     wording and confirm it is not aimed at the payment system.
 #   PRICE_SPIKE — confirm the price with the vendor.
 #   CRITIQUE_HOLD — review the critique concern. No hard finding is attached.
 #   AUDIT_ESCALATED — the audit sent the invoice to a person, except the
@@ -67,14 +76,17 @@ HOLD_CODES = (
 # NON_USD is never converted, CREDIT_NOTE is a credit, DUPLICATE_INVOICE
 # and SPLIT_INVOICE are already do-not-pay, and AMOUNT_WORDS_MISMATCH and
 # BALANCE_DUE would pay an amount the page does not settle (a person pays the
-# right amount by hand). A new hold code is unpaid until
-# it is added here.
+# right amount by hand), ZERO_TOTAL has nothing to pay, and
+# PRINTED_TOTAL_MISMATCH would pay an amount the page does not print. A new
+# hold code is unpaid until it is added here.
 PAYABLE_HOLD_CODES = (
     "REVISED_INVOICE",
     "VENDOR_RENAMED",
+    "NEW_VENDOR",
     "NEW_REMITTANCE",
     "FRAUD_CLUSTER",
     "FRAUD_SUSPECTED",
+    "INJECTION_SUSPECTED",
     "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",

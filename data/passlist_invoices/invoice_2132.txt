@@ -1,0 +1,16 @@
+INVOICE
+
+Vendor: Halvorsen Industrial
+Invoice Number: INV-2132
+Date: 2026-10-06
+Due Date: 2026-11-05
+
+Items:
+  WidgetA    qty: 1     unit price: $0.00
+
+Subtotal: $0.00
+Tax (0%): $0.00
+Total Amount: $0.00
+
+Payment Terms: Net 30
+Notes: PO-7102. Replacement for a unit returned under warranty. No payment is due.

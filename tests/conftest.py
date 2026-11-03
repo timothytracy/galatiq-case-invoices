@@ -1,5 +1,6 @@
 """Payment keys with no ledger must not leak from one test into the next."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,32 @@ def release_records(tmp_path, monkeypatch):
     """Pipeline release records stay out of the repo logs/ directory."""
 
     monkeypatch.setenv("INVOICE_RELEASE_DIR", str(tmp_path / "releases"))
+
+
+# Vendors that exist only in synthetic test invoices. Tests of the vendor check
+# itself use the committed master through the real_vendor_master fixture.
+TEST_VENDORS = (
+    "Northwind Supply", "Split Synthetic Co.", "New Co", "Other Co", "Old Co",
+    "Acme Supply", "QuickShip", "Gadgets", "Evil Payee LLC",
+)
+
+
+@pytest.fixture(autouse=True)
+def test_vendor_master(tmp_path, monkeypatch):
+    """The committed vendor master plus the synthetic test vendors."""
+
+    committed = json.loads((ROOT / "data" / "vendor_master.json").read_text(encoding="utf-8"))
+    path = tmp_path / "vendor_master.json"
+    path.write_text(json.dumps({"vendors": [*committed["vendors"], *TEST_VENDORS]}), encoding="utf-8")
+    monkeypatch.setenv("VENDOR_MASTER", str(path))
+    return path
+
+
+@pytest.fixture
+def real_vendor_master(monkeypatch):
+    """Only the committed vendor master."""
+
+    monkeypatch.delenv("VENDOR_MASTER", raising=False)
 
 
 @pytest.fixture

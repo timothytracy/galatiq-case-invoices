@@ -1362,6 +1362,25 @@ def test_single_runs_offer_the_revision_difference_once(monkeypatch, capsys):
     assert metrics["Dollars released after review"] == "5,940.00 USD"
 
 
+def test_a_revision_run_first_offers_the_difference_after_the_original_is_released(monkeypatch, capsys):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
+    app.run()
+    _process_path(app, "data/invoices/invoice_1004_revised.json")
+    _process_path(app, "data/invoices/invoice_1004.json")
+    _show(app, "Hold queue")
+    box = next(item for item in app.checkbox if (item.key or "").endswith("-invoice_1004.json"))
+    index = box.key.split("-", 3)[2]
+    app.text_input(key=f"pay-reviewer-{index}-invoice_1004.json").set_value("Ada")
+    app.text_area(key=f"pay-note-{index}-invoice_1004.json").set_value("Vendor verified by phone.")
+    box.set_value(True)
+    _submit_pay(app, "invoice_1004.json", int(index))
+    assert "Paid 1890.00 to Precision Parts Ltd." in capsys.readouterr().out
+    _show(app, "Hold queue")
+    boxes = [item for item in app.checkbox if "1004_revised" in (item.key or "")]
+    assert [item.label for item in boxes] == ["Confirm payment of 4,050.00 USD for invoice_1004_revised.json"]
+
+
 def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=180)

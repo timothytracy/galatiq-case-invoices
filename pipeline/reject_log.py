@@ -8,6 +8,7 @@ from pipeline.payment import not_paid_record
 from pipeline.release_record import remember
 from pipeline.stage_log import stage_log
 from decision.outcome import finding_codes
+from decision.pass_list import pass_checks
 from decision.wording import ACTION, explain
 
 
@@ -56,6 +57,7 @@ def reject_log(state: PipelineState, ledger_path: str | Path | None = None) -> d
         "decision": decision.model_dump(mode="json"),
         "payment": record.model_dump(mode="json"),
         "codes": finding_codes(state.findings),
+        "pass_list": pass_checks(state.invoice, state.findings, state.audit_verdict),
     }
     return {
         "outcome": outcome,

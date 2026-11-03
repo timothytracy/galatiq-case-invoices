@@ -20,7 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def remember(result, ledger_path=None) -> bool | str:
-    """Write the release record after its sha row. False on a disk or database error."""
+    """Write the release record after its sha row. False on a disk or database error.
+
+    A file outside the repository gets no record, and approve_and_pay refuses it
+    with that reason. Review-screen uploads are staged inside the repository.
+    """
 
     data = as_view(result)
     rel = repo_path(_source_of(data))

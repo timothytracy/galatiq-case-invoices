@@ -92,6 +92,30 @@ def test_genuine_review_holds_can_be_paid(folder, name, code, tmp_path, capsys):
     assert not (ROOT / "logs" / f"{name}.release.json").exists()
 
 
+def test_an_uploaded_hold_can_be_released(tmp_path, capsys):
+    from ui.runner import stage_upload
+
+    data = (ROOT / "data/invoices/invoice_1012.txt").read_bytes() + b"\n"
+    staged = stage_upload("uploaded_1012.txt", data)
+    try:
+        result = _run(staged, tmp_path)
+        assert result["outcome"] == "hold"
+        paid = _pay(result, tmp_path)
+        assert paid["result"] == "paid", paid["reason"]
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def test_a_hold_outside_the_repository_says_why_it_cannot_be_released(tmp_path):
+    outside = tmp_path / "invoice_1012.txt"
+    outside.write_bytes((ROOT / "data/invoices/invoice_1012.txt").read_bytes())
+    result = _run(outside, tmp_path)
+    assert result["outcome"] == "hold"
+    refused = _pay(result, tmp_path)
+    assert refused["result"] == "held"
+    assert refused["reason"] == "The invoice file is outside the repository, so it has no release record."
+
+
 def test_closed_or_hard_finding_blocks_a_payable_hold(tmp_path):
     result = _run(ROOT / "data/invoices/invoice_1012.txt", tmp_path)
     key = _edit(result, tmp_path, findings=[
