@@ -2,7 +2,7 @@
 
 These JSONL files are saved model replies. Replay reads them and does not call the network, so a score can be checked with no API key.
 
-Three sets are committed. They were recorded on 2026-11-01 PT.
+Four sets are committed. Samples, unseen, and the ordered ledger were recorded on 2026-11-01 PT.
 
 - `recordings/samples.jsonl` scores `data/invoices/`
 - `recordings/unseen.jsonl` scores `data/extra_invoices/`
