@@ -6,10 +6,13 @@ from decimal import Decimal, InvalidOperation
 
 _NUMBER = r"-?[0-9][0-9,]*(?:\.[0-9]+)?"
 # "Total:", "Total Amount:", "Grand Total:", "Total Due:", or a "total" JSON/XML key.
-# Not "Subtotal". Not "Total Amount in words".
+# Not "Subtotal". Not "Total Amount in words". Whitespace is grouped with the next mark.
 _TOTAL = re.compile(
     rf"""(?imx)(?<![a-z_])["'<]?(?:grand[\s_]+)?total(?:[\s_]+(?:amount|due))?["'>]?
-        \s*[:=>]?\s*["']?\s*\$?\s*({_NUMBER})"""
+        (?:\s*+[:=>])?
+        (?:\s*+["'])?
+        (?:\s*+\$)?
+        \s*+({_NUMBER})"""
 )
 _WORDS = re.compile(
     r"""(?imx)(?:amount|total)[\s_]+in[\s_]+words["'>]?\s*[:=>]\s*["']?([^\n"'<]+)"""
@@ -18,6 +21,7 @@ _WORDS = re.compile(
 # and a CSV row may use a comma. Not a previous, prior, account, or credit
 # balance, and not a balance brought forward. A trailing "credit" is not owed.
 # "Total Due" and "Please remit" are amounts owed, not only a second total.
+# Whitespace is grouped with the next mark, so a long space run is one pass.
 _BALANCE = re.compile(
     rf"""(?imx)
     (?<![a-z_])
@@ -30,13 +34,13 @@ _BALANCE = re.compile(
         | total[\s_]+due
         | please[\s_]+remit
     )
-    (?:\s*\([^)\n]*\))?
+    (?:\s*+\([^)\n]*\))?
     ["'>]?
-    \s*[:,=>]?
-    \s*(?:usd\s+)?
-    ["']?
-    \s*\$?
-    \s*({_NUMBER})
+    (?:\s*+[:,=>])?
+    (?:\s*+usd\s++)?
+    (?:\s*+["'])?
+    (?:\s*+\$)?
+    \s*+({_NUMBER})
     """
 )
 _TRAILING_CREDIT = re.compile(r"(?i)\s*credit\b")
