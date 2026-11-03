@@ -30,6 +30,8 @@ class Policy(BaseModel):
     model_retry_attempts: int = Field(ge=1)
     near_threshold_ratio: Decimal
     price_spike_ratio: Decimal
+    # Shortest quote, after whitespace collapse and casefold, a fraud review hold may rest on.
+    fraud_quote_min_chars: int = Field(ge=1)
     reference_prices: dict[str, Decimal]
 
     @field_validator(
@@ -142,3 +144,4 @@ APPROVAL_THRESHOLD_USD = POLICY.scrutiny_threshold
 CRITIQUE_CAP = POLICY.critique_cap
 MAX_SEND_BACKS = POLICY.audit_send_back_cap
 MONEY = POLICY.money_tolerance
+FRAUD_QUOTE_MIN_CHARS = POLICY.fraud_quote_min_chars

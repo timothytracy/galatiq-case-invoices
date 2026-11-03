@@ -31,12 +31,37 @@ class FakeClock:
         self.slept.append(seconds)
 
 
+FRAUD_PASS = json.dumps(
+    {
+        "verdict": "pass",
+        "innocent_reading": "An ordinary bill from the vendor.",
+        "quote": "",
+        "why": "Nothing on the page makes the innocent reading unlikely.",
+    }
+)
+
+
 class FakeLLM:
-    def __init__(self, handler):
+    """handler answers every task. fraud, when given, answers TASK fraud instead.
+
+    With no fraud handler, TASK fraud gets FRAUD_PASS. Fraud calls go to
+    fraud_calls, not calls, so call counts for the other stages stay the same.
+    """
+
+    def __init__(self, handler, fraud=None):
         self.handler = handler
+        self.fraud = fraud
         self.calls = []
+        self.fraud_calls = []
 
     def request(self, messages, timeout=60):
+        if task_of(messages) == "fraud":
+            self.fraud_calls.append(messages)
+            reply = FRAUD_PASS if self.fraud is None else self.fraud
+            result = reply(messages) if callable(reply) else reply
+            if isinstance(result, Exception):
+                raise result
+            return result
         self.calls.append(messages)
         result = self.handler(messages)
         if isinstance(result, Exception):
@@ -51,7 +76,7 @@ class FakeLLM:
 
 def task_of(messages) -> str:
     for message in messages:
-        first = (message.get("content") or "").splitlines()[0]
+        first = ((message.get("content") or "").splitlines() or [""])[0]
         if first.startswith("TASK "):
             return first.split()[1]
     return ""
@@ -68,8 +93,12 @@ class ScriptedToolModel:
         self.steps = list(steps)
         self.requests = []
         self.tool_requests = []
+        self.fraud_requests = []
 
     def request(self, messages, timeout=60):
+        if task_of(messages) == "fraud":
+            self.fraud_requests.append(messages)
+            return FRAUD_PASS
         self.requests.append({"messages": messages, "timeout": timeout})
         step = self._take()
         if isinstance(step, Exception):
@@ -169,6 +198,8 @@ def scripted(extract_text, *, audits=None, critique=None, before_extract=None, r
             verdict = audit_replies[index]
             feedback = ["due_date is wrong"] if verdict == "SEND_BACK" else []
             return json.dumps({"verdict": verdict, "feedback": feedback, "notes": verdict})
+        if name == "fraud":
+            return FRAUD_PASS
         raise AssertionError(f"unexpected task {name}")
 
     return handler, counts

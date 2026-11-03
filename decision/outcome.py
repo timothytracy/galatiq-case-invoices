@@ -41,6 +41,7 @@ HOLD_CODES = (
     "VENDOR_RENAMED",
     "NEW_REMITTANCE",
     "FRAUD_CLUSTER",
+    "FRAUD_SUSPECTED",
     "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",
@@ -55,6 +56,8 @@ HOLD_CODES = (
 #   VENDOR_RENAMED — confirm it is the same company.
 #   NEW_REMITTANCE — confirm the bank change with the vendor.
 #   FRAUD_CLUSTER — confirm the signals with the vendor, using contacts on file.
+#   FRAUD_SUSPECTED — the fraud review quoted the page; confirm payment details
+#     with the vendor, using contacts on file.
 #   PRICE_SPIKE — confirm the price with the vendor.
 #   CRITIQUE_HOLD — review the critique concern. No hard finding is attached.
 #   AUDIT_ESCALATED — the audit sent the invoice to a person, except the
@@ -71,6 +74,7 @@ PAYABLE_HOLD_CODES = (
     "VENDOR_RENAMED",
     "NEW_REMITTANCE",
     "FRAUD_CLUSTER",
+    "FRAUD_SUSPECTED",
     "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",

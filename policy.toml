@@ -41,6 +41,11 @@ near_threshold_ratio = "0.02"
 # fraud signal.
 price_spike_ratio = "0.50"
 
+# A fraud review hold must quote the page. The quote, with whitespace collapsed
+# and case folded, must be at least this long and appear in the invoice text.
+# Otherwise the hold is dropped and logged.
+fraud_quote_min_chars = 12
+
 # USD reference unit prices. A difference is a warning and does not change the
 # outcome. Non-USD invoices are not compared, because nothing is converted.
 # The inventory table stays the four README stock rows; prices live here.

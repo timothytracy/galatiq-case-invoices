@@ -32,6 +32,7 @@ from tests.fakes import (
 # Process codes, and any code with no rule text, stay out of the enum.
 _PROCESS = {
     "CRITIQUE_HOLD",
+    "FRAUD_SUSPECTED",
     "AUDIT_ESCALATED",
     "SYSTEM_ERROR",
     "BAD_REASONING",

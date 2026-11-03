@@ -117,7 +117,7 @@ def shared_ledger_note(batch_counts: dict | None = None, released: int = 0) -> s
     )
 
 
-TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")
+TRAIL_STAGES = ("ingestion", "validation", "fraud_review", "approval", "critique", "audit", "payment")
 APPROVED = "Approved, no action needed"
 INVOICE_FIELDS = (
     "vendor", "vendor_address", "invoice_number", "invoice_number_raw", "revision",
@@ -399,6 +399,7 @@ def stage_summary(stage: str, result: dict) -> str:
     pairs = {
         "ingestion": [("Vendor", invoice.get("vendor")), ("total", format_amount(invoice.get("total"), invoice.get("currency")))],
         "validation": [("Passed", _yes(result.get("passed"))), ("outcome", result.get("outcome")), ("reason code", result.get("reason_code"))],
+        "fraud_review": [("Verdict", result.get("fraud_verdict")), ("outcome", result.get("outcome"))],
         "approval": [("Decision", decision.get("decision"))],
         "audit": [("Verdict", result.get("verdict")), ("outcome", result.get("outcome"))],
         "payment": [("Status", payment_text(payment.get("status")))],
@@ -487,6 +488,7 @@ _RESULT_KEYS = frozenset({
     "audit_note", "dropped_concerns", "concerns", "stricter", "round", "tool_calls",
     "record", "file", "payment_status", "critique_rounds",
     "tool_cap_hit", "forced_final_turn",
+    "fraud_verdict", "innocent_reading", "quote", "why", "fraud_note",
 })
 _BLOCKED_ERROR = "blocked: tool_cap"
 

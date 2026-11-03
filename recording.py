@@ -15,7 +15,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# Published token rates for grok-4.20-0309-non-reasoning.
+# Published token rates for grok-4.20-0309-non-reasoning and
+# grok-4.20-0309-reasoning, which are the same (checked 2026-11-02).
 # https://docs.x.ai/developers/pricing lists $1.25 input and $2.50 output
 # per 1M tokens below 200k prompt tokens, and $2.50 / $5.00 at or above
 # that. prompt_tokens is not split into cached input, so the whole prompt
@@ -116,12 +117,19 @@ def stable_invoice_path(path: Path, root: Path | None = None) -> Path:
 
 
 def estimate_cost(usages: list[dict]) -> Decimal:
-    """USD estimate from prompt and completion token counts. Six decimal places."""
+    """USD estimate from prompt and completion token counts. Six decimal places.
+
+    Reasoning tokens are billed as output. When the API leaves them out of
+    completion_tokens, total_tokens still counts them, so output is whichever is larger.
+    """
 
     total = Decimal("0")
     for usage in usages:
         prompt = int(usage["prompt_tokens"])
-        completion = int(usage["completion_tokens"])
+        completion = max(
+            int(usage["completion_tokens"]),
+            int(usage.get("total_tokens") or 0) - prompt,
+        )
         if prompt >= LONG_CONTEXT_TOKENS:
             in_rate, out_rate = LONG_INPUT_RATE, LONG_OUTPUT_RATE
         else:

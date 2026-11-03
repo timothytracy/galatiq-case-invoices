@@ -22,7 +22,7 @@ from decision.findings import injection_phrase
 from graph import run_invoice
 from decision.outcome import payment_status
 from parsers import SUFFIXES, parse_file
-from tests.fakes import FakeClock, FakeLLM, ZeroRandom, task_of
+from tests.fakes import FRAUD_PASS, FakeClock, FakeLLM, ZeroRandom, task_of
 
 ROOT = Path(__file__).resolve().parents[1]
 INVOICES = ROOT / "data" / "invoices"
@@ -85,6 +85,8 @@ def handler_for(path: Path):
             return json.dumps({"concerns": ["amount is high"], "stricter": False})
         if name == "audit":
             return json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS"})
+        if name == "fraud":
+            return FRAUD_PASS
         raise AssertionError(f"unexpected task {name}")
 
     return handler
