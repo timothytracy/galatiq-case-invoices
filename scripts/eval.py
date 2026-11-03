@@ -86,6 +86,24 @@ def _accepted_codes(expected: dict) -> set:
     return {KEY_REASON_TO_CODE[name] for name in names if name in KEY_REASON_TO_CODE}
 
 
+def _alternate_hit(expected: dict, actual_outcome: str, actual_code: str | None) -> bool:
+    """True when the result matches one also_accepted_outcomes pair. An unknown reason is warned."""
+
+    for pair in expected.get("also_accepted_outcomes") or []:
+        name = pair.get("primary_reason")
+        if name not in KEY_REASON_TO_CODE:
+            print(
+                f"warning: unknown reason name {name!r} in also_accepted_outcomes",
+                file=sys.stderr,
+            )
+            continue
+        if str(pair.get("outcome") or "").upper() == actual_outcome and (
+            KEY_REASON_TO_CODE[name] == actual_code
+        ):
+            return True
+    return False
+
+
 def grade(result: dict, expected: dict) -> dict:
     """Compare one graph result to one answer-key row.
 
@@ -95,6 +113,10 @@ def grade(result: dict, expected: dict) -> dict:
     MISSING_FIELD, and the recorded model read gives the listed alternate
     TOTAL_MISMATCH. An unknown name in that list is not a code, and it is
     printed rather than dropped quietly. Warnings are informational.
+
+    also_accepted_outcomes lists other outcome and reason pairs the row accepts.
+    invoice_2103.csv is the example: APPROVE, or a HOLD for Audit escalation.
+    The pair must match together.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()
@@ -106,13 +128,17 @@ def grade(result: dict, expected: dict) -> dict:
     else:
         expected_code = expected_name
     accepted = _accepted_codes(expected)
+    outcome_ok = actual_outcome == expected_outcome
+    reason_ok = actual_code in accepted
+    if not (outcome_ok and reason_ok) and _alternate_hit(expected, actual_outcome, actual_code):
+        outcome_ok = reason_ok = True
     codes = set(result_codes(result))
     messages = " ".join(_messages(result)).lower()
     expected_warnings = list(expected.get("warnings") or [])
     matched = [item for item in expected_warnings if _warning_hit(item, codes, messages)]
     return {
-        "outcome_ok": actual_outcome == expected_outcome,
-        "reason_ok": actual_code in accepted,
+        "outcome_ok": outcome_ok,
+        "reason_ok": reason_ok,
         "actual_outcome": actual_outcome,
         "expected_outcome": expected_outcome,
         "actual_code": actual_code,

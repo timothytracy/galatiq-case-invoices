@@ -41,6 +41,10 @@ near_threshold_ratio = "0.02"
 # fraud signal.
 price_spike_ratio = "0.50"
 
+# An audit hold on a warning must quote at least this many characters of the
+# invoice text, after spaces are collapsed. Code checks the quote is on the page.
+audit_quote_min_chars = 12
+
 # USD reference unit prices. A difference is a warning and does not change the
 # outcome. Non-USD invoices are not compared, because nothing is converted.
 # The inventory table stays the four README stock rows; prices live here.

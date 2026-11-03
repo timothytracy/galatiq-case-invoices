@@ -85,12 +85,24 @@ WARNING_CODES = (
     "AUDIT_NOTE",
 )
 
+# Warnings the audit may weigh into an AUDIT_ESCALATED hold, with a quote code checks.
+# PRICE_VARIANCE counts only for a price above its reference.
+# NONCOMMERCIAL_ADDRESS is left out: the extraction model sets it, so the audit
+# would be escalating on a model's own flag.
+ESCALATABLE_WARNING_CODES = (
+    "FRAUD_SIGNAL",
+    "PRICE_VARIANCE",
+)
+
 # Payment records this when it refuses. It does not change the invoice outcome.
 PAYMENT_REFUSED = "PAYMENT_REFUSED"
 
 # The audit uses this sentence when the send-back cap becomes a hold.
 # That case is not a review hold. Other AUDIT_ESCALATED messages still are.
 SEND_BACK_CAP_MESSAGE = "Audit send-back cap reached. Hold, no payment."
+
+# An AUDIT_ESCALATED message that starts with this is a hold on a quoted warning.
+WARNING_HOLD_PREFIX = "Audit held on "
 
 
 def outcome_from_findings(findings: list[Finding]) -> Outcome:

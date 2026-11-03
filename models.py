@@ -204,6 +204,15 @@ class CritiqueDraft(_Loose):
     stricter: bool = False
 
 
+class WarningHold(_Loose):
+    """The audit's case for holding on one warning. Code checks every field."""
+
+    code: str = ""
+    innocent_reading: str = ""
+    quote: str = ""
+    why: str = ""
+
+
 class AuditDraft(_Loose):
     verdict: AuditVerdict
     # A string is a note. An object is a structured claim. See FactConcern.
@@ -211,6 +220,13 @@ class AuditDraft(_Loose):
     notes: str = ""
     # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
+    # Only read when every cited code is a warning. Anything but an object is no case.
+    warning_hold: WarningHold | None = None
+
+    @field_validator("warning_hold", mode="before")
+    @classmethod
+    def _hold_object(cls, value):
+        return value if isinstance(value, dict) else None
 
 
 class PipelineState(BaseModel):

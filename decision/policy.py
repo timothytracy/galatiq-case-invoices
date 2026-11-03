@@ -30,6 +30,7 @@ class Policy(BaseModel):
     model_retry_attempts: int = Field(ge=1)
     near_threshold_ratio: Decimal
     price_spike_ratio: Decimal
+    audit_quote_min_chars: int = Field(ge=1)
     reference_prices: dict[str, Decimal]
 
     @field_validator(
@@ -142,3 +143,4 @@ APPROVAL_THRESHOLD_USD = POLICY.scrutiny_threshold
 CRITIQUE_CAP = POLICY.critique_cap
 MAX_SEND_BACKS = POLICY.audit_send_back_cap
 MONEY = POLICY.money_tolerance
+AUDIT_QUOTE_MIN_CHARS = POLICY.audit_quote_min_chars

@@ -328,6 +328,75 @@ def _price_findings(
     return findings
 
 
+def above_reference_items(
+    invoice: ExtractedInvoice, stock: dict[str, int], currency: str
+) -> dict[str, list[Decimal]]:
+    """Item name to the unit prices printed above its USD reference. Same comparison as the price check."""
+
+    if currency not in POLICY.allowed_currencies:
+        return {}
+    above: dict[str, list[Decimal]] = {}
+    for line in invoice.line_items:
+        ref = POLICY.reference_prices.get(canonical_item(line.item, stock))
+        if ref is None or line.unit_price is None:
+            continue
+        price = as_money(abs(line.unit_price))
+        if different(price, ref) and price > ref:
+            above.setdefault(line.item, []).append(price)
+    return above
+
+
+def normalize_quote(text: str | None) -> str:
+    """Spaces collapsed and case folded, the form a quote is compared in."""
+
+    return " ".join((text or "").split()).casefold()
+
+
+def warning_trigger_lines(
+    code: str,
+    invoice: ExtractedInvoice,
+    raw_text: str,
+    stock: dict[str, int],
+    currency: str,
+) -> list[str]:
+    """The raw-text lines that raised this warning, normalized.
+
+    A match that runs across a line break takes every line it touches.
+    FRAUD_SIGNAL uses the fraud patterns. PRICE_VARIANCE uses the printed
+    unit price of each above-reference line. Any other code has none.
+    """
+
+    text = raw_text or ""
+    spans: list[tuple[int, int]] = []
+    if code == "FRAUD_SIGNAL":
+        for pattern in (_URGENCY, _WIRE, _NEW_ACCOUNT):
+            spans.extend(match.span() for match in pattern.finditer(text))
+    elif code == "PRICE_VARIANCE":
+        for prices in above_reference_items(invoice, stock, currency).values():
+            for price in prices:
+                for pattern in _price_patterns(price):
+                    spans.extend(match.span() for match in pattern.finditer(text))
+    lines = []
+    for start, end in spans:
+        left = text.rfind("\n", 0, start) + 1
+        right = text.find("\n", end)
+        line = normalize_quote(text[left : len(text) if right < 0 else right])
+        if line and line not in lines:
+            lines.append(line)
+    return lines
+
+
+def _price_patterns(price: Decimal) -> list[re.Pattern]:
+    """How a unit price can be printed: 1050.00, 1,050.00, and for a whole amount 1050 or 1,050."""
+
+    exact = show_money(price)
+    forms = [exact, f"{Decimal(exact):,.2f}"]
+    whole = exact.split(".")[0]
+    if Decimal(exact) == Decimal(whole):
+        forms.extend([whole, f"{int(whole):,}"])
+    return [re.compile(rf"(?<![0-9]){re.escape(form)}(?![0-9])") for form in dict.fromkeys(forms)]
+
+
 def _descriptor_findings(invoice: ExtractedInvoice) -> list[Finding]:
     return [
         _finding(

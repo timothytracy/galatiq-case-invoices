@@ -10,6 +10,7 @@ from decision.invoice_fields import show_qty, summed_quantities
 from decision.outcome import (
     PAYMENT_REFUSED,
     REJECT_CODES,
+    WARNING_HOLD_PREFIX,
     outcome_from_findings,
     primary_code,
 )
@@ -79,6 +80,9 @@ ACTION = {
     ),
 }
 
+# The next step for an AUDIT_ESCALATED hold on a quoted warning. A reviewer can release it.
+WARNING_HOLD_ACTION = "Review the quoted text with the vendor, then release or keep the hold."
+
 RULE_TEXT = {
     "BAD_QUANTITY": "A quantity of zero or below, or not a number, is a data integrity failure.",
     "MISSING_FIELD": "Vendor, line items, due date, and total are required.",
@@ -103,7 +107,7 @@ RULE_TEXT = {
     "REVISED_INVOICE": "A revised invoice is a hold until someone confirms it replaces an unpaid original.",
     "CREDIT_NOTE": "A labeled credit note whose math reconciles is a hold. Nothing is paid.",
     "FRAUD_CLUSTER": "Two or more fraud signals are a hold.",
-    "FRAUD_SIGNAL": "A single fraud signal is a warning.",
+    "FRAUD_SIGNAL": "A single fraud signal is a warning. The audit may hold it with a quoted reason.",
     "NEW_REMITTANCE": "A new bank account on a clean invoice over the threshold is a hold.",
     "PRICE_SPIKE": (
         f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "
@@ -131,7 +135,10 @@ PASSED_RULES = [
     "Item quantities are summed and compared with the fixed inventory snapshot. An equal quantity passes.",
     f"Printed total must match the lines, tax, and shipping within {MONEY}.",
     f"Currency must be {', '.join(POLICY.allowed_currencies)}. Any other currency is a hold.",
-    "One fraud signal is a warning. Two or more, with no reject, are a hold.",
+    (
+        "One fraud signal is a warning. The audit may hold it with a quoted reason. "
+        "Two or more, with no reject, are a hold."
+    ),
     (
         f"A unit price {POLICY.price_spike_ratio * 100:.0f}% or more above its "
         "USD reference is a hold. A smaller difference is a price-variance warning."
@@ -311,4 +318,9 @@ def _action_text(findings: list[Finding], outcome: Outcome, code: str | None) ->
             if name in present and step and step not in steps:
                 steps.append(step)
         return " ".join(steps) or ACTION.get(code)
+    if code == "AUDIT_ESCALATED" and any(
+        finding.code == code and finding.message.startswith(WARNING_HOLD_PREFIX)
+        for finding in findings
+    ):
+        return WARNING_HOLD_ACTION
     return ACTION.get(code)
