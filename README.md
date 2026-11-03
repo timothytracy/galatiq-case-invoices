@@ -99,6 +99,41 @@ When we tried Grok lookup tools on the critique in [PR #20](https://github.com/t
 
 Duplicate detection almost made this list. At first I judged each invoice file on its own content and listed duplicates as a known limitation. Then I thought about what that means in practice: a system that pays every invoice it is shown pays the same bill twice whenever a vendor resends it, sends it in another format, or sends a revised copy, and over time that loses real money. So I built a lasting payments ledger instead. Validation checks it on arrival for an exact duplicate, the same invoice in a different format, a revision, or a split, where invoices under $10,000 from one vendor within 30 days add up to more than that. Any match is a hold, not a second payment. The audit step can read the same ledger before payment, and a unique index on vendor and invoice number blocks a second payment even if both checks miss.
 
+## Agents
+
+`graph.py` wires a LangGraph `StateGraph`. Each agent is a node. Ingestion, approval, critique, and audit call Grok. Validation, payment, and `reject_log` are code. Critique returns to approval. Audit can send the extraction back to ingestion. Holds and rejects both end at `reject_log`. Nothing on that path is paid. Payment runs only after an audit PASS on an approve.
+
+```mermaid
+flowchart TD
+  startNode([Start]) --> ingestion
+  ingestion["ingestion (Grok)"]
+  validation["validation (code)"]
+  approval["approval (Grok)"]
+  critique["critique (Grok)"]
+  audit["audit (Grok)"]
+  payment["payment (code)"]
+  rejectLog["reject_log (code)"]
+  finishNode([End])
+  ingestion -->|"invoice extracted"| validation
+  ingestion -->|"unreadable file or model failure"| rejectLog
+  validation -->|"checks pass"| approval
+  validation -->|"reject or hold"| rejectLog
+  approval -->|"USD total over 10000 and critique not used"| critique
+  approval -->|"otherwise"| audit
+  approval -->|"model failure or no decision"| rejectLog
+  critique -->|"back to approval"| approval
+  critique -->|"model failure"| rejectLog
+  audit -->|"SEND_BACK and send-backs under 3"| ingestion
+  audit -->|"outcome approve"| payment
+  audit -->|"reject, hold, model failure, or send-back cap"| rejectLog
+  payment --> finishNode
+  rejectLog --> finishNode
+```
+
+### Why code decides
+
+Grok does the reading and the judging: it extracts the fields, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+
 ## How to run
 
 Replay first. No API key.
@@ -114,7 +149,7 @@ python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl
 
 Each of those three exits 0 when the score is perfect. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate code from the answer key. Add `--verbose` to also see each stage's JSON record. CI runs these three and the loop replay below, four in all, and does not set an API key.
 
-**Loops in action.** Critique and audit are defense in depth behind validation: code decides first, and the loops can only tighten what it passed. In one live run of the loop set in `data/loop_invoices/`, 2117 was approved after critique and audit passed, and 2118 and 2120 were held at validation and not paid. The model read 2118's total from the words ($10,250, not the printed $10,520); a fake-model test covers the faithful printed-total read. Replay it with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too). If Grok reads 2120's $8,000 balance as the total, it is rejected for TOTAL_MISMATCH instead, still unpaid, and a fake-model test covers that.
+**Loops in action.** In one live run of the loop set in `data/loop_invoices/`, the loops ran on one invoice and changed nothing. 2117, a clean $10,625 bill, went through critique and audit, and both passed it, so it was paid. 2118 and 2120 were held at validation, before any loop ran, because each page states a second amount. When Grok read 2118's total from the words ($10,250) instead of the printed $10,520, the hold still caught it. Fake-model tests cover the printed-total read, and the case where 2120's $8,000 balance is read as the total, which is a `TOTAL_MISMATCH` reject and still unpaid. Replay with `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` (CI does too).
 
 ### Reviewer quick path
 
