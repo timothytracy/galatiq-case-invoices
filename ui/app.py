@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+from decimal import Decimal
 from html import escape
 from pathlib import Path
 
@@ -281,7 +282,12 @@ def screen_holds(entries: list[dict], live: bool) -> None:
     for index, (entry, view) in enumerate(queued):
         pipeline = saved_result(entry)
         ledger = entry.get("ledger_path") or _session_ledger(live)
-        view = {**view, "amount": payable_amount(pipeline, ledger)}
+        amount = payable_amount(pipeline, ledger)
+        if view.get("payment_status") == "paid":
+            paid_amount = (view.get("payment") or {}).get("amount")
+            if paid_amount not in (None, ""):
+                amount = paid_amount
+        view = {**view, "amount": amount}
         st.subheader(view["file"])
         _facts(
             ("Reason code", "Amount", "Payment"),
@@ -309,7 +315,7 @@ def screen_holds(entries: list[dict], live: bool) -> None:
             if st.form_submit_button("Save review"):
                 _save_hold(view, choice, note)
         paid_row = session_paid_row(entries, view)
-        if can_pay(view) and paid_row is None:
+        if can_pay(view) and (paid_row is None or _difference_still_owed(view)):
             _pay_form(index, entry, view, live)
         elif paid_row is not None and not released(view):
             st.caption(already_paid_notice(view, paid_row))
@@ -480,7 +486,7 @@ def _process(
             rows[0]["display_name"] = shown
         _replace_entry(rows[0])
     else:
-        st.session_state["entries"] = rows
+        st.session_state["entries"] = _with_paid_runs(rows)
     st.session_state["shared_ledger_batch"] = not single
     label = rows[0].get("display_name") if single else ""
     notice = f"Processed {label or paths[0].name}." if single else f"Processed {len(rows)} invoices."
@@ -527,18 +533,62 @@ def _notice(notice: str, entries: list[dict] | None = None, error: str | None = 
         st.session_state["error"] = error
     st.rerun()
 
+def _with_paid_runs(rows: list[dict]) -> list[dict]:
+    """Keep a paid run when a new batch would replace it with an unpaid one."""
+
+    previous = st.session_state.get("entries") or []
+    paid_names = set()
+    paid_rows = []
+    for row in previous:
+        name = (row.get("state") or {}).get("filename")
+        if name and invoice_view(row).get("payment_status") == "paid":
+            paid_names.add(name)
+            paid_rows.append(row)
+    fresh = []
+    for row in rows:
+        name = (row.get("state") or {}).get("filename")
+        if name in paid_names and invoice_view(row).get("payment_status") != "paid":
+            continue
+        fresh.append(row)
+    return paid_rows + fresh
+
+
 def _replace_entry(entry: dict) -> None:
-    """Replace an unpaid run of the same file. A paid run stays, so its payment remains in the metrics."""
+    """Replace an unpaid run of the same file. A paid run stays, and an unpaid rerun is not added beside it."""
     filename = (entry.get("state") or {}).get("filename")
+    new_paid = invoice_view(entry).get("payment_status") == "paid"
     kept = []
+    already_paid = False
     for row in st.session_state.get("entries") or []:
         same = (row.get("state") or {}).get("filename") == filename
-        if same and invoice_view(row).get("payment_status") != "paid":
+        if same and invoice_view(row).get("payment_status") == "paid":
+            already_paid = True
+            kept.append(row)
+            continue
+        if same:
             continue
         kept.append(row)
-    kept.append(entry)
+    if not (already_paid and not new_paid):
+        kept.append(entry)
     kept.sort(key=lambda row: ((row.get("state") or {}).get("filename") or "", row.get("display_name") or ""))
     st.session_state["entries"] = kept
+
+def _difference_still_owed(view: dict) -> bool:
+    """True when this revision hold still has a positive unpaid difference."""
+
+    if view.get("payment_status") == "paid":
+        return False
+    for item in view.get("findings") or []:
+        if not isinstance(item, dict) or item.get("code") != "REVISED_INVOICE":
+            continue
+        try:
+            owed = Decimal(str(item.get("owed")))
+        except Exception:
+            continue
+        if owed > 0:
+            return True
+    return False
+
 
 def _review_where() -> Path:
     try:
@@ -588,7 +638,7 @@ def _pay_hold(entry: dict, view: dict, reviewer: str, note: str, confirmed: bool
     if missing:
         return False
     already = session_paid_row(st.session_state.get("entries") or [], view)
-    if already is not None:
+    if already is not None and not _difference_still_owed(view):
         st.error(already_paid_notice(view, already))
         return False
     pipeline = saved_result(entry)

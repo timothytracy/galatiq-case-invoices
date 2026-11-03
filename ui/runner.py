@@ -44,7 +44,11 @@ def ensure_db(path: Path | None = None) -> Path:
 
 def to_jsonable(value):
     if isinstance(value, BaseModel):
-        return to_jsonable(value.model_dump(mode="json"))
+        dumped = value.model_dump(mode="json")
+        owed = getattr(value, "owed", None)
+        if isinstance(owed, Decimal):
+            dumped["owed"] = format(owed, "f")
+        return to_jsonable(dumped)
     if isinstance(value, dict):
         return {str(key): to_jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -113,8 +117,8 @@ def _upload_folder() -> Path:
 def session_paid_row(entries, view: dict) -> dict | None:
     """A paid row for this bill in any session ledger, or None.
 
-    The pay form stays hidden when this returns a row. A revised invoice
-    with an unpaid difference can be allowed here later.
+    The pay form stays hidden when this returns a row, unless the hold is a
+    revision that still has an unpaid difference.
     """
     if not isinstance(view, dict):
         return None

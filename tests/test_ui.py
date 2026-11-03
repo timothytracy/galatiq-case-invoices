@@ -1104,7 +1104,12 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
         entry for entry in shared if entry["state"]["filename"] == "invoice_1004_revised.json"
     ))
     assert revised["outcome"] == "hold"
-    assert revised["reason_code"] == "DUPLICATE_INVOICE"
+    assert revised["reason_code"] == "REVISED_INVOICE"
+    assert any(
+        Decimal(str(item.get("owed"))) == Decimal("4050.00")
+        for item in revised["findings"]
+        if isinstance(item, dict) and item.get("owed") not in (None, "")
+    )
     revised_alone = invoice_view(run_one(
         ROOT / "data" / "invoices" / "invoice_1004_revised.json", db_path, replay=SAMPLES,
     ))
@@ -1294,12 +1299,43 @@ def test_pay_then_rerun_keeps_the_payment(monkeypatch):
         entry for entry in app.session_state["entries"]
         if entry["state"]["filename"] == "invoice_1012.pdf"
     ]
-    assert len(copies) == 2
-    assert sum(invoice_view(entry)["payment_status"] == "paid" for entry in copies) == 1
+    assert len(copies) == 1
+    assert invoice_view(copies[0])["payment_status"] == "paid"
     _show(app, "Hold queue")
     assert not _pay_buttons(app)
     metrics = _released_metrics(app)
     assert metrics["Released after review"] == "1"
+    assert metrics["Dollars released after review"] == "9,975.00 USD"
+    assert metrics["Dollars held"] == "0.00 USD"
+
+
+def test_second_batch_does_not_reopen_a_paid_form(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=180)
+    app.run()
+    next(button for button in app.button if button.label == "Process data/invoices").click().run()
+    assert not app.exception, app.exception
+    _show(app, "Hold queue")
+    box = next(item for item in app.checkbox if (item.key or "").endswith("invoice_1012.pdf"))
+    index = box.key.split("-", 3)[2]
+    app.text_input(key=f"pay-reviewer-{index}-invoice_1012.pdf").set_value("Ada")
+    app.text_area(key=f"pay-note-{index}-invoice_1012.pdf").set_value("Same company.")
+    box.set_value(True)
+    _submit_pay(app, "invoice_1012.pdf", int(index))
+    before = _released_metrics(app)
+    _show(app, "Run or load")
+    next(button for button in app.button if button.label == "Process data/invoices").click().run()
+    assert not app.exception, app.exception
+    paid = [
+        entry for entry in app.session_state["entries"]
+        if entry["state"]["filename"] == "invoice_1012.pdf" and invoice_view(entry)["payment_status"] == "paid"
+    ]
+    assert len(paid) == 1
+    _show(app, "Hold queue")
+    assert not any("1012" in (getattr(box, "key", "") or "") for box in app.checkbox)
+    assert not any("1012" in (getattr(button, "key", "") or "") for button in _pay_buttons(app))
+    metrics = _released_metrics(app)
+    assert metrics["Released after review"] == before["Released after review"] == "1"
     assert metrics["Dollars released after review"] == "9,975.00 USD"
 
 
