@@ -341,10 +341,13 @@ def summarize(entries: list[dict]) -> dict:
         amount, currency = _decimal(view["amount"]), view["currency"]
         if released(view):
             paid_holds["count"] += 1
-            if amount is not None and currency == "USD":
-                paid_holds["dollars"] += amount
-            elif amount is not None and currency:
-                paid_holds["other"][currency] = paid_holds["other"].get(currency, Decimal("0")) + amount
+            paid_amount = _decimal((view.get("payment") or {}).get("amount"))
+            if paid_amount is None:
+                paid_amount = amount
+            if paid_amount is not None and currency == "USD":
+                paid_holds["dollars"] += paid_amount
+            elif paid_amount is not None and currency:
+                paid_holds["other"][currency] = paid_holds["other"].get(currency, Decimal("0")) + paid_amount
         else:
             if outcome in counts:
                 counts[outcome] += 1

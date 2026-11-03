@@ -374,4 +374,9 @@ def _action_text(
             owed = _owed_amount(finding)
             if owed is not None and currency:
                 return difference_action(owed, currency)
+    if code == "DUPLICATE_INVOICE":
+        for finding in findings:
+            text = finding.get("message") if isinstance(finding, dict) else getattr(finding, "message", "")
+            if "unconfirmed payment" in (text or "") or "pending payment" in (text or ""):
+                return "Do not pay it. The earlier payment is not confirmed."
     return ACTION.get(code)

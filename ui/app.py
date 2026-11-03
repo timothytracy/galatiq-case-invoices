@@ -140,7 +140,7 @@ def screen_run(mode: str) -> None:
             type=["txt", "pdf", "json", "csv", "xml"],
             key="invoice_upload",
         )
-        st.caption("Each replay run keeps the temporary ledger that run wrote.")
+        st.caption("Replay runs in this session share one temporary ledger.")
         if not st.session_state.get("entries"):
             st.caption(shared_ledger_note())
     with right:
@@ -464,10 +464,9 @@ def _process(
         if missing:
             st.error("\n\n".join(NEEDS_KEY.format(file=path.name) for path in missing))
             return
-    # Replay uses a new ledger for this click, so a second pipeline run is not
-    # a duplicate of the first. The pay form also reads every ledger already
-    # in the session, and a paid entry is kept when the same file is run again.
-    ledger = PAYMENTS_DB if mode == "live" else temporary_ledger()
+    # Replay runs in one session share a ledger, so a later invoice can see
+    # an earlier payment. Live mode uses the payments file.
+    ledger = PAYMENTS_DB if mode == "live" else _session_ledger(False)
     rows, progress, status = [], st.progress(0.0), st.empty()
     try:
         for index, path in enumerate(paths, start=1):
@@ -534,23 +533,27 @@ def _notice(notice: str, entries: list[dict] | None = None, error: str | None = 
     st.rerun()
 
 def _with_paid_runs(rows: list[dict]) -> list[dict]:
-    """Keep a paid run when a new batch would replace it with an unpaid one."""
+    """Replace the session with this batch. One row per file, and a paid file stays paid."""
 
     previous = st.session_state.get("entries") or []
-    paid_names = set()
-    paid_rows = []
+    paid_by_name = {}
     for row in previous:
         name = (row.get("state") or {}).get("filename")
         if name and invoice_view(row).get("payment_status") == "paid":
-            paid_names.add(name)
-            paid_rows.append(row)
+            paid_by_name[name] = row
     fresh = []
+    seen = set()
     for row in rows:
         name = (row.get("state") or {}).get("filename")
-        if name in paid_names and invoice_view(row).get("payment_status") != "paid":
-            continue
-        fresh.append(row)
-    return paid_rows + fresh
+        seen.add(name)
+        if name in paid_by_name and invoice_view(row).get("payment_status") != "paid":
+            fresh.append(paid_by_name[name])
+        else:
+            fresh.append(row)
+    for name, row in paid_by_name.items():
+        if name not in seen:
+            fresh.append(row)
+    return fresh
 
 
 def _replace_entry(entry: dict) -> None:

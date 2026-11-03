@@ -241,6 +241,8 @@ def test_pending_or_failed_original_is_not_a_payable_difference(tmp_path):
         second = _run(revised_path, tmp_path, ledger=ledger)
         assert second["reason_code"] == "DUPLICATE_INVOICE"
         assert "Pay only the difference" not in (second.get("action") or "")
+        assert "already paid" not in (second.get("action") or "").lower()
+        assert "not confirmed" in (second.get("action") or "")
         text = " ".join(
             item.message if not isinstance(item, dict) else item.get("message") or ""
             for item in second["findings"]
