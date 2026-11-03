@@ -1,11 +1,12 @@
 """Every layout from the amount-owed probe. Fake model, no network.
 
 A case marked hold is an amount owed below the total. A case marked paid
-is ordinary wording, a credit marker, or an amount equal to the total.
+is ordinary wording, or an amount equal to the total.
 """
 
 import importlib.util
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -77,7 +78,11 @@ HOLD = {
     "q12 outstanding": _line("Outstanding: $8,000.00"),
     "q13 after deposit paren": _line("Amount Due (after deposit): $8,000.00"),
     "q14 credit card fee line": _line("Balance Due: $8,000.00\nCredit card payments incur a 3% fee."),
+    "q15 two columns": _line("Balance Due        Payment Terms\n$8,000.00          Net 30"),
     "q16 blank line": _line("Balance Due:\n\n$8,000.00"),
+    "q17 european grouping": _line("Balance Due: 8.000,00"),
+    # The credit marker is not the amount. The deposit line under the total is.
+    "q18 deposit under a credit line": _line("Balance Due: $8,000.00 CR"),
     "q19 paren note": _line("Amount Due: $8,000.00 (balance after deposit)"),
     "q20 remit the balance of": _line("Please remit the balance of $8,000.00"),
     "q21 remit by date": _line("Remit $8,000.00 by 2026-10-30"),
@@ -94,7 +99,6 @@ HOLD = {
 }
 
 PAID = {
-    "q18 cr marker": _line("Balance Due: $8,000.00 CR"),
     "m01 date month": _add("Amount due: 15 November 2026"),
     "m02 slash date": _add("Balance due: 10/30/2026"),
     "m03 iso date": _add("Total due: 2026-10-15"),
@@ -216,3 +220,80 @@ def test_pdf_date_and_street_are_paid(db_path, tmp_path):
         assert "BALANCE_DUE" not in _codes(result), name
         assert result["outcome"] == "approve", name
         assert result["payment"].status == "paid", name
+
+
+def _plain(line, total="10,500.00"):
+    """A page with a total and no deposit line, so only the line itself can be owed."""
+
+    return f"Vendor: Widgets Inc.\nWidgetA qty 2 @ 250\nTotal Amount: ${total}\n{line}\n"
+
+
+def test_currency_words_of_totals_and_split_labels_are_amounts():
+    owed = {
+        "Balance Due: 8000 USD": Decimal("8000"),
+        "Balance Due: 8,000 USD": Decimal("8000"),
+        "Balance Due: 8000 dollars": Decimal("8000"),
+        "Balance Due: 8000 of 10500": Decimal("8000"),
+        "Balance Due: 8,000 of 10,500": Decimal("8000"),
+        "Balance\u00a0Due: $8,000.00": Decimal("8000.00"),
+        "Balance Due:\n\n\n$8,000.00": Decimal("8000.00"),
+        "Balance Due\n(after deposit)\n$8,000.00": Decimal("8000.00"),
+        "Balance\n\nDue\n\n$8,000.00": Decimal("8000.00"),
+        "Balance Due\n8000": Decimal("8000"),
+        "Balance Due        Payment Terms\n$8,000.00          Net 30": Decimal("8000.00"),
+        "Payment Terms      Balance Due\nNet 30             $8,000.00": Decimal("8000.00"),
+        "Balance Due: 8.000,00": Decimal("8000.00"),
+        '<AmountDue currency="USD">8000.00</AmountDue>': Decimal("8000.00"),
+    }
+    for line, amount in owed.items():
+        assert balances_due(_plain(line)) == [amount], line
+    three = (
+        "Subtotal        Deposit        Balance Due\n"
+        "$10,500.00      -$2,500.00     $8,000.00"
+    )
+    assert balances_due(_plain(three)) == [Decimal("8000.00")]
+    freight = _plain(
+        "Freight            Balance Due\n$125.00            $10,625.00",
+        total="10,625.00",
+    )
+    assert balances_due(freight) == [Decimal("10625.00")]
+
+
+def test_ids_dates_phones_and_unread_phrases_are_not_amounts():
+    ignored = [
+        "Batch: REMIT2026",
+        "Customer ID: BALANCE2026",
+        "Ref: BALANCE 2026",
+        "Remit: 1200\nCommerce Blvd, Suite 300",
+        "Outstanding (questions): 937.555.0100",
+        "Balance due: 10.30.2026",
+        "Amount Due: 2026.10.30",
+        "Balance due: 1.5% interest after 30 days",
+        "Amount due: 50.0% on delivery",
+        "Balance Due: 30-Oct-2026",
+        "Remit: 4500-B Industrial Way",
+        "Balance due: 1 of 2 shipments",
+        "balance 2 of 6",
+        "Balance Due: $40.00 CR",
+        "Amount Due Now: $8,000.00",
+        "Due Now: $8,000.00",
+        "Amount still owed: $8,000.00",
+        "You owe: $8,000.00",
+        "Please pay: $8,000.00",
+        "Balance Due by 2026-10-30: $8,000.00",
+        "Balance Due | $8,000.00",
+        "| Balance Due | $8,000.00 |",
+        "Balance Due: Eight thousand dollars ($8,000.00)",
+    ]
+    for line in ignored:
+        assert balances_due(_plain(line)) == [], line
+
+
+def test_a_deposit_or_credit_under_the_total_is_an_amount_owed():
+    deposit = (
+        "Vendor: Widgets Inc.\nTotal Amount: $10,500.00\n"
+        "Less deposit received 2026-08-15 (ref DEP-3302): -$2,500.00\n"
+    )
+    credit = "Vendor: Widgets Inc.\nTotal Amount: $10,500.00\nCredit applied: -$2,500.00\n"
+    assert balances_due(deposit) == [Decimal("8000.00")]
+    assert balances_due(credit) == [Decimal("8000.00")]

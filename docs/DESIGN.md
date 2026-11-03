@@ -231,3 +231,4 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 - Split detection is unit-tested on synthetic invoices only. No sample file is a split.
 - Non-USD invoices are never converted.
 - Stock is the four seed rows, opened read-only, and it does not move when a bill is approved.
+- These phrases are not read as an amount owed: "Amount Due Now", "Due Now", "Amount still owed", "You owe", "Please pay", and "Balance Due by" a date. A pipe table, a markdown table, and an amount written in words before the digits are not read either. A negative deposit, credit, or payment under the total still holds that page when nothing owed was read.

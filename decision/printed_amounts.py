@@ -14,63 +14,80 @@ _TOTAL = re.compile(
 _WORDS = re.compile(
     r"""(?imx)(?:amount|total)[\s_]+in[\s_]+words["'>]?\s*[:=>]\s*["']?([^\n"'<]+)"""
 )
-# An amount the page says is owed. A plain "Account balance:" line is not.
-# "Account Balance Due" still is. "credit" or "CR" marks a credit only when it
-# sits against the amount, not in "Credit card".
+# Space, tab, or a non-breaking space. Newlines are written out where a label
+# may split. A lookbehind stays one character wide.
+_SP = r"[ \t\u00a0\u202f_]"
+# An amount the page says is owed. A plain "Account balance:" is not.
+# "Account Balance Due" still is. "credit" or "CR" marks a credit only when
+# nothing follows it. "Credit card" and "Credit or debit" do not.
 _LABEL = re.compile(
-    r"""(?ix)
+    rf"""(?ix)
     (?<![a-z_])
-    (?<!previous[ \t_])(?<!prior[ \t_])(?<!credit[ \t_])
+    (?<!previous{_SP})(?<!prior{_SP})(?<!credit{_SP})
     (?:
         balancedue
-        | balance(?:[ \t_]+|\n[ \t]*)(?:due|owing|payable|outstanding|remaining)
-        | (?<!account[ \t_])(?<!opening[ \t_])(?<!deposit[ \t_])(?<!statement[ \t_])
-            balance(?![ \t_]+forward)
-        | amount[ \t_]*due
-        | amount\n[ \t]*due
-        | amount(?:[ \t_]+|\n[ \t]*)(?:owing|remaining)
-        | amount(?:[ \t_]+|\n[ \t]*)(?:payable|to[ \t_]+pay)
-        | remaining(?:[ \t_]+|\n[ \t]*)(?:to[ \t_]+pay|balance)
-        | total(?:[ \t_]+|\n[ \t]*)due
-        | net[ \t_]+due
-        | now[ \t_]+due
-        | pay[ \t_]+this[ \t_]+amount
+        | balance(?:{_SP}+|\n[ \t\u00a0]*)+(?:due|owing|payable|outstanding|remaining)
+        | (?<!account{_SP})(?<!opening{_SP})(?<!deposit{_SP})(?<!statement{_SP})
+            balance(?!{_SP}+forward)
+        | amount{_SP}*due
+        | amount(?:{_SP}+|\n[ \t\u00a0]*)+(?:owing|remaining|outstanding)
+        | amount(?:{_SP}+|\n[ \t\u00a0]*)+(?:payable|to{_SP}+pay)
+        | remaining(?:{_SP}+|\n[ \t\u00a0]*)+(?:to{_SP}+pay|balance)
+        | total(?:{_SP}+|\n[ \t\u00a0]*)+due
+        | net{_SP}+due
+        | now{_SP}+due
+        | pay{_SP}+this{_SP}+amount
         | outstanding
-        | please[ \t_]+remit(?:[ \t_]+the[ \t_]+balance[ \t_]+of)?
+        | please{_SP}+remit(?:{_SP}+the{_SP}+balance{_SP}+of)?
         | (?<![a-z_])remit
     )
     """
 )
-# "$40.00 credit" or "CR", and nothing after it. "Credit card", "Credit cards",
-# and "Credit or debit" are phrases, not markers.
-_TRAILING_CREDIT = re.compile(r"(?i)[ \t]*(?:credit\b(?![ \t]+[A-Za-z])|cr\b)")
-# "2 of 6", "30 days". Not "$8,000.00 of ..." or "$8,000.00 items".
-_AFTER_COUNT = re.compile(r"(?i)[ \t]*(?:days?|shipments?|items?|units?|of)\b")
+_TRAILING_CREDIT = re.compile(r"(?i)[ \t\u00a0]*(?:credit\b(?![ \t\u00a0]+[A-Za-z])|cr\b)")
+_AFTER_COUNT = re.compile(r"(?i)[ \t\u00a0]*(?:days?|shipments?|items?|units?)\b")
+# "8000 of 10500" at the end of the line. "2 of 6" and "1 of 2 shipments" are counts.
+_OF_TOTAL = re.compile(
+    r"(?i)[ \t\u00a0]*of[ \t\u00a0]+\$?[ \t\u00a0]*([0-9][0-9,]*(?:\.[0-9]+)?)"
+    r"[ \t\u00a0]*(?:usd|dollars?)?[ \t\u00a0]*(?:\n|$)"
+)
+# A dash glued on, as in "30-Oct" or "4500-B". A spaced dash is still a separator.
 _GLUED = re.compile(r"(?i)(?:%|st\b|nd\b|rd\b|th\b|/|-)")
-_FOLLOWING_WORD = re.compile(r"[ \t]+[A-Za-z]")
+_FOLLOWING_WORD = re.compile(r"[ \t\u00a0]+(?!usd\b|us\$|dollars?\b)[A-Za-z]")
+_CURRENCY_TAIL = re.compile(r"(?i)[ \t\u00a0]*(?:usd|us\$|dollars?)\b")
+_EU = r"[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{2}"
 _SAME_LINE = re.compile(
     rf"""(?ix)
-    [ \t]*
-    (?:\([^)\n]{{0,40}}\)[ \t]*)?
-    ["'>]*[ \t]*
-    (?:[:,=>]|\.{{2,}}|-[ \t]+)?[ \t]*
-    ["'>]*[ \t]*
-    (?:(?:usd|us\$)[ \t]*)?
-    \$?[ \t]*
-    (?P<num>{_NUMBER})
+    [ \t\u00a0]*
+    (?:\([^)\n]{{0,40}}\)[ \t\u00a0]*)?
+    (?:[ \t\u00a0]+[A-Za-z_]+=\"[^\"\n]*\")*[ \t\u00a0]*
+    ["'>]*[ \t\u00a0]*
+    (?:[:,=>]|\.{{2,}}|-[ \t\u00a0]+)?[ \t\u00a0]*
+    ["'>]*[ \t\u00a0]*
+    (?:(?:usd|us\$)[ \t\u00a0]*)?
+    \$?[ \t\u00a0]*
+    (?P<num>{_EU}|{_NUMBER})
     """
 )
-# One blank line is still the next line. A glued dash (BALANCE-2026) is not.
+# Any run of blank lines, or one short parenthetical note, then the amount.
 _NEXT_LINE_MONEY = re.compile(
     rf"""(?ix)
-    [ \t]*
-    (?:[:,=>][ \t]*)?
-    (?:\n[ \t]*){{1,2}}
-    (?:(?:usd|us\$)[ \t]*)?
-    \$?[ \t]*
-    (?P<num>{_NUMBER})
+    [ \t\u00a0]*
+    (?:[:,=>][ \t\u00a0]*)?
+    (?:
+        (?:\n[ \t\u00a0]*){{1,8}}
+        | \n[ \t\u00a0]*\([^)\n]{{0,60}}\)[ \t\u00a0]*\n[ \t\u00a0]*
+    )
+    (?:(?:usd|us\$)[ \t\u00a0]*)?
+    \$?[ \t\u00a0]*
+    (?P<num>{_EU}|{_NUMBER})
     """
 )
+_DEPOSIT = re.compile(
+    r"(?im)^\s*(?:less\b[^\n]*|deposit (?:received|paid|applied)[^\n]*"
+    r"|credit applied[^\n]*|payments? received[^\n]*|amount paid[^\n]*"
+    r"|paid to date[^\n]*)[:\s]\s*(?:-\s?\$|\(\$|\$\s?-|-)\s?[0-9][0-9,]*\.[0-9]{2}"
+)
+_DEPOSIT_AMOUNT = re.compile(r"-?\$?\s?-?[0-9][0-9,]*\.[0-9]{2}")
 
 _SMALL = {
     word: value
@@ -90,8 +107,13 @@ _SKIP = {"and", "a", "only", "exactly", "us", "usd", "no"}
 
 
 def _money(text: str) -> Decimal | None:
+    """US '8,000.00', European '8.000,00', or '-$2,500.00'."""
+
     try:
-        return Decimal(text.replace(",", ""))
+        if re.fullmatch(_EU, text):
+            return Decimal(text.replace(".", "").replace(",", "."))
+        cleaned = text.replace(",", "").replace("$", "").replace(" ", "")
+        return Decimal(cleaned)
     except InvalidOperation:
         return None
 
@@ -111,62 +133,184 @@ def printed_totals(raw_text: str | None) -> list[Decimal]:
     return _amounts(_TOTAL, raw_text)
 
 
-def _money_shaped(gap: str, number: str) -> bool:
-    """A currency sign or code, or cents. A bare integer is not money."""
+def _money_shaped(gap: str, number: str, tail: str = "") -> bool:
+    """A currency sign, code, or word, or cents. A bare integer is not money."""
 
-    return "$" in gap or "." in number or re.search(r"(?i)usd|us\$", gap) is not None
+    if "$" in gap or re.search(r"(?i)usd|us\$", gap):
+        return True
+    if _CURRENCY_TAIL.match(tail):
+        return True
+    return "." in number and not tail.startswith(".")
 
 
 def _separator(gap: str) -> bool:
-    return re.search(r"[:,=>]|\.{2,}|-[ \t]", gap) is not None
+    return re.search(r"[:,=>]|\.{2,}|-[ \t\u00a0]", gap) is not None
 
 
-def _bare_integer(gap: str, number: str) -> bool:
-    return "." not in number and not _money_shaped(gap, number)
+def _bare_integer(gap: str, number: str, tail: str) -> bool:
+    return "." not in number and not _money_shaped(gap, number, tail)
 
 
-def _accept(gap: str, number: str, tail: str) -> Decimal | None:
-    if _TRAILING_CREDIT.match(tail):
+def _year_id(label: str, number: str) -> bool:
+    """'BALANCE 2026' or 'REMIT2026'. Not 'Balance Due 8000'."""
+
+    if not re.fullmatch(r"20\d{2}|19\d{2}", number):
+        return False
+    word = label.rsplit(None, 1)[-1]
+    return word.lower() in {"balance", "remit", "outstanding", "due"}
+
+
+def _street_follows(gap: str, tail: str) -> bool:
+    """'Remit: 1200' then 'Commerce Blvd'. The number shares the label's line."""
+
+    if "\n" in gap:
+        return False
+    return (
+        re.match(
+            r"(?i)\n[ \t\u00a0]*[A-Za-z].*\b(?:blvd|boulevard|way|street|st|road|rd|"
+            r"ave|avenue|drive|dr|lane|ln|court|ct|suite|ste|pkwy|parkway|box)\b",
+            tail,
+        )
+        is not None
+    )
+
+
+def _accept(gap: str, number: str, tail: str, label: str = "") -> Decimal | None:
+    if gap == "" or _TRAILING_CREDIT.match(tail):
         return None
-    # "of" / "items" / "days" drop a bare integer. A dollar amount stays.
-    if _bare_integer(gap, number) and (
-        _AFTER_COUNT.match(tail) or _GLUED.match(tail) or _FOLLOWING_WORD.match(tail)
+    if tail.startswith("%") or ( "." in number and re.match(r"\.\d", tail)):
+        return None
+    of_total = _OF_TOTAL.match(tail)
+    if of_total:
+        other = _money(of_total.group(1))
+        if other is not None and other >= 100:
+            return _money(number)
+    bare = _bare_integer(gap, number, tail)
+    if bare and (
+        _AFTER_COUNT.match(tail)
+        or _GLUED.match(tail)
+        or _FOLLOWING_WORD.match(tail)
+        or _street_follows(gap, tail)
+        or _year_id(label, number)
     ):
         return None
-    if _money_shaped(gap, number) or _separator(gap) or re.fullmatch(r"[ \t]*", gap):
+    own_line = re.fullmatch(r"[\s\u00a0:=,>\-]*", gap) is not None and tail.split("\n", 1)[0].strip() == ""
+    if _money_shaped(gap, number, tail) or _separator(gap) or own_line:
         return _money(number)
+    return None
+
+
+def _cells(line: str) -> list[tuple[int, str]]:
+    """Cells split by two or more spaces. One space stays inside a cell."""
+
+    return [(match.start(), match.group(0)) for match in re.finditer(r"\S(?:\S| (?! ))*", line)]
+
+
+def _column_amounts(text: str) -> tuple[list[Decimal], set[int]]:
+    """Amount under a label when both lines have the same number of cells.
+
+    Returns those amounts and the line indexes consumed by the table, so a
+    later scan does not also read the neighbouring cell.
+    """
+
+    found: list[Decimal] = []
+    used: set[int] = set()
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        header = _cells(line)
+        if len(header) < 2:
+            continue
+        value_at = index + 1
+        while value_at < len(lines) and not lines[value_at].strip():
+            value_at += 1
+        if value_at >= len(lines):
+            continue
+        values = _cells(lines[value_at])
+        if len(values) != len(header):
+            continue
+        matched = False
+        for place, (start, cell) in enumerate(header):
+            if _LABEL.fullmatch(cell.strip(" :")) is None:
+                continue
+            value_start, value = values[place]
+            if abs(value_start - start) > 6:
+                continue
+            amount = _money(re.sub(r"[^0-9,.\-]", "", value))
+            if amount is None or not re.search(r"\d", value):
+                continue
+            found.append(amount)
+            matched = True
+        if matched:
+            used.add(index)
+            used.add(value_at)
+    return found, used
+
+
+def _deposit_balance(text: str, owed: list[Decimal]) -> Decimal | None:
+    """Implied balance when a negative deposit or credit sits under the total."""
+
+    if owed:
+        return None
+    totals = list(_TOTAL.finditer(text))
+    if not totals:
+        return None
+    billed = max((_money(match.group(1)) or Decimal("0")) for match in totals)
+    match = _DEPOSIT.search(text[totals[-1].end():])
+    if match is None:
+        return None
+    amount = _DEPOSIT_AMOUNT.search(match.group(0))
+    if amount is None:
+        return None
+    paid = abs(_money(amount.group(0)) or Decimal("0"))
+    implied = billed - paid
+    if implied > 0 and implied < billed:
+        return implied
     return None
 
 
 def balances_due(raw_text: str | None) -> list[Decimal]:
     """Every amount the page says is owed.
 
-    A blank line may sit between the label and a money amount. A bare integer
-    right after the label counts. "of" or "items" drops that integer only.
-    "credit" alone, or "CR", marks a credit. "Credit card" and "Credit or
-    debit" do not. A dash glued to a reference number is not a separator.
+    A currency word may follow the number. "8000 of 10500" counts. Blank
+    lines, or one short note, may sit between the label and the amount.
+    A number glued to a label, a dotted date, and a percent do not count.
+    Two or more spaces line up a table. A negative deposit with no owed
+    line is the amount already paid.
     """
 
     text = raw_text or ""
-    found = []
+    columns, table_lines = _column_amounts(text)
+    found = list(columns)
     for label in _LABEL.finditer(text):
+        line_no = text.count("\n", 0, label.start())
+        if line_no in table_lines:
+            continue
         rest = text[label.end():]
         same = _SAME_LINE.match(rest)
         if same:
-            value = _accept(same.group(0)[: same.start("num")], same.group("num"), rest[same.end():])
+            value = _accept(
+                same.group(0)[: same.start("num")],
+                same.group("num"),
+                rest[same.end():],
+                label.group(0),
+            )
             if value is not None:
                 found.append(value)
             continue
         nxt = _NEXT_LINE_MONEY.match(rest)
         if nxt is None:
             continue
-        gap = nxt.group(0)[: nxt.start("num")]
-        number = nxt.group("num")
-        if not _money_shaped(gap, number):
-            continue
-        value = _accept(gap, number, rest[nxt.end():])
+        value = _accept(
+            nxt.group(0)[: nxt.start("num")],
+            nxt.group("num"),
+            rest[nxt.end():],
+            label.group(0),
+        )
         if value is not None:
             found.append(value)
+    deposit = _deposit_balance(text, found)
+    if deposit is not None:
+        found.append(deposit)
     return found
 
 
