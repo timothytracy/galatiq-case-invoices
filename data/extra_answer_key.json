@@ -76,8 +76,11 @@
       "warnings": [
         "Fraud signal: wire transfer (\"Wire transfer only\")"
       ],
-      "reason": "WidgetA 4 (stock 15) and GadgetX 1 (stock 5) are in stock at the reference prices, and the lines add up to the $1,750.00 total. Wire-only payment is one fraud signal, which is a warning and does not change the outcome.",
+      "reason": "WidgetA 4 (stock 15) and GadgetX 1 (stock 5) are in stock at the reference prices, and the lines add up to the $1,750.00 total. Wire-only payment is one fraud signal, which is a warning. Nothing else on the page makes the innocent reading more or less likely, so the audit may pass it or hold it for a person.",
       "next_step": "None (paid).",
+      "also_accepted_outcomes": [
+        {"outcome": "HOLD", "primary_reason": "Audit escalation"}
+      ],
       "source": "Policy judgment"
     },
     "data/extra_invoices/invoice_2104.json": {
@@ -214,6 +217,7 @@
     "No pipeline, main.py, scripts/eval.py, or Grok call was run on these files. pypdf (already pinned) was used only to read the text layer of the two PDFs.",
     "invoice_2109.json and invoice_2110.xml compare abs(unit_price) with the reference. Both magnitudes match the reference, so there is no price warning and no price spike. Outcomes are unchanged.",
     "invoice_2115.txt accepts either Missing required field or Total or line-math mismatch. Primary recorded is Missing required field. also_accepted_reasons is [\"Total or line-math mismatch\"]. No other row has that field.",
+    "invoice_2103.csv accepts APPROVE or a HOLD for Audit escalation. Its one fraud signal has no other context on the page, so the audit may weigh it either way. also_accepted_outcomes lists the alternate outcome and reason as a pair. No other row in this key has that field.",
     "invoice_2116.csv is a fresh stock-shortfall reject. PR #5 invoice_2004.csv was not restored.",
     "Invoices 2001, 2003, 2005, 2006, and 2008 are copied from PR #5 and relabeled, except notes that told the reader the answer were neutralized. 2002, 2004, and 2007 were dropped. See docs/EXTRA_ANSWER_KEY.md.",
     "A forced Grok failure is the test double described in docs/EXTRA_ANSWER_KEY.md. There is no invoice file for it, because the outcome does not depend on the bill."

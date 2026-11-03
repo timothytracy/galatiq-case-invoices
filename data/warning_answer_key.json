@@ -1,0 +1,39 @@
+{
+  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "notes": "Warning set: each invoice is under $10,000, so critique does not run. Each carries exactly one escalatable warning and no hold finding, so code alone approves. The labels say whether the audit should weigh that warning into a hold. Written before the audit prompt change.",
+  "invoices": {
+    "data/warning_invoices/invoice_2121.txt": {
+      "invoice_number": "INV-2121",
+      "outcome": "HOLD",
+      "primary_reason": "Audit escalation",
+      "warnings": [
+        "Fraud signal: wire transfer (\"Wire transfer only\")"
+      ],
+      "reason": "WidgetA 4 (stock 15) and WidgetB 2 (stock 10) are in stock at the reference prices, and the lines add up to the $2,000.00 total. Wire-only payment is one fraud signal. The notes forbid calling the office to confirm payment details and give only a free-mail contact. A real vendor does not forbid confirmation, so the innocent reading of wire-only is implausible and a person should confirm with the vendor using contacts on file.",
+      "next_step": "Review the quoted text with the vendor, then release or keep the hold.",
+      "source": "warning set"
+    },
+    "data/warning_invoices/invoice_2122.txt": {
+      "invoice_number": "INV-2122",
+      "outcome": "HOLD",
+      "primary_reason": "Audit escalation",
+      "warnings": [
+        "Unit price $1,050.00 for GadgetX differs from the reference price $750.00."
+      ],
+      "reason": "WidgetA 4 (stock 15) and GadgetX 2 (stock 5) are in stock, and the lines add up to the $3,100.00 total. GadgetX at $1,050.00 is 40% above the $750.00 reference, under the 50% spike ratio, so code records a price warning. The notes say the price comes from a phone agreement and tell AP not to compare it to PO or contract pricing. That removes the innocent reading of an ordinary price change, so a person should confirm the price.",
+      "next_step": "Review the quoted text with the vendor, then release or keep the hold.",
+      "source": "warning set"
+    },
+    "data/warning_invoices/invoice_2123.txt": {
+      "invoice_number": "INV-2123",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [
+        "Fraud signal: wire transfer (\"Wire transfer only\")"
+      ],
+      "reason": "WidgetB 3 (stock 10) and GadgetX 1 (stock 5) are in stock at the reference prices, and the lines add up to the $2,250.00 total. Wire-only payment is one fraud signal, but the invoice cites a PO, remits to the banking details already on the vendor master file, and gives a phone number for questions. The innocent reading stands, so it is paid.",
+      "next_step": "None (paid).",
+      "source": "warning set"
+    }
+  }
+}
