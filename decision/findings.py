@@ -195,8 +195,9 @@ def _amount_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
     """Holds read from the page itself, whatever total the extraction chose.
 
     The amount in words must match every printed total and the extracted total.
-    A stated balance or amount due below the total means the total is not what
-    is owed. Neither amount is paid automatically.
+    A stated amount owed that is above zero and below the total means the total
+    is not what is owed. A zero, a previous balance, or the same amount as the
+    total is not that. Neither amount is paid automatically.
     """
 
     findings: list[Finding] = []
@@ -219,7 +220,11 @@ def _amount_findings(invoice: ExtractedInvoice, raw_text: str) -> list[Finding]:
             )
     if totals:
         billed = max(totals)
-        lower = [balance for balance in balances_due(raw_text) if balance < billed and different(balance, billed)]
+        lower = [
+            balance
+            for balance in balances_due(raw_text)
+            if balance > 0 and balance < billed and different(balance, billed)
+        ]
         if lower:
             findings.append(
                 _finding(

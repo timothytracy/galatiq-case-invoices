@@ -14,9 +14,27 @@ _TOTAL = re.compile(
 _WORDS = re.compile(
     r"""(?imx)(?:amount|total)[\s_]+in[\s_]+words["'>]?\s*[:=>]\s*["']?([^\n"'<]+)"""
 )
+# An amount the page says is owed. The separator is optional, as on a total line,
+# and a CSV row may use a comma. Not a previous or prior balance, and not a
+# balance brought forward. "Total Due" is an amount owed, not only a second total.
 _BALANCE = re.compile(
-    rf"""(?imx)(?:balance(?:[\s_]+(?:due|owing|payable))?|amount[\s_]+(?:due|payable))
-        ["'>]?\s*[:=>]\s*["']?\s*\$?\s*({_NUMBER})"""
+    rf"""(?imx)
+    (?<![a-z_])
+    (?<!previous[\s_])(?<!prior[\s_])
+    (?:
+        balance(?![\s_]+forward)(?:[\s_]+(?:due|owing|payable))?
+        | amount[\s_]+(?:due|payable)
+        | remaining[\s_]+to[\s_]+pay
+        | total[\s_]+due
+    )
+    (?:\s*\([^)\n]*\))?
+    ["'>]?
+    \s*[:,=>]?
+    \s*(?:usd\s+)?
+    ["']?
+    \s*\$?
+    \s*({_NUMBER})
+    """
 )
 
 _SMALL = {

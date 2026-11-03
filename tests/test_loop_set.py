@@ -138,6 +138,10 @@ def test_2118_faithful_read_is_an_unpaid_hold_not_a_reject(db_path):
     assert result["payment"].status == "not_paid"
     assert counts["critique"] == 0 and counts["audit"] == 0
     assert "approval" not in _stages(result)
+    blocked = review_release_block(
+        result["outcome"], result["findings"], result["reason_code"]
+    )
+    assert blocked == "AMOUNT_WORDS_MISMATCH is not a review hold and is never paid."
     row = _row(result, "invoice_2118.txt")
     assert row["outcome_ok"] and row["reason_ok"]
 
@@ -195,6 +199,63 @@ def test_2120_deposit_balance_is_held_and_nothing_is_paid(db_path):
     assert row["outcome_ok"] and row["reason_ok"]
 
 
+_2120 = (LOOP / "invoice_2120.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "owed",
+    [
+        "Balance Due        $8,000.00",
+        "Balance Due: USD 8,000.00",
+        "Balance Due (USD): $8,000.00",
+        "Remaining to pay: $8,000.00",
+        "Total Due: $8,000.00",
+    ],
+)
+def test_an_amount_owed_below_the_total_holds(tmp_path, db_path, owed):
+    text = _2120.replace("Balance Due: $8,000.00", owed)
+    path = write_invoice(tmp_path, "owed.txt", text)
+    handler, _ = scripted(_read("invoice_2120.txt", total="10500.00"))
+    result = _run(db_path, path, handler)
+    assert Decimal("8000.00") in balances_due(text)
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BALANCE_DUE"
+    assert result["payment"].status == "not_paid"
+
+
+def test_csv_balance_due_below_the_total_holds(tmp_path, db_path):
+    text = "\n".join(
+        [
+            "field,value",
+            "invoice_number,INV-2120",
+            "vendor,Ironbridge Components Inc.",
+            "date,2026-09-30",
+            "due_date,2026-10-30",
+            "item,WidgetA",
+            "quantity,12",
+            "unit_price,250.00",
+            "item,WidgetB",
+            "quantity,9",
+            "unit_price,500.00",
+            "item,GadgetX",
+            "quantity,4",
+            "unit_price,750.00",
+            "subtotal,10500.00",
+            "tax,0.00",
+            "total,10500.00",
+            "balance_due,8000.00",
+            "",
+        ]
+    )
+    path = write_invoice(tmp_path, "owed.csv", text)
+    handler, _ = scripted(_read("invoice_2120.txt", total="10500.00"))
+    result = _run(db_path, path, handler)
+    assert balances_due(text) == [Decimal("8000.00")]
+    assert result["outcome"] == "hold"
+    assert result["reason_code"] == "BALANCE_DUE"
+    assert result["payment"].status == "not_paid"
+
+
 def test_2120_balance_read_as_the_total_is_not_paid_either(db_path):
     path = LOOP / "invoice_2120.txt"
     handler, _ = scripted(_read("invoice_2120.txt", total="8000.00"))
@@ -203,6 +264,52 @@ def test_2120_balance_read_as_the_total_is_not_paid_either(db_path):
     assert "TOTAL_MISMATCH" in _codes(result)
     assert "BALANCE_DUE" in _codes(result)
     assert result["payment"].status == "not_paid"
+
+
+def _clean(extra: str) -> str:
+    return (
+        "Vendor: Widgets Inc.\nDue Date: 2026-02-01\nWidgetA qty 2 @ 250\n"
+        f"Total Amount: $500.00\n{extra}\n"
+    )
+
+
+def test_previous_balance_on_2117_is_still_paid(tmp_path, db_path):
+    text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip() + "\nPrevious balance: $0.00\n"
+    path = write_invoice(tmp_path, "p.txt", text)
+    handler, _ = scripted(_read("invoice_2117.txt"), critique={"concerns": [], "stricter": False})
+    result = _run(db_path, path, handler)
+    assert "BALANCE_DUE" not in _codes(result)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert result["payment"].amount == Decimal("10625.00")
+
+
+def test_balance_due_equal_to_the_2117_total_is_still_paid(tmp_path, db_path):
+    text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip() + "\nBalance Due: $10,625.00\n"
+    path = write_invoice(tmp_path, "e.txt", text)
+    handler, _ = scripted(_read("invoice_2117.txt"), critique={"concerns": [], "stricter": False})
+    result = _run(db_path, path, handler)
+    assert "BALANCE_DUE" not in _codes(result)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "Balance Due: $0.00",
+        "Previous balance: $40.00",
+        "Prior balance: $40.00",
+        "Balance forward: $40.00",
+    ],
+)
+def test_a_zero_or_carried_balance_on_a_clean_invoice_is_paid(tmp_path, db_path, extra):
+    path = write_invoice(tmp_path, "c.txt", _clean(extra))
+    handler, _ = scripted(_read("invoice_2118.txt", line_items=[_line(2, 250)], total="500.00"))
+    result = _run(db_path, path, handler)
+    assert "BALANCE_DUE" not in _codes(result)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
 
 
 def test_balance_due_equal_to_the_total_is_not_a_hold(tmp_path, db_path):

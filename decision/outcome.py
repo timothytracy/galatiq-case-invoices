@@ -224,6 +224,12 @@ def blocks_release(code: str, finding=None) -> bool:
     return True
 
 
+def _severity(finding) -> str:
+    if isinstance(finding, dict):
+        return str(finding.get("severity") or "")
+    return str(getattr(finding, "severity", "") or "")
+
+
 def review_release_block(
     outcome: str | None,
     findings: list,
@@ -241,6 +247,9 @@ def review_release_block(
         return "Only a held invoice can be approved for payment."
     codes = finding_codes(findings)
     for finding, code in zip(findings, codes):
+        # A downgraded total-line warning is not the reason release is refused.
+        if _severity(finding) == "warning" and code in REJECT_CODES:
+            continue
         if blocks_release(code, finding):
             return f"{code} is not a review hold and is never paid."
     if reason_code and blocks_release(reason_code):
