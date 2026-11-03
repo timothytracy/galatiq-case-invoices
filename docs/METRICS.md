@@ -7,6 +7,7 @@ Every replay number is from a committed recording, run on 2026-11-01 PT, with no
 | Samples | `python3 scripts/eval.py --replay recordings/samples.jsonl` | 20/20 | 73608 | 0.102365 | 42 | 1 |
 | Unseen | `python3 scripts/eval.py --invoices data/extra_invoices --answer-key data/extra_answer_key.json --replay recordings/unseen.jsonl` | 21/21 | 86882 | 0.119278 | 49 | 1 |
 | Ordered | `python3 scripts/eval.py --ordered --replay recordings/ordered.jsonl` | 11 steps, all ok | 33870 | 0.047920 | 17 | 1 |
+| Loop set | `python3 scripts/eval.py --invoices data/loop_invoices --answer-key data/loop_answer_key.json --replay recordings/loop.jsonl` | 3/3 | 13230 | 0.018188 | 8 | 0 |
 
 The ordered command prints one line per step, then the ledger line. All 11 steps were ok. The ledger line was `ledger 3 rows: invoice_1001.txt, invoice_1011.pdf, invoice_1004.json`, and it was ok.
 
@@ -20,7 +21,7 @@ No replay call was blocked by the tool cap. No replay result had `tool_cap_hit` 
 
 The cost line is `tokens total=N cost_usd=X` from `recording.py`. It sums the `usage` objects stored in the recording. It does not call the API.
 
-The rates are the published rates for `grok-4.20-0309-non-reasoning`: $1.25 per 1,000,000 input tokens and $2.50 per 1,000,000 output tokens when `prompt_tokens` is under 200,000. At or above 200,000 prompt tokens the rates are $2.50 and $5.00. `prompt_tokens` is not split into a cached-input rate. The sum is quantized to six decimal places, half up. None of these three recordings needed the long-context rate.
+The rates are the published rates for `grok-4.20-0309-non-reasoning`: $1.25 per 1,000,000 input tokens and $2.50 per 1,000,000 output tokens when `prompt_tokens` is under 200,000. At or above 200,000 prompt tokens the rates are $2.50 and $5.00. `prompt_tokens` is not split into a cached-input rate. The sum is quantized to six decimal places, half up. None of these four recordings needed the long-context rate. The loop recording was made on 2026-11-02 PT with `--as-of 2026-11-01`.
 
 ## Live runs
 
@@ -44,7 +45,7 @@ Live: 2.85–3.90 s and $0.004923–$0.006428 per invoice. The low time is 57/20
 
 ## How often each loop fired
 
-The seven runs above kept only their score and cost lines. The three committed recordings are also live runs: `--record` calls the API and saves every reply. Replaying a recording re-runs the same code on the same replies, so these counts are exact for those three runs. `scripts/loop_stats.py` produces them with no API key.
+The seven runs above kept only their score and cost lines. The four committed recordings are also live runs: `--record` calls the API and saves every reply. Replaying a recording re-runs the same code on the same replies, so these counts are exact for those runs. `scripts/loop_stats.py` produces them with no API key. The loop set's score is in the table above.
 
 ```bash
 python3 scripts/loop_stats.py --replay recordings/samples.jsonl

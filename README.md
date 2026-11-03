@@ -6,7 +6,7 @@
 
 The pipeline reads one invoice, checks stock, math, and the payments ledger, and either pays it or stops with a reason. Grok extracts the fields, critiques a USD total over $10,000, and audits. Code chooses approve, reject, or hold. Of the 41 labeled invoices, 15 are approved, 16 are rejected, and 10 are held. The loop set adds 3 more: one approved and two held. The pipeline never pays a reject or a hold. A reviewer can release some holds for payment.
 
-Replay of the four committed recordings, no API key, on 2026-11-01 PT:
+Replay of the four committed recordings, no API key. Samples, unseen, and the ordered ledger were recorded on 2026-11-01 PT. The loop recording was made on 2026-11-02 PT:
 
 | Set | Score |
 |---|---|
@@ -15,7 +15,7 @@ Replay of the four committed recordings, no API key, on 2026-11-01 PT:
 | Ordered ledger | 11 steps ok, ledger matches |
 | Loop set | 3/3 |
 
-Live runs the same day matched those scores: samples 20/20 three times, unseen 21/21 three times, and the ordered ledger ok. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
+Live runs on 2026-11-01 PT matched those scores: samples 20/20 three times, unseen 21/21 three times, and the ordered ledger ok. The 21 unseen invoices and their answer key were written by the author, not by Acme, so treat that score as a regression check rather than an independent test.
 
 ### Quick start
 
@@ -73,6 +73,7 @@ Each kind of hold has one owner. These roles are proposed. The brief does not na
 | Extraction trust | `ITEM_NOT_IN_SOURCE` | Accounts payable checks the document | No |
 | Review escalation | `CRITIQUE_HOLD`, `AUDIT_ESCALATED` | The approver who replaces the VP email chain | Yes, except at the send-back cap |
 | System failure | `SYSTEM_ERROR`, `BAD_REASONING` | Engineering on call reruns the invoice | No |
+| Amount on the page | `BALANCE_DUE`, `AMOUNT_WORDS_MISMATCH` | Accounts payable confirms the amount with the vendor | No |
 
 ### Invoice 2106
 

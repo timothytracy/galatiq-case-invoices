@@ -155,6 +155,8 @@ Hold when a person can do something the system cannot. Every hold names that act
 | Unit price 50% or more above reference | Verify the price with the vendor. |
 | Clean invoice over $10,000 with a new remittance or bank account | Verify the change with the vendor. A bank-account change is the most common invoice-fraud pattern. |
 | Item name not in source text | Check the item name against the invoice. |
+| Printed total and the amount in words disagree | Confirm the amount with the vendor. Nothing is paid. |
+| A stated amount owed is above zero and below the total | Confirm the deposit or credit, then pay by hand. Nothing is paid here. |
 | Grok or system failure after retries | Rerun the invoice or process it by hand. Tracked as a system error, not a business decision. |
 
 `DUPLICATE_INVOICE` and `SPLIT_INVOICE` read `payments.db`. Only the payment step writes it. The match key is the vendor name, casefolded with whitespace collapsed, plus the invoice number after normalization. The split window is `split_window_days`, 30 days. A date that does not parse is outside the window. Another vendor does not count. How the ledger behaves across files is in [Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard).
