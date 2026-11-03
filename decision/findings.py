@@ -436,16 +436,17 @@ def _note_findings(invoice: ExtractedInvoice, raw_text: str, currency: str) -> l
 _PAYMENT_ACTIONS = {"approve", "pay", "skip_review", "ignore_rules"}
 
 
+def normalize_quote(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().casefold()
+
+
 def model_flag_stands(invoice: ExtractedInvoice, raw_text: str) -> bool:
     """A model-only injection flag needs a quote from the page that asks for a payment action."""
 
-    def squash(text: str) -> str:
-        return re.sub(r"\s+", " ", text or "").strip().casefold()
-
     if (invoice.embedded_action or "").strip().casefold() not in _PAYMENT_ACTIONS:
         return False
-    quote = squash(invoice.embedded_quote or "")
-    return len(quote) >= POLICY.fraud_quote_min_chars and quote in squash(raw_text)
+    quote = normalize_quote(invoice.embedded_quote or "")
+    return len(quote) >= POLICY.fraud_quote_min_chars and quote in normalize_quote(raw_text)
 
 
 def _cluster_finding(

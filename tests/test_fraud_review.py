@@ -129,7 +129,7 @@ def test_a_pass_changes_nothing(db_path):
     assert _graded_ok(passed, path)
     for call in with_review.calls:
         text = json.dumps(call)
-        assert "innocent_reading" not in text
+        assert "An ordinary bill from the vendor." not in text
         assert "fraud_verdict" not in text
 
 

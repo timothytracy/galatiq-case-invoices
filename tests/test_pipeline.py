@@ -152,7 +152,11 @@ def test_clean_invoice_is_paid_and_reasoning_cites_real_figures(tmp_path, db_pat
 
 def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
     # Reference prices, so the total is over the threshold without a price spike.
-    path = write_invoice(tmp_path, "big.txt", "WidgetA 15, WidgetB 10, GadgetX 5\nTotal: 12500.00\n")
+    path = write_invoice(
+        tmp_path,
+        "big.txt",
+        "WidgetA 15, WidgetB 10, GadgetX 5\nTotal: 12500.00\nNotes: Rush order, amount is high this quarter.\n",
+    )
     body = extraction(
         line_items=[
             {
@@ -183,7 +187,14 @@ def test_over_10k_goes_through_critique_and_hits_the_cap(tmp_path, db_path):
         subtotal=12500,
         total=12500,
     )
-    handler, counts = scripted(body)
+    advisory = {
+        "concerns": [
+            {"category": "other", "text": "amount is high for one rush order", "quote": "Rush order, amount is high"}
+        ],
+        "stricter": False,
+        "innocent_reading": "A large quarterly restock.",
+    }
+    handler, counts = scripted(body, critique=advisory)
     result = run(path, db_path, handler)
     assert result["outcome"] == "approve"
     assert status(result) == "paid"

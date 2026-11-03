@@ -221,6 +221,8 @@ class FactConcern(_Loose):
     item: str = ""
     field: str = ""
     text: str = ""
+    # Text copied from the page. A claim code cannot confirm stands only on this.
+    quote: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -229,10 +231,21 @@ class FactConcern(_Loose):
             return {"category": "other", "text": value}
         return value
 
+    @field_validator("quote", mode="before")
+    @classmethod
+    def _quote(cls, value):
+        return "" if value is None else value
+
 
 class CritiqueDraft(_Loose):
     concerns: list[FactConcern] = Field(default_factory=list)
     stricter: bool = False
+    innocent_reading: str = ""
+
+    @field_validator("innocent_reading", mode="before")
+    @classmethod
+    def _innocent(cls, value):
+        return "" if value is None else value
 
 
 class FraudReview(_Loose):
@@ -261,6 +274,12 @@ class AuditDraft(_Loose):
     notes: str = ""
     # Empty means the concern is free text, not a finding code.
     cited_codes: list[str] = Field(default_factory=list)
+    innocent_reading: str = ""
+
+    @field_validator("innocent_reading", "notes", mode="before")
+    @classmethod
+    def _text(cls, value):
+        return "" if value is None else value
 
 
 class PipelineState(BaseModel):

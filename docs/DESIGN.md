@@ -45,7 +45,7 @@ flowchart TD
 
 ### Why code decides
 
-Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold was paid in any labeled run.
+Grok does the reading and the judging: it extracts the fields, reads each invoice for payment fraud, lists the risks, critiques a large bill, and audits with tools. Code turns those findings into approve, reject, or hold. Paying money needs the same invoice to get the same answer every time, and every answer has to be traceable to a rule. So a model can make a decision stricter but never looser, and text inside an invoice cannot talk the system into paying it. A fraud-review hold stands only when code finds its quote on the page. The trade-off is less model autonomy. In return, no reject or hold that code or a quoted model hold could see was paid in any labeled run. The one labeled hold paid is judgment invoice 2146, which audit read past ([Limitations](#limitations)).
 
 ### Rules
 
@@ -63,7 +63,7 @@ Grok does the reading and the judging: it extracts the fields, reads each invoic
 
 How each agent does its job, and how it fails.
 
-Grok is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the OpenAI SDK at `https://api.x.ai/v1`. Fraud review alone uses `grok-4.20-0309-reasoning`. Temperature is 0.
+Grok is `XAI_MODEL`, default `grok-4.20-0309-non-reasoning`, called through the OpenAI SDK at `https://api.x.ai/v1`. Fraud review and critique use `grok-4.20-0309-reasoning`. Temperature is 0.
 
 ### Ingestion
 
@@ -79,7 +79,7 @@ A reject or a hold stops here and never reaches approval, critique, or audit. A 
 
 ### Fraud review
 
-Fraud review runs once per invoice, on an invoice that validation passed, before approval. A send-back does not run it again. It makes one call to `grok-4.20-0309-reasoning`, which has the same published rates as the default model; reasoning tokens are billed as output. Across the six recordings a review averaged $0.0032–$0.0057.
+Fraud review runs once per invoice, on an invoice that validation passed, before approval. A send-back does not run it again. It makes one call to `grok-4.20-0309-reasoning`, which has the same published rates as the default model; reasoning tokens are billed as output. Across the seven recordings a review averaged $0.0033–$0.0046.
 
 The model sees the raw page text, the extracted vendor, address, invoice number, total, currency, payment terms, and notes, and the code's findings. The findings are context only. The model may hold an invoice with none and pass one with some, and every finding stays on the record as it was. It judges four kinds of red flag by meaning, not by keyword:
 
@@ -106,9 +106,9 @@ A model failure, or no decision, goes to `reject_log` and is not paid. Wording t
 
 ### Critique
 
-Critique runs when the currency is USD, the total is over $10,000, and this pass has not been critiqued. A send-back resets that counter. The model sees the decision, the facts code checked, and the raw page, and is told to raise anything the extraction missed or misread. It returns concerns and a stricter flag. It can only turn an approve into a hold.
+Critique runs when the currency is USD, the total is over $10,000, and this pass has not been critiqued. A send-back resets that counter. The model sees the decision, the facts code checked, and the raw page, and is told to raise anything the extraction missed or misread, and to compare what is billed with what the page says was ordered, delivered, priced, or returned. It returns concerns, each with a quote, a stricter flag, and an innocent reading. It can only turn an approve into a hold. It calls `grok-4.20-0309-reasoning`, with a 120-second timeout: on the default model it held the benign judgment twin 2141 in five runs of five, and on the reasoning model in none. A critique call averaged $0.0077–$0.0085 across the five judgment runs.
 
-A model failure goes to `reject_log`. A concern that only restates the dollar threshold is dropped. The fact guard can set aside a covered-stock claim, a totals claim when the math already reconciles, or a future-date claim when that date is not after today.
+A model failure goes to `reject_log`. A concern that only restates the dollar threshold is dropped. The fact guard can set aside a covered-stock claim, a totals claim when the math already reconciles, or a future-date claim when that date is not after today. Every concern left must then pass the quote gate ([Tools, the ledger, and the fact guard](#tools-the-ledger-and-the-fact-guard)). A `CRITIQUE_HOLD` message quotes the page.
 
 ### Audit
 
@@ -144,9 +144,18 @@ The four tools are `lookup_item`, `recompute_totals`, `get_policy_rule`, and `ch
 
 `python3 main.py --reset-ledger` deletes `payments.db` before that one file.
 
-Critique and audit receive the facts the code already checked: today's date, stock, whether the totals reconcile, the reference prices, and whether the dates are after today. On a critique, the guard sets aside a stock claim whose summed quantity is covered, a totals-mismatch claim when the totals already reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. On an audit, the same future-date claim can be set aside. Every other concern is kept. A send-back stands while any feedback remains. An escalation does too, and either stands when the audit cites a finding code. Every set-aside is logged.
+Critique and audit receive the facts the code already checked: today's date, stock, whether the totals reconcile, the reference prices, and whether the dates are after today. On a critique, the guard sets aside a stock claim whose summed quantity is covered, a totals-mismatch claim when the totals already reconcile, and a future-date claim on the invoice date or the due date when that date is not after today. On an audit, the same future-date claim can be set aside. A send-back stands while any feedback remains. Every set-aside is logged.
 
-`invoice_2106.txt` is a clean $11,500 approve. The guard exists so a critique cannot hold that bill on a stock or date claim the code has already checked.
+The quote gate then applies the fraud-review rule to critique concerns and to an audit escalation that cites no finding code. A claim code confirms (a requested quantity over stock, totals that do not reconcile, a date after today) stands without a quote. Any other claim stands only when all of these hold, and otherwise is set aside under the named rule:
+
+- The draft gives an innocent reading (`no_innocent_reading`).
+- The quote is at least `fraud_quote_min_chars` long after normalizing (`quote_too_short`) and appears in the raw text (`quote_not_on_page`).
+- The quote touches wording, not only lines code has already checked: invoice number, date, due date, item lines, subtotal, and total (`quote_structured_only`). Notes, terms, memo, and remarks lines are wording; a tax or shipping line is too, because code checks its arithmetic but not whether it is reasonable. On a page that is not `.txt`, the quote must overlap the extracted notes or payment terms.
+- The concern says something beyond its quote (`concern_restates_quote`).
+
+An audit may cite a finding code instead of quoting, but a cited code counts only when code found it on this invoice, from validation, a fresh assessment, or a ledger-tool hit. Any other citation is set aside as `cited_code_not_found`. An escalation with no code left and no quote that passes the gate becomes a PASS. A standing audit escalation's `AUDIT_ESCALATED` message quotes the page.
+
+`invoice_2106.txt` is a clean $11,500 approve. The guard exists so a critique cannot hold that bill on a stock or date claim the code has already checked, and the quote gate so it cannot hold it by quoting `Date: 2026-04-16`. `data/judgment_invoices/` is the other side: bills code approves whose own notes say not to pay them as printed ([answer key](JUDGMENT_ANSWER_KEY.md)).
 
 The reject, hold, and warning tables follow.
 
@@ -283,7 +292,9 @@ Stock stays fixed so that each invoice is judged on its own facts, the same way 
 
 ## Limitations
 
-- The fact guard trusts the category on the model's claim. A stock sentence labeled `other` is kept.
+- The fact guard trusts the category on the model's claim. A stock sentence labeled `other` is kept by the fact guard, and then needs a quote from the page's wording.
+- The quote gate proves a concern is grounded in the page's wording, not that it is right. On the default model, critique held the benign twin 2141 in all five live judgment runs, quoting its note correctly and giving the right innocent reading. The reasoning model held no twin in five runs, but that is seven invoices, not proof it never will. Audit did not catch the trap under $10,000 in any run. The judgment set is seven invoices written by the author, so its rates are a regression check, not a measured detection rate.
+- Field lines are recognized by label on `.txt` pages. A field line with an unusual label counts as wording.
 - A `failed` ledger row blocks that invoice until a person removes it. There is no tool for that yet; it is a manual edit of `payments.db` after checking with the bank. A process killed between the reserve and the settle leaves a `pending` row, which blocks the same way.
 - One reviewer can release `FRAUD_CLUSTER`, `FRAUD_SUSPECTED`, `NEW_REMITTANCE`, `VENDOR_RENAMED`, or `NEW_VENDOR`. A second approver for vendor-risk holds is the production next step.
 - The vendor master is names only. It catches an unknown vendor, not a known vendor's changed bank account; that still comes from the invoice text.

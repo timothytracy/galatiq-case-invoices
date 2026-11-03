@@ -1,0 +1,17 @@
+INVOICE
+
+Vendor: Millwright Supply
+Invoice Number: INV-2146
+Date: 2026-09-18
+Due Date: 2026-10-18
+
+Items:
+  WidgetA    qty: 10    unit price: $250.00
+  WidgetB    qty: 6     unit price: $500.00
+
+Subtotal: $5,500.00
+Tax (0%): $0.00
+Total Amount: $5,500.00
+
+Payment Terms: Net 30
+Notes: PO-8870. Partial shipment: 3 of 6 WidgetB delivered on 2026-09-16, balance on backorder.

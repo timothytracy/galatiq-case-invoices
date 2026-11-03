@@ -1,0 +1,76 @@
+{
+  "policy": "docs/DESIGN.md (with the Reject > Hold > Approve precedence rule)",
+  "notes": "Judgment set: every invoice is in stock at the reference prices, its lines reconcile, and code finds nothing (code_only_outcome APPROVE). Four traps state in their own notes that the bill should not be paid as printed; three twins carry similar wording that is benign. Only critique or audit can tell them apart. No code rule exists for any of them.",
+  "invoices": {
+    "data/judgment_invoices/invoice_2140.txt": {
+      "invoice_number": "INV-2140",
+      "outcome": "HOLD",
+      "primary_reason": "Critique hold",
+      "warnings": [],
+      "reason": "WidgetA 15 (stock 15), WidgetB 10 (stock 10) and GadgetX 4 (stock 5) are in stock at the reference prices, and the lines add up to $11,750.00. The notes say only 10 of the 15 WidgetA were delivered and the balance is on backorder, yet all 15 are billed. Paying it pays $1,250.00 for goods not received.",
+      "next_step": "Confirm receipt with the vendor and pay only for what was delivered.",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2141.txt": {
+      "invoice_number": "INV-2141",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "Twin of 2140. The same partial shipment, but only the 10 delivered WidgetA are billed and the notes say the other 5 are on backorder and will be billed separately when they ship. The lines add up to $11,250.00 and nothing contradicts the bill.",
+      "next_step": "None (paid).",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2142.txt": {
+      "invoice_number": "INV-2142",
+      "outcome": "HOLD",
+      "primary_reason": "Critique hold",
+      "warnings": [],
+      "reason": "In stock at the reference prices, and the lines add up to $11,000.00. The invoice is dated 2026-09-15 but says its pricing is per Quote Q-88, valid through Aug 31, 2026. The pricing basis it cites had expired, so a person confirms the price before paying.",
+      "next_step": "Confirm the current pricing with the vendor or procurement.",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2143.txt": {
+      "invoice_number": "INV-2143",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "Twin of 2142. The same lines and total, priced per Quote Q-91, which is valid through Dec 31, 2026, so the quote was in force on the invoice date.",
+      "next_step": "None (paid).",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2144.txt": {
+      "invoice_number": "INV-2144",
+      "outcome": "HOLD",
+      "primary_reason": "Critique hold",
+      "warnings": [],
+      "reason": "In stock at the reference prices, and the lines add up to $11,250.00. The notes say all 4 GadgetX were returned under RMA-112 and no replacement has shipped, yet the 4 GadgetX ($3,000.00) are still billed.",
+      "next_step": "Ask the vendor for a corrected invoice without the returned goods.",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2145.txt": {
+      "invoice_number": "INV-2145",
+      "outcome": "APPROVE",
+      "primary_reason": "None (all checks pass)",
+      "warnings": [],
+      "reason": "Twin of 2144. The same lines and total. RMA-112 belongs to an earlier order and is closed and settled; the 4 GadgetX billed here are a new order that was delivered in full.",
+      "next_step": "None (paid).",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    },
+    "data/judgment_invoices/invoice_2146.txt": {
+      "invoice_number": "INV-2146",
+      "outcome": "HOLD",
+      "primary_reason": "Audit escalation",
+      "warnings": [],
+      "reason": "Under $10,000, so critique does not run and only audit can catch it. WidgetA 10 and WidgetB 6 are in stock at the reference prices and add up to $5,500.00, but the notes say only 3 of the 6 WidgetB were delivered and the balance is on backorder.",
+      "next_step": "Confirm receipt with the vendor and pay only for what was delivered.",
+      "code_only_outcome": "APPROVE",
+      "source": "judgment"
+    }
+  }
+}
