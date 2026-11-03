@@ -1,4 +1,8 @@
-"""Critique may only make an approval stricter. The graph caps the loop at one round."""
+"""Critique may only make an approval stricter. The graph caps the loop at one round.
+
+Every USD invoice that reaches approval is critiqued. A total over the scrutiny
+threshold is marked vp_scrutiny in the record; the review itself is the same.
+"""
 
 import json
 import re
@@ -20,6 +24,7 @@ from pipeline.fact_guard import (
     verified_payload,
 )
 from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
+from decision.policy import APPROVAL_THRESHOLD_USD
 from decision.wording import resolve_as_of, threshold_only_concern, today_line
 
 
@@ -70,7 +75,9 @@ def critique(
     dropped = dropped + unquoted
     concerns = [concern_text(item) for item in kept if concern_text(item)]
     stricter = bool(draft.stricter) and decision.decision == "approve" and bool(concerns)
+    total = None if state.invoice is None else state.invoice.total
     result = {
+        "vp_scrutiny": total is not None and total > APPROVAL_THRESHOLD_USD,
         "concerns": concerns,
         "quotes": [item.quote for item in kept if item.quote],
         "innocent_reading": draft.innocent_reading,
@@ -126,7 +133,11 @@ def _critique_messages(decision: ApprovalDecision, as_of, facts, invoice_text: s
                 "delivered, priced, or returned; the numbers can all reconcile while the "
                 "wording says the bill should not be paid as printed. Start from the most "
                 "plausible innocent reading, and hold only when the page's wording makes it "
-                "unlikely. "
+                "unlikely. Shipping, receiving, packing, and dock or delivery-scheduling notes "
+                "are routine logistics and say nothing about whether the billed goods arrived; "
+                "they are never a reason to hold. Hold on delivery only when the page says "
+                "outright that fewer units were delivered than billed, that billed units were "
+                "returned or cancelled, or that the stated price basis does not apply. "
                 f"{VERIFIED_FACTS} {CRITIQUE_CLAIMS} Each concern also has quote. {QUOTE_RULE} "
                 "Return JSON only."
             ),

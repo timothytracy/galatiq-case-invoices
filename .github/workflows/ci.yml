@@ -1,6 +1,7 @@
 # Replay steps call scripts/eval.py directly. A missing file fails the
-# step. A present file still exits 1 when the score is short of perfect.
-# No API key is used.
+# step. A present file still exits 1 when the score is short of perfect,
+# except for a row the answer key lists as a known_miss, which is printed as
+# KNOWN_MISS and counted on the score line. No API key is used.
 
 name: CI
 
@@ -36,3 +37,5 @@ jobs:
         run: python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_answer_key.json --replay recordings/fraud.jsonl
       - name: Replay the pass-list set
         run: python3 scripts/eval.py --invoices data/passlist_invoices --answer-key data/passlist_answer_key.json --replay recordings/passlist.jsonl
+      - name: Replay the judgment set
+        run: python3 scripts/eval.py --invoices data/judgment_invoices --answer-key data/judgment_answer_key.json --replay recordings/judgment.jsonl

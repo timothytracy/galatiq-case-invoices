@@ -117,7 +117,7 @@ def isolate_inventory_db(inventory_db, monkeypatch):
 def repo_root_inventory_is_not_created():
     """Fail the session if a test creates or deletes the repository's data files."""
 
-    paths = [ROOT / "inventory.db", ROOT / "payments.db"]
+    paths = [ROOT / "inventory.db", ROOT / "payments.db", ROOT / "output" / "reviews" / "approve_pay.jsonl"]
     before = {path: path.read_bytes() if path.is_file() else None for path in paths}
     yield
     for path in paths:

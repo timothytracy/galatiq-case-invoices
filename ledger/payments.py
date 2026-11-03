@@ -15,9 +15,11 @@ is not marked as a revision stays a duplicate and is not paid.
 
 Split: this total is at or under the approval threshold, and this total
 plus the same vendor's paid totals whose invoice dates fall within
-split_window_days is over the threshold. The window is the absolute
+split_window_days is over the threshold. Only paid totals at or under the
+threshold count; a bill over it was not split. The window is the absolute
 difference of the printed invoice dates. A date that does not parse is
-outside the window. Another vendor does not count.
+outside the window. Another vendor does not count. A reviewer who releases a
+split hold passes split_released, which skips only the split check.
 """
 
 import contextlib
@@ -303,6 +305,7 @@ def record_payment(
     raw_text: str,
     authorization_key: str | None = None,
     status: str = "paid",
+    split_released: bool = False,
 ) -> bool | str:
     """Insert one row, paid or pending.
 
@@ -312,7 +315,8 @@ def record_payment(
     Any other string means the file could not be written. Nothing was inserted
     in those cases.
     The duplicate and split checks run inside the write lock, so two callers
-    cannot both pass the split rule. The payment step writes a pending row
+    cannot both pass the split rule. split_released skips the split check
+    only, for a reviewer who released a split hold. The payment step writes a pending row
     before the mock payment and settles it after with settle_payment.
     Anything but True means the mock must not run.
     """
@@ -362,7 +366,7 @@ def record_payment(
             connection.execute("ROLLBACK")
             return False
         _paid, over = split_window(snapshot, rows, supplements)
-        if over:
+        if over and not split_released:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
         inserted = _COLUMNS + ("authorization_key",)
@@ -459,13 +463,15 @@ def record_revision_difference(
     authorization_key: str,
     source_file: str,
     status: str = "pending",
+    split_released: bool = False,
 ) -> bool | str:
     """Insert the unpaid difference. Does not add a second payments row.
 
     True means the supplement was inserted. False means this is not a
-    positive difference or it was already recorded. "SPLIT_INVOICE" and
-    "USED_AUTHORIZATION" match record_payment. Any other string means the
-    file could not be written. The check runs inside the write lock.
+    positive difference or it was already recorded. "SPLIT_INVOICE",
+    "USED_AUTHORIZATION", and split_released match record_payment. Any other
+    string means the file could not be written. The check runs inside the
+    write lock.
     """
 
     if status not in ("pending", "paid"):
@@ -501,7 +507,7 @@ def record_revision_difference(
             connection.execute("ROLLBACK")
             return False
         _paid, over = split_window(invoice, rows, supplements)
-        if over:
+        if over and not split_released:
             connection.execute("ROLLBACK")
             return "SPLIT_INVOICE"
         inserted = _SUPPLEMENT_COLUMNS + ("authorization_key",)
@@ -702,7 +708,10 @@ def split_window(
     The total is this vendor and currency, with printed dates within
     split_window_days. A date that does not parse is outside the window.
     Another vendor does not count. This invoice's own number does not count,
-    including a supplement on that number. The rule fires when this invoice
+    including a supplement on that number. A paid total over the threshold
+    does not count: that bill was over the line on its own, not a piece of a
+    split, and counting it would hold every later bill from the vendor for the
+    whole window. The rule fires when this invoice
     is in an allowed currency, at or under the approval threshold, and this
     total plus the window is over the threshold.
     """
@@ -720,6 +729,8 @@ def split_window(
                 continue
             paid_on = parse_printed_date(row.invoice_date)
             if paid_on is None or abs((this_date - paid_on).days) > POLICY.split_window_days:
+                continue
+            if Decimal(row.total) > POLICY.scrutiny_threshold:
                 continue
             paid += Decimal(row.total)
     total = invoice.total

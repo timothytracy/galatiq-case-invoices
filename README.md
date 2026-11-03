@@ -10,7 +10,7 @@ The system takes one invoice, reads it, checks stock, math, and the payments led
 - **Reject.** The vendor is told exactly what to fix and resend.
 - **Hold.** A named person at Acme gets one specific action, such as "verify the price with the vendor."
 
-Grok extracts the fields, reads each invoice for payment fraud, critiques any bill over $10,000, and audits the result. Code makes the final call. A reject or a hold is never paid.
+Grok extracts the fields, reads each invoice for payment fraud, critiques every USD bill (marking any over $10,000 for VP scrutiny), and audits the result. Code makes the final call. A reject or a hold is never paid.
 
 ## Before any payment, all six must be true
 
@@ -50,9 +50,9 @@ Across the 41 sample and unseen invoices, 14 are approved, 16 rejected, and 11 h
 
 The brief describes $2M a year in manual processing, a 30% error rate, and five-day delays.
 
-- **Speed.** About 5 to 7 seconds per invoice, against five days by hand. Live runs of the 20 samples took 98 to 136 s.
-- **Cost.** Under one cent of Grok usage per invoice: $0.0059 on the samples and $0.0074 on the unseen set. Details are in [docs/METRICS.md](docs/METRICS.md).
-- **Errors.** Every labeled outcome in the six original sets was correct in replay and in every recorded live run of the final code. The judgment set, written to test model judgment on bills code approves, is the exception: across five live runs it held all three traps over $10,000, missed the one under $10,000, and held no benign twin in 15 tries ([rates](docs/METRICS.md#judgment-set)). With critique on the default model, the twins were held 6 times out of 15; the reasoning model removed those. The missed trap, 2146, was paid in all five runs: it is the only labeled hold ever paid, and no code check could have caught it. Earlier recording attempts held clean invoices 2003 and 2105, which led to fixes rather than relabels ([what happened](docs/METRICS.md#what-recording-these-sets-changed)). Forty-eight invoices is a small set, so read this as "few errors seen," not as a measured rate to compare with 30%.
+- **Speed.** About 5 to 7 seconds per invoice, against five days by hand. Live runs of the 20 samples took 98 to 136 s, measured before critique ran on every invoice; the extra critique call on each bill was not timed.
+- **Cost.** About one cent of Grok usage per invoice: $0.0093 on the samples and $0.0114 on the unseen set, with critique on every USD invoice. Details are in [docs/METRICS.md](docs/METRICS.md).
+- **Errors.** Every labeled outcome in the six original sets was correct in replay and in every recorded live run of the final code. The judgment set, written to test model judgment on bills code approves, also scored 7/7 in all six live runs of the final code: critique held all four traps and no benign twin in 18 tries ([rates](docs/METRICS.md#judgment-set)). Before critique ran on every invoice, the trap under $10,000, 2146, was paid in all five runs; it was the only labeled hold ever paid. With critique on the default model, the twins were held 6 times out of 15; the reasoning model removed those. Earlier recording attempts held clean invoices 2003, 2103, and 2105, which led to fixes rather than relabels ([what happened](docs/METRICS.md#what-recording-these-sets-changed)). Forty-eight invoices is a small set, so read this as "few errors seen," not as a measured rate to compare with 30%.
 - **People.** 30 of the 41 invoices (73%) need no one at Acme: 14 are paid and 16 go back to the vendor with the fix to make. The other 11 (27%) are holds, and each names one action for one owner instead of starting an email chain.
 - **Savings.** Labor saved is the share of invoices that need no person, times today's cost per invoice. That share is 73% on this set. Acme's real mix and volume set the dollar figure, so none is claimed here.
 
@@ -62,7 +62,7 @@ The brief describes $2M a year in manual processing, a 30% error rate, and five-
 |---|---|
 | Staff type invoice fields by hand from emailed PDFs. | Grok extracts the fields. Code checks each item name against the source text. An OCR fix such as "2O26" to "2026" is kept only when the math reconciles. |
 | Staff check an inconsistent legacy inventory database. | One read-only SQLite table. A near-miss name is rejected with "Likely meant WidgetA," never silently substituted. |
-| A VP approves by email chain. | Written rules decide. A bill over $10,000 gets one critique, and an audit with read-only tools can only make the decision stricter. A hold names one action for one owner. |
+| A VP approves by email chain. | Written rules decide. Every bill gets one critique, a bill over $10,000 is marked for VP scrutiny, and an audit with read-only tools can only make the decision stricter. A hold names one action for one owner. |
 | Staff pay through the banking API. | Payment runs only when all six pass-list checks are true, or after a reviewer's release. A payments ledger blocks a duplicate or a split invoice before money moves. |
 
 Each kind of hold has one owner. These roles are proposed; the brief does not name Acme's teams.
@@ -99,18 +99,18 @@ Counts are from the seven recordings, 72 invoice runs in all ([docs/METRICS.md](
 | Step | Runs | What it changed |
 |---|---|---|
 | Extraction | 72 | Read every invoice. Its instructions flag, with a quote code found on the page, held 2134, which no phrase rule matched. |
-| Fraud review | 32 | Held 4: 1004, 2121, 2124, and 2125. Code dropped none. |
-| Approval | 36 | Wrote the explanation for 28 invoices, eight of them again after critique. It never chooses the outcome. |
-| Critique | 8 | Held the 3 judgment traps over $10,000 that code approves: 2140, 2142, and 2144. Passed all three twins. |
-| Audit | 28 | Changed no outcome on its own. Code set aside two unseen escalations, on 2003 and 2105, that quoted nothing or cited a code the invoice did not have. |
+| Fraud review | 32 | Held 5: 1004 in samples and in the ordered scenario, 2121, 2124, and 2125. Code dropped none. |
+| Approval | 54 | Wrote the explanation for 27 invoices, each again after critique. It never chooses the outcome. |
+| Critique | 27 | Held the 4 judgment traps that code approves: 2140, 2142, 2144, and 2146. Passed all three twins and every other invoice. |
+| Audit | 27 | Changed no outcome on its own. Code set aside escalations on 2003, 2105, and one fraud-set invoice that quoted nothing, quoted a structured line, or cited a code the invoice did not have. |
 
 ### Critique: catching what the numbers can't
 
 The three-way match is the accounts-payable check that an invoice agrees with what was ordered and what was received. A bill can add up perfectly and still charge for goods that never arrived. `data/judgment_invoices/` has seven invoices that code alone approves: in stock, at reference prices, lines reconcile. Four of them say, in their own notes, that they should not be paid as printed: 10 of 15 units delivered but all 15 billed, pricing from a quote that expired before the invoice date, returned goods still billed, and one under $10,000. Three are twins with similar but benign wording.
 
-Over five live runs, critique held every trap over $10,000 (15/15), each hold quoting the note that code found on the page, and held no twin (0/15). Audit never caught the under-$10,000 trap (0/5). Critique uses `grok-4.20-0309-reasoning`, the model fraud review uses. On the default model it held the twins 6 times out of 15, mostly 2141, where Grok gave the right innocent reading and held it anyway. The switch added about $0.04 to a $0.20 run. So critique flips real decisions, and on these seven it does so without false holds. The full rates are in [docs/METRICS.md](docs/METRICS.md#judgment-set).
+Over six live runs of the final code, critique held every trap (24/24), each hold quoting the note that code found on the page, and held no twin (0/18). Critique runs on every USD invoice. When it ran only on bills over $10,000, the under-$10,000 trap 2146 was left to audit, which caught it 0 times in 5. Running it on every invoice adds about $0.16–$0.18 to a pass over all seven sets, which is 23–26% more. The first try held two clean invoices on routine delivery notes ("The receiver is out on Thursdays."); the prompt now says such logistics notes are never a reason to hold. Critique uses `grok-4.20-0309-reasoning`, the model fraud review uses. On the default model it held the twins 6 times out of 15, mostly 2141, where Grok gave the right innocent reading and held it anyway. The switch added about $0.04 to a $0.20 run. So critique flips real decisions, and on these seven it does so without false holds. The full rates are in [docs/METRICS.md](docs/METRICS.md#judgment-set).
 
-A critique or audit hold stands only when its concern quotes wording that code finds on the page, the same rule fraud review follows. A quote of a date, item, or total line does not count, because code has already checked those, and neither does a concern that only repeats its quote. An audit escalation may cite a finding code instead, but only one code actually found on the invoice.
+A critique or audit hold stands only when its concern quotes wording that code finds on the page, the same rule fraud review follows. A quote of a date, vendor, item, or total line does not count, because code has already checked those, and neither does a concern that only repeats its quote. An audit escalation may cite a finding code instead, but only one code actually found on the invoice.
 
 ### Invoice 2106: a clean bill the reviewers kept doubting
 
@@ -176,7 +176,7 @@ flowchart TD
   fraudReview -->|"pass, or a hold the code drops"| approval
   fraudReview -->|"quoted hold or model failure"| rejectLog
   validation -->|"reject or hold"| rejectLog
-  approval -->|"USD total over 10000 and critique not used"| critique
+  approval -->|"USD invoice and critique not used"| critique
   approval -->|"otherwise"| audit
   approval -->|"model failure or no decision"| rejectLog
   critique -->|"back to approval"| approval
@@ -203,13 +203,13 @@ python3 scripts/eval.py --invoices data/fraud_invoices --answer-key data/fraud_a
 python3 scripts/eval.py --invoices data/passlist_invoices --answer-key data/passlist_answer_key.json --replay recordings/passlist.jsonl
 ```
 
-Each exits 0 on a perfect score. These are the six CI runs, with no API key. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate. Add `--verbose` to see each stage's JSON record.
+Each exits 0 on a perfect score. These are six of the seven CI runs, with no API key; the judgment set is below. The unseen scorer checks the outcome plus the primary reason code, or a listed alternate. Add `--verbose` to see each stage's JSON record.
 
-In the ordered recording, fraud review passed 1004, so the ledger ends with three paid rows (1001, 1011, and 1004), and 1004's revision is still a `REVISED_INVOICE` hold. When fraud review holds 1004, as it did in the samples recording, the ledger has two rows, which the scenario also accepts.
+In the ordered recording, fraud review held 1004, so the ledger ends with two paid rows (1001 and 1011), and 1004's revision is still a `REVISED_INVOICE` hold. When fraud review passes 1004, the ledger has three rows, which the scenario also accepts.
 
 In the loop set, 2117, a clean $10,625 bill, went through critique and audit and was paid. 2118 and 2120 were held at validation because each page states a second amount (a total in words, or a balance due after a deposit).
 
-The judgment set is scored the same way, but it is not a CI step, because it exits 1 at 6/7:
+The judgment set is the seventh CI run. It scores 7/7 and exits 0. An answer key may list a row as a `known_miss`, which prints as `KNOWN_MISS` and keeps the step green while the miss stays on the score line; none is listed now.
 
 ```bash
 python3 scripts/eval.py --invoices data/judgment_invoices --answer-key data/judgment_answer_key.json --replay recordings/judgment.jsonl

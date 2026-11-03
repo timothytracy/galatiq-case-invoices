@@ -697,7 +697,9 @@ def test_warning_notes_are_not_a_reason_to_refuse(tmp_path, db_path):
         if name == "extract":
             return extraction()
         if name == "reason":
-            return replies.pop(0)
+            return replies.pop(0) if len(replies) > 1 else replies[0]
+        if name == "critique":
+            return json.dumps({"concerns": [], "stricter": False})
         if name == "audit":
             return json.dumps({"verdict": "PASS", "feedback": [], "notes": "PASS", "cited_codes": []})
         raise AssertionError(name)
@@ -733,6 +735,8 @@ def _clean_handler(audit_body: str, **fields):
             return extraction(**fields)
         if name == "reason":
             return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+        if name == "critique":
+            return json.dumps({"concerns": [], "stricter": False})
         if name == "audit":
             return audit_body
         raise AssertionError(name)

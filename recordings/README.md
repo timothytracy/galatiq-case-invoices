@@ -2,7 +2,7 @@
 
 These JSONL files are saved model replies. Replay reads them and does not call the network, so a score can be checked with no API key.
 
-Seven sets are committed. Each was recorded live on 2026-11-02 PT with `--as-of 2026-11-01`.
+Seven sets are committed. Each was recorded live on 2026-11-02 PT with `--as-of 2026-11-01`, with critique on every USD invoice. Every set has critique lines, so a change to the critique prompt needs all seven recorded again.
 
 - `recordings/samples.jsonl` scores `data/invoices/`
 - `recordings/unseen.jsonl` scores `data/extra_invoices/`
@@ -11,7 +11,7 @@ Seven sets are committed. Each was recorded live on 2026-11-02 PT with `--as-of 
 - `recordings/loop.jsonl` scores the loop set, `data/loop_invoices/` against `data/loop_answer_key.json`
 - `recordings/fraud.jsonl` scores the fraud set, `data/fraud_invoices/` against `data/fraud_answer_key.json`
 - `recordings/passlist.jsonl` scores the pass-list set, `data/passlist_invoices/` against `data/passlist_answer_key.json`
-- `recordings/judgment.jsonl` scores the judgment set, `data/judgment_invoices/` against `data/judgment_answer_key.json`. It is the first of the five live runs reported in `docs/METRICS.md`, and it replays at 6/7, so it exits 1 and is not a CI step.
+- `recordings/judgment.jsonl` scores the judgment set, `data/judgment_invoices/` against `data/judgment_answer_key.json`. It is the first of the three full live runs reported in `docs/METRICS.md`, and it replays at 7/7. It is a CI step.
 
 Fraud review and critique call `grok-4.20-0309-reasoning`, so their lines carry that model, and its `usage` can include `reasoning_tokens`. The header names the default model.
 

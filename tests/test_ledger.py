@@ -683,6 +683,46 @@ def test_synthetic_split_holds_only_when_the_window_sum_crosses(tmp_path):
     assert "This document was already paid" in exact[0].message
 
 
+def test_a_payment_over_the_threshold_does_not_lock_the_vendor(tmp_path):
+    """A $12,000 bill had its own review. A later $2,000 bill is not a split of it."""
+
+    ledger = tmp_path / "payments.db"
+    _seed(ledger, invoice_number="INV-BIG", total=Decimal("12000.00"), raw_text="big bill")
+    raw = "a small follow-on bill"
+    small = _bill("Split Synthetic Co.", "INV-SMALL", "2000.00", "2026-04-10", raw)
+    assert arrival_findings(ledger, small, raw) == []
+    assert record_payment(
+        ledger, vendor=small.vendor, invoice_number=small.invoice_number, revision=None,
+        total=small.total, currency="USD", invoice_date=small.invoice_date,
+        source_file="small.txt", raw_text=raw,
+    ) is True
+
+
+def test_a_true_split_still_holds_beside_a_large_payment(tmp_path):
+    ledger = tmp_path / "payments.db"
+    _seed(ledger, invoice_number="INV-BIG", total=Decimal("12000.00"), raw_text="big bill")
+    _seed(ledger, invoice_number="INV-A", total=Decimal("6000.00"), raw_text="first half")
+    raw = "second half"
+    second = _bill("Split Synthetic Co.", "INV-B", "5000.00", "2026-04-10", raw)
+    found = arrival_findings(ledger, second, raw)
+    assert _codes_of(found) == ["SPLIT_INVOICE"]
+    assert "6000.00 USD already paid" in found[0].message
+
+
+def test_split_released_skips_only_the_split_check_in_the_lock(tmp_path):
+    ledger = tmp_path / "payments.db"
+    _seed(ledger)
+    fields = dict(
+        vendor="Split Synthetic Co.", invoice_number="INV-9002", revision=None,
+        total=Decimal("5000.00"), currency="USD", invoice_date="2026-04-10",
+        source_file="second.txt", raw_text="second half",
+    )
+    assert record_payment(ledger, **fields) == "SPLIT_INVOICE"
+    assert record_payment(ledger, **fields, split_released=True) is True
+    assert record_payment(ledger, **fields, split_released=True) is False
+    assert len(paid_rows(ledger)) == 2
+
+
 def test_synthetic_split_invoice_is_held_by_the_graph_and_not_paid(db_path, tmp_path):
     """Two synthetic JSON invoices written for this test, not stored under data/."""
 

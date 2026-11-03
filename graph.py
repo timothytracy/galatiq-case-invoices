@@ -13,7 +13,7 @@ from db import ensure_inventory_db
 from llm_client import SleepClock, read_max_attempts
 from models import PipelineState
 from pipeline import approve, audit, critique, fraud_review, ingest, payment, reject_log, validate
-from decision.policy import APPROVAL_THRESHOLD_USD, CRITIQUE_CAP, POLICY
+from decision.policy import CRITIQUE_CAP, POLICY
 from decision.wording import resolve_as_of
 
 RECURSION_LIMIT = 80
@@ -121,14 +121,7 @@ def route_after_fraud_review(state: PipelineState) -> str:
 def route_after_approval(state: PipelineState) -> str:
     if state.agent_error or state.invoice is None or state.decision is None:
         return "reject_log"
-    total = state.invoice.total
-    over = (
-        state.invoice.currency in POLICY.allowed_currencies
-        and total is not None
-        and total > APPROVAL_THRESHOLD_USD
-        and state.critique_rounds < CRITIQUE_CAP
-    )
-    if over:
+    if state.invoice.currency in POLICY.allowed_currencies and state.critique_rounds < CRITIQUE_CAP:
         return "critique"
     return "audit"
 

@@ -1,4 +1,4 @@
-"""Ingestion. Read the file, ask the model to extract it, then normalize names."""
+"""Ingestion. Read the file, check it can be an invoice, ask the model to extract it, then normalize names."""
 
 from datetime import date
 from pathlib import Path
@@ -12,7 +12,7 @@ from models import (
     PipelineState,
     SourceInfo,
 )
-from parsers import read_raw
+from parsers import read_raw, unreadable_reason
 from pipeline.stage_log import agent_stop, stage_log, stop_with_finding
 from recording import stable_invoice_path
 from decision.invoice_fields import (
@@ -41,6 +41,9 @@ def ingest(
     except Exception as exc:
         reason = f"Could not read the invoice: {exc}"
         return stop_with_finding(state, "ingestion", reason, "UNREADABLE")
+    problem = unreadable_reason(path, raw)
+    if problem:
+        return {**stop_with_finding(state, "ingestion", problem, "UNREADABLE"), "raw_text": raw}
 
     step_attempts: list[dict] = []
     try:

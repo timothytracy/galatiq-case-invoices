@@ -65,9 +65,12 @@
     "data/judgment_invoices/invoice_2146.txt": {
       "invoice_number": "INV-2146",
       "outcome": "HOLD",
-      "primary_reason": "Audit escalation",
+      "primary_reason": "Critique hold",
+      "also_accepted_reasons": [
+        "Audit escalation"
+      ],
       "warnings": [],
-      "reason": "Under $10,000, so critique does not run and only audit can catch it. WidgetA 10 and WidgetB 6 are in stock at the reference prices and add up to $5,500.00, but the notes say only 3 of the 6 WidgetB were delivered and the balance is on backorder.",
+      "reason": "Under $10,000, so it is not marked VP scrutiny, but critique still reads it. WidgetA 10 and WidgetB 6 are in stock at the reference prices and add up to $5,500.00, but the notes say only 3 of the 6 WidgetB were delivered and the balance is on backorder. A quoted critique concern or a quoted audit escalation both hold it.",
       "next_step": "Confirm receipt with the vendor and pay only for what was delivered.",
       "code_only_outcome": "APPROVE",
       "source": "judgment"

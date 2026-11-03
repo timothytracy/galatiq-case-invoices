@@ -71,10 +71,12 @@ HOLD_CODES = (
 #   CRITIQUE_HOLD — review the critique concern. No hard finding is attached.
 #   AUDIT_ESCALATED — the audit sent the invoice to a person, except the
 #     send-back cap (see SEND_BACK_CAP_MESSAGE), which is rerun-by-hand.
+#   SPLIT_INVOICE — confirm with the vendor that these are separate orders.
+#     A split that appears only after the hold was recorded still blocks.
 # Reject codes are not here. The other holds stay unpaid: SYSTEM_ERROR and
 # BAD_REASONING are a failed run, ITEM_NOT_IN_SOURCE is an extraction miss,
 # NON_USD is never converted, CREDIT_NOTE is a credit, DUPLICATE_INVOICE
-# and SPLIT_INVOICE are already do-not-pay, and AMOUNT_WORDS_MISMATCH and
+# is already paid, and AMOUNT_WORDS_MISMATCH and
 # BALANCE_DUE would pay an amount the page does not settle (a person pays the
 # right amount by hand), ZERO_TOTAL has nothing to pay, and
 # PRINTED_TOTAL_MISMATCH would pay an amount the page does not print. A new
@@ -90,6 +92,7 @@ PAYABLE_HOLD_CODES = (
     "PRICE_SPIKE",
     "CRITIQUE_HOLD",
     "AUDIT_ESCALATED",
+    "SPLIT_INVOICE",
 )
 
 # Recorded. Not enough on their own to change the outcome.

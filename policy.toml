@@ -3,7 +3,9 @@
 # and names the key. Numbers below are the behavior this prototype ships with.
 # XAI_MAX_ATTEMPTS still overrides model_retry_attempts for a single run.
 
-# A total in an allowed currency above this goes to critique, then back to approval.
+# Every invoice in an allowed currency goes to critique, then back to approval.
+# A total above this is marked VP scrutiny in the critique record. It is also the
+# split-invoice line and the near-threshold warning line.
 # Being over this amount is not a risk finding.
 scrutiny_threshold = "10000"
 

@@ -271,6 +271,8 @@ def test_real_future_date_still_sends_back(tmp_path, db_path):
             return body
         if name == "reason":
             return json.dumps({"risks_considered": ["no extra risk"], "conclusion": "The checks passed."})
+        if name == "critique":
+            return json.dumps({"concerns": [], "stricter": False})
         if name == "audit":
             return json.dumps(replies.pop(0))
         raise AssertionError(name)
@@ -537,3 +539,25 @@ def _stage(result, name) -> dict:
 def _task_payload(fake: FakeLLM, task: str):
     call = next(messages for messages in fake.calls if task_of(messages) == task)
     return call[0]["content"], json.loads(call[1]["content"])["verified_by_code"]
+
+
+def test_a_vendor_line_quote_is_structured_only():
+    from parsers import parse_file
+    from pipeline.fact_guard import quote_dropped_reason
+
+    path = Path(__file__).resolve().parents[1] / "data" / "extra_invoices" / "invoice_2105.txt"
+    invoice = parse_file(path)
+    raw = path.read_text(encoding="utf-8")
+    rule = quote_dropped_reason("Vendor: Quarry Lane Fasteners", invoice, raw, "A known vendor.")
+    assert rule[0] == "quote_structured_only"
+    assert quote_dropped_reason("The receiver is out on Thursdays.", invoice, raw, "Routine.") is None
+
+
+def test_critique_prompt_says_logistics_notes_are_not_a_hold():
+    from pipeline.critique import _critique_messages
+    from tests.fakes import payable_state
+
+    state = payable_state()
+    system = _critique_messages(state.decision, date(2026, 11, 1), {}, state.raw_text)[0]["content"]
+    assert "routine logistics" in system
+    assert "fewer units were delivered than billed" in system
