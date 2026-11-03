@@ -1,5 +1,5 @@
 {
-  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "policy": "docs/DESIGN.md (with the Reject > Hold > Approve precedence rule)",
   "invoices": {
     "data/invoices/invoice_1001.txt": {
       "invoice_number": "INV-1001",
@@ -34,18 +34,18 @@
     },
     "data/invoices/invoice_1004.json": {
       "invoice_number": "INV-1004",
-      "outcome": "APPROVE",
-      "primary_reason": "None (all checks pass)",
+      "outcome": "HOLD",
+      "primary_reason": "Fraud suspected",
       "warnings": [
         "Vendor address 742 Evergreen Terrace, Springfield, IL 62704 is a well-known fictional home address"
       ],
-      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00); the vendor address looks residential, which is noted, not held, per the decision on 2026-10-31.",
-      "next_step": "None (paid).",
+      "reason": "Stock and math pass ($1,750.00 + 8% tax = $1,890.00), so the invoice passes validation. The vendor address is a famous fictional home, so fraud review holds it for a person to verify the vendor; a reviewer can release it.",
+      "next_step": "Verify payment details with the vendor using contact details already on file.",
       "also_accepted_outcomes": [
         {
-          "outcome": "HOLD",
-          "primary_reason": "Fraud suspected",
-          "next_step": "Verify payment details with the vendor using contact details already on file."
+          "outcome": "APPROVE",
+          "primary_reason": "None (all checks pass)",
+          "next_step": "None (paid)."
         }
       ],
       "source": "README"
@@ -55,7 +55,7 @@
       "outcome": "HOLD",
       "primary_reason": "Revised invoice",
       "warnings": [
-        "Same vendor address as 1004 (noted, not held, on 1004)"
+        "Same vendor address as 1004"
       ],
       "reason": "This is revision R1 of INV-1004 (\"Revised invoice - additional items added per PO amendment\"); stock (GadgetX 5 of 5) and math ($5,500.00 + 8% = $5,940.00) pass.",
       "next_step": "Confirm it replaces the original INV-1004 and that the original was not paid.",
@@ -224,6 +224,6 @@
   "notes": [
     "The policy names findings (for example 'Stock shortfall') but defines no reason-code identifiers. The primary reason column uses the policy's finding names.",
     "invoice_1009.json has also_accepted_reasons: its vendor and due date are blank and its WidgetA quantity is negative, so Missing required field and the bad quantity are both genuinely present. The outcome must still be REJECT.",
-    "invoice_1004.json has also_accepted_outcomes: APPROVE, or a Fraud suspected HOLD. The label was changed after the run, when fraud review held 1004 on its address. The brief lists 1004 as passing validation, which it still does. A reviewer would reasonably verify a vendor at a famous fictional home address. The prompt was not changed."
+    "invoice_1004.json is a Fraud suspected HOLD, and also_accepted_outcomes accepts an APPROVE. The brief says 1004 passes validation, which it does; it does not say whether 1004 is paid. Code alone approves it. Fraud review holds it on its address. Both are defensible, so both are accepted. The label was first a strict APPROVE, was widened after the first fraud-review run, and then made the hold primary; the prompt was not changed."
   ]
 }

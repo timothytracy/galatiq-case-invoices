@@ -72,6 +72,17 @@ def extraction_json(path: Path) -> str:
     return json.dumps(payload)
 
 
+def code_only(expected: dict) -> dict:
+    """The answer-key row code alone must give: a fraud-review hold's accepted approve."""
+
+    if expected.get("primary_reason") != "Fraud suspected":
+        return expected
+    for alternative in expected.get("also_accepted_outcomes") or []:
+        if alternative["outcome"] == "APPROVE":
+            return {**expected, **alternative}
+    return expected
+
+
 def handler_for(path: Path):
     def handler(messages):
         name = task_of(messages)

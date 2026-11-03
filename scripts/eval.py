@@ -97,7 +97,8 @@ def grade(result: dict, expected: dict) -> dict:
     printed rather than dropped quietly. Warnings are informational.
 
     also_accepted_outcomes lists other outcomes the row accepts, each with its
-    own primary_reason. invoice_1004.json accepts a FRAUD_SUSPECTED hold.
+    own primary_reason. invoice_1004.json is a FRAUD_SUSPECTED hold and also
+    accepts an approve.
     """
 
     actual_outcome = str(result.get("outcome") or "").upper()

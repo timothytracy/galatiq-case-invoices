@@ -1,5 +1,5 @@
 {
-  "policy": "docs/DECISION_POLICY.md (with the Reject > Hold > Approve precedence rule)",
+  "policy": "docs/DESIGN.md (with the Reject > Hold > Approve precedence rule)",
   "notes": "Fraud set: each invoice is under $10,000, so critique does not run. None has a reject or hold finding, so code alone approves each one. The labels say whether a careful AP reviewer would stop the payment to verify it with the vendor. Written before the fraud review prompt.",
   "invoices": {
     "data/fraud_invoices/invoice_2121.txt": {
