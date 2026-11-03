@@ -16,10 +16,10 @@ import streamlit as st
 from llm_client import NEEDS_KEY, REPLAY_NOTICE, MissingAPIKey
 from ui.pay import approve_and_pay, extracted_total, saved_result
 from ui.present import (
-    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, SHARED_LEDGER_NOTE, action_text, agent_trail,
+    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail,
     already_paid_notice, blank, can_pay, concern_text, confirm_label, detail_index, format_amount,
     format_money, invoice_view, label, pay_block, pay_message, payment_detail_text, payment_text,
-    reason_code_text, released, show_text, summarize, table_rows,
+    reason_code_text, released, shared_ledger_note, show_text, summarize, table_rows,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
@@ -140,7 +140,7 @@ def screen_run(mode: str) -> None:
         )
         st.caption("Each replay run keeps the temporary ledger that run wrote.")
         if not st.session_state.get("shared_ledger_batch"):
-            st.caption(SHARED_LEDGER_NOTE)
+            st.caption(shared_ledger_note())
     with right:
         st.subheader("Load")
         st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
@@ -172,7 +172,7 @@ def screen_run(mode: str) -> None:
         tally = f"{tally}, released after review {summary['released']['count']}"
     st.write(f"This session has {len(entries)} invoices ({tally}).")
     if st.session_state.get("shared_ledger_batch"):
-        st.caption(SHARED_LEDGER_NOTE)
+        st.caption(shared_ledger_note(counts))
     if st.button("Save run file"):
         st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
 

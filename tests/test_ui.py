@@ -19,7 +19,7 @@ from ui.pay import (
 from ui.present import (
     INVOICE_FIELDS,
     LINE_FIELDS,
-    SHARED_LEDGER_NOTE,
+    shared_ledger_note,
     action_text,
     agent_trail,
     already_paid_notice,
@@ -1123,8 +1123,10 @@ def test_shared_ledger_changes_later_invoices(db_path, monkeypatch):
     assert held["payment_status"] == "not_paid"
     assert payment_detail_text(held) == ""
     assert held["reason"] in held["payment"]["detail"]
-    assert "6 approve, 9 reject, and 5 hold" in SHARED_LEDGER_NOTE
-    assert "7 approve, 9 reject, and 4 hold" in SHARED_LEDGER_NOTE
+    note = shared_ledger_note()
+    assert "6 approve, 9 reject, and 5 hold" in note
+    assert "7 approve, 9 reject, and 4 hold" in note
+    assert "6 approve" not in (ROOT / "ui" / "present.py").read_text(encoding="utf-8")
     ledger.unlink(missing_ok=True)
 
 
@@ -1200,7 +1202,7 @@ def test_upload_uses_the_existing_run_path(monkeypatch):
     assert entry["llm"] == "replay"
     shown = _visible(app)
     assert "Processed invoice_1001.txt." in shown
-    assert SHARED_LEDGER_NOTE in shown
+    assert shared_ledger_note() in shown
 
 
 def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
@@ -1208,13 +1210,13 @@ def test_run_screen_explains_the_shared_ledger_counts(monkeypatch):
     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=120)
     app.run()
     assert not app.exception, app.exception
-    assert SHARED_LEDGER_NOTE in _visible(app)
+    assert shared_ledger_note() in _visible(app)
     next(button for button in app.button if button.label == "Process data/invoices").click().run()
     assert not app.exception, app.exception
     shown = _visible(app)
     assert "Processed 20 invoices." in shown
     assert "approve 6, reject 9, hold 5" in shown
-    assert SHARED_LEDGER_NOTE in shown
+    assert shared_ledger_note() in shown
     assert "7 approve, 9 reject, and 4 hold" in shown
 
 

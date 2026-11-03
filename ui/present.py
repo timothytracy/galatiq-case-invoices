@@ -3,21 +3,87 @@
 import json
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
+from decision.invoice_fields import normalize_invoice_number
 from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
 from decision.policy import APPROVAL_THRESHOLD_USD
+from parsers import SUFFIXES
 from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
 
 OUTCOMES = ("approve", "reject", "hold")
-# Process data/invoices keeps one ledger. Eval and the README sample score
-# give each invoice its own ledger, so the same 20 files land on different counts.
-SHARED_LEDGER_NOTE = (
-    "Process data/invoices shares one ledger, so an earlier payment changes a later invoice. "
-    "invoice_1011.pdf is paid first, and invoice_1011.txt is then held as a duplicate instead of approved. "
-    "The counts are 6 approve, 9 reject, and 5 hold. "
-    "The README sample score runs each invoice on its own ledger: 7 approve, 9 reject, and 4 hold."
-)
+_ROOT = Path(__file__).resolve().parents[1]
+_ANSWER_KEY = _ROOT / "data" / "answer_key.json"
+_INVOICES = _ROOT / "data" / "invoices"
+
+
+def _count_phrase(counts: dict) -> str:
+    parts = [f"{counts[name]} {name}" for name in OUTCOMES]
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    return ", ".join(parts[:-1]) + ", and " + parts[-1]
+
+
+def _labeled_folder_counts() -> tuple[dict, dict, list[tuple[str, str]]] | None:
+    """Sample-score counts, and the same files on one ledger, from the answer key.
+
+    An approve pays. A later approve of that invoice number is a duplicate hold.
+    This reads the labeled file only. It does not run the pipeline.
+    """
+    try:
+        labeled = json.loads(_ANSWER_KEY.read_text(encoding="utf-8"))["invoices"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+    files = sorted(
+        path for path in _INVOICES.iterdir()
+        if path.is_file() and path.suffix.lower() in SUFFIXES
+    ) if _INVOICES.is_dir() else []
+    alone = dict.fromkeys(OUTCOMES, 0)
+    shared = dict.fromkeys(OUTCOMES, 0)
+    paid: dict[str, str] = {}
+    flips: list[tuple[str, str]] = []
+    for path in files:
+        row = labeled.get(f"data/invoices/{path.name}")
+        if not isinstance(row, dict):
+            continue
+        outcome = str(row.get("outcome") or "").lower()
+        if outcome not in alone:
+            continue
+        alone[outcome] += 1
+        number = normalize_invoice_number(row.get("invoice_number"))
+        if outcome == "approve" and number and number in paid:
+            shared["hold"] += 1
+            flips.append((paid[number], path.name))
+            continue
+        shared[outcome] += 1
+        if outcome == "approve" and number:
+            paid[number] = path.name
+    return alone, shared, flips
+
+
+def shared_ledger_note(batch_counts: dict | None = None) -> str:
+    """Why a shared-ledger folder tally differs from the per-invoice sample score."""
+    lead = "Process data/invoices shares one ledger, so an earlier payment changes a later invoice. "
+    counted = _labeled_folder_counts()
+    if counted is None:
+        return lead + "The folder tally can differ from the README sample score, which runs each invoice on its own ledger."
+    alone, shared, flips = counted
+    batch = batch_counts if batch_counts is not None else shared
+    change = ""
+    if flips:
+        change = " ".join(
+            f"{earlier} is paid first, and {later} is then held as a duplicate instead of approved."
+            for earlier, later in flips
+        ) + " "
+    return (
+        lead
+        + change
+        + f"The counts are {_count_phrase(batch)}. "
+        + f"The README sample score runs each invoice on its own ledger: {_count_phrase(alone)}."
+    )
+
+
 TRAIL_STAGES = ("ingestion", "validation", "approval", "critique", "audit", "payment")
 APPROVED = "Approved, no action needed"
 INVOICE_FIELDS = (
