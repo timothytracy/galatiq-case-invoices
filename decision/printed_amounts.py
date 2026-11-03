@@ -22,36 +22,50 @@ _LABEL = re.compile(
     (?<![a-z_])
     (?<!previous[ \t_])(?<!prior[ \t_])(?<!credit[ \t_])
     (?:
-        balance(?:[ \t_]+|\n[ \t]*)(?:due|owing|payable|outstanding)
-        | (?<!account[ \t_])balance(?![ \t_]+forward)
+        balancedue
+        | balance(?:[ \t_]+|\n[ \t]*)(?:due|owing|payable|outstanding|remaining)
+        | (?<!account[ \t_])(?<!opening[ \t_])(?<!deposit[ \t_])(?<!statement[ \t_])
+            balance(?![ \t_]+forward)
         | amount[ \t_]*due
         | amount\n[ \t]*due
-        | amount(?:[ \t_]+|\n[ \t]*)owing
+        | amount(?:[ \t_]+|\n[ \t]*)(?:owing|remaining)
         | amount(?:[ \t_]+|\n[ \t]*)(?:payable|to[ \t_]+pay)
         | remaining(?:[ \t_]+|\n[ \t]*)(?:to[ \t_]+pay|balance)
         | total(?:[ \t_]+|\n[ \t]*)due
-        | please[ \t_]+remit
+        | net[ \t_]+due
+        | now[ \t_]+due
+        | pay[ \t_]+this[ \t_]+amount
+        | outstanding
+        | please[ \t_]+remit(?:[ \t_]+the[ \t_]+balance[ \t_]+of)?
+        | (?<![a-z_])remit
     )
     """
 )
-# Right next to the amount: "$40.00 credit" or "CR". Not "Credit card".
-_TRAILING_CREDIT = re.compile(r"(?i)\s*(?:credit\b(?!\s+card\b)|cr\b)")
-_AFTER_COUNT = re.compile(r"(?i)\s*(?:days?|shipments?|items?|units?|of)\b")
+# "$40.00 credit" or "CR", and nothing after it. "Credit card", "Credit cards",
+# and "Credit or debit" are phrases, not markers.
+_TRAILING_CREDIT = re.compile(r"(?i)[ \t]*(?:credit\b(?![ \t]+[A-Za-z])|cr\b)")
+# "2 of 6", "30 days". Not "$8,000.00 of ..." or "$8,000.00 items".
+_AFTER_COUNT = re.compile(r"(?i)[ \t]*(?:days?|shipments?|items?|units?|of)\b")
+_GLUED = re.compile(r"(?i)(?:%|st\b|nd\b|rd\b|th\b|/|-)")
+_FOLLOWING_WORD = re.compile(r"[ \t]+[A-Za-z]")
 _SAME_LINE = re.compile(
     rf"""(?ix)
     [ \t]*
     (?:\([^)\n]{{0,40}}\)[ \t]*)?
     ["'>]*[ \t]*
-    (?:[:,=>]|-|\.{{2,}})?[ \t]*
+    (?:[:,=>]|\.{{2,}}|-[ \t]+)?[ \t]*
     ["'>]*[ \t]*
     (?:(?:usd|us\$)[ \t]*)?
     \$?[ \t]*
     (?P<num>{_NUMBER})
     """
 )
+# One blank line is still the next line. A glued dash (BALANCE-2026) is not.
 _NEXT_LINE_MONEY = re.compile(
     rf"""(?ix)
-    [ \t]*\n[ \t]*
+    [ \t]*
+    (?:[:,=>][ \t]*)?
+    (?:\n[ \t]*){{1,2}}
     (?:(?:usd|us\$)[ \t]*)?
     \$?[ \t]*
     (?P<num>{_NUMBER})
@@ -104,23 +118,33 @@ def _money_shaped(gap: str, number: str) -> bool:
 
 
 def _separator(gap: str) -> bool:
-    return re.search(r"[:,=>]|-|\.{2,}", gap) is not None
+    return re.search(r"[:,=>]|\.{2,}|-[ \t]", gap) is not None
+
+
+def _bare_integer(gap: str, number: str) -> bool:
+    return "." not in number and not _money_shaped(gap, number)
 
 
 def _accept(gap: str, number: str, tail: str) -> Decimal | None:
-    if _TRAILING_CREDIT.match(tail) or _AFTER_COUNT.match(tail):
+    if _TRAILING_CREDIT.match(tail):
         return None
-    if not (_money_shaped(gap, number) or _separator(gap)):
+    # "of" / "items" / "days" drop a bare integer. A dollar amount stays.
+    if _bare_integer(gap, number) and (
+        _AFTER_COUNT.match(tail) or _GLUED.match(tail) or _FOLLOWING_WORD.match(tail)
+    ):
         return None
-    return _money(number)
+    if _money_shaped(gap, number) or _separator(gap) or re.fullmatch(r"[ \t]*", gap):
+        return _money(number)
+    return None
 
 
 def balances_due(raw_text: str | None) -> list[Decimal]:
     """Every amount the page says is owed.
 
-    The gap between the label and the number stays on one line, unless the
-    number looks like money. A bare count (days, shipments, "2 of 6") is not
-    an amount owed. A credit marker sitting on the amount is not either.
+    A blank line may sit between the label and a money amount. A bare integer
+    right after the label counts. "of" or "items" drops that integer only.
+    "credit" alone, or "CR", marks a credit. "Credit card" and "Credit or
+    debit" do not. A dash glued to a reference number is not a separator.
     """
 
     text = raw_text or ""

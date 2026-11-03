@@ -1,6 +1,6 @@
 # Replay metrics
 
-Every replay number is from a committed recording, run on 2026-11-01 PT, with no API key. A replay creates `inventory.db` from the seed when the file is missing. Each command exited 0. The score, token, cost, call, and repeat figures are the stdout of `scripts/eval.py`. The live API runs are in [Live runs](#live-runs).
+Every replay number is from a committed recording, with no API key. Samples, unseen, and the ordered ledger were recorded on 2026-11-01 PT. The loop set was recorded on 2026-11-02 PT with `--as-of 2026-11-01`. A replay creates `inventory.db` from the seed when the file is missing. Each command exited 0. The score, token, cost, call, and repeat figures are the stdout of `scripts/eval.py`. The live API runs are in [Live runs](#live-runs).
 
 | Run | Command | Score | Tokens | Cost USD | Calls | Repeats |
 |---|---|---|---|---|---|---|
