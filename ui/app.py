@@ -14,40 +14,82 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st
 
-from llm_client import NEEDS_KEY, REPLAY_NOTICE, MissingAPIKey
+from llm_client import NEEDS_KEY, MissingAPIKey
 from ui.pay import approve_and_pay, payable_amount, saved_result
 from ui.present import (
-    INVOICE_FIELDS, LINE_FIELDS, OUTCOMES, action_text, agent_trail,
-    already_paid_notice, blank, can_pay, concern_text, confirm_label, detail_index, format_amount,
-    format_money, invoice_view, label, pass_list_rows, pay_block, pay_message, payment_detail_text, payment_text,
-    reason_code_text, released, shared_ledger_note, show_text, summarize, table_rows,
+    LINE_FIELDS, OUTCOMES, agent_trail,
+    already_paid_notice, blank, can_pay, cannot_pay_text, concern_text, confirm_label, detail_index,
+    display_action, document_authorization, format_amount,
+    format_money, invoice_field_pairs, invoice_view, label, pass_list_rows, pay_message,
+    payment_detail_text, payment_text,
+    reason_code_text, reason_label, released, shared_ledger_note, show_text, shown_missing_stages,
+    summarize, table_rows,
 )
 from ui.reviews import REVIEW_PATH, load_reviews, record_review
 from ui.runner import (
     DEFAULT_RUN, PAYMENTS_DB, grok_key_set, invoice_files, is_real_payments_db, load_run,
-    mode_label, paid_ledger_row, parse_payload, recording_files, resolve_path, run_one, save_run,
+    paid_ledger_row, parse_payload, recording_files, resolve_path, run_one, save_run,
     session_paid_row,
     stage_upload, temporary_ledger, unrecorded,
 )
 
 SCREENS = ("Run or load", "Results", "Invoice detail", "Hold queue", "Metrics")
 MODES = ("Live (Grok)", "Replay (recorded Grok)")
-REPLAY_BANNER = "Replay of a recorded Grok run. This makes no live model calls."
-BADGE = {"approve": "green", "reject": "red", "hold": "orange", "blocking": "red", "warning": "orange", "info": "gray"}
 DOLLARS = {"approve": "Dollars approved", "reject": "Dollars rejected", "hold": "Dollars held"}
+REPLAY_LINE = "Replay mode: recorded Grok answers, no live calls."
+LIVE_LINE = "Live mode: live Grok answers."
+_RESULT_TITLES = (("approve", "Approved"), ("reject", "Rejected"), ("hold", "Held"))
 
 st.set_page_config(page_title="Invoice review", layout="wide")
 st.markdown(
-    "<style>.review-table{width:100%;border-collapse:collapse;font-size:14px}"
-    ".review-table th{text-align:left;padding:8px 10px;border-bottom:2px solid #d9d3c5}"
-    ".review-table td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}"
-    ".badge{display:inline-block;padding:2px 8px;border-radius:999px;color:#fff;font-size:12px;font-weight:700}"
-    ".badge-approve{background:#1f7a4d}.badge-reject,.badge-blocking{background:#9d2c2c}"
-    ".badge-hold,.badge-warning{background:#8a5a12}.badge-info,.badge-gray{background:#5c6b73}"
-    ".badge-repeat{background:#3d5a80}.badge-blocked{background:#6b3fa0}"
-    ".file{font-weight:600}.sub,.note{color:#555}.reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
-    ".tool-call{margin:2px 0 6px}"
-    "#MainMenu,footer,div[data-testid='stToolbar']{visibility:hidden}</style>",
+    """
+<style>
+.block-container, [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; }
+h1 { font-size: 1.75rem; line-height: 1.15; }
+.review-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.review-table.results { table-layout: fixed; }
+.review-table th {
+  text-align: left; padding: 8px 10px;
+  border-bottom: 2px solid rgba(128,128,128,0.45);
+  font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
+  font-weight: 600; color: rgba(128,128,128,0.95);
+}
+.review-table td {
+  padding: 12px 10px; border-bottom: 1px solid rgba(128,128,128,0.28);
+  vertical-align: top;
+}
+.review-table tbody tr:hover td { background: rgba(128,128,128,0.10); }
+.review-table th.amt, .review-table td.amt { text-align: right; font-variant-numeric: tabular-nums; }
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; color: #fff;
+  font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.badge-approve, .badge-paid { background: #1f7a4d; }
+.badge-reject, .badge-blocking { background: #9d2c2c; }
+.badge-hold, .badge-warning { background: #8a5a12; }
+.badge-info, .badge-gray, .badge-unpaid { background: #6b7280; }
+.badge-released, .badge-repeat { background: #3d5a80; }
+.badge-blocked { background: #6b3fa0; }
+.file { font-weight: 600; overflow-wrap: normal; word-break: normal; }
+.sub, .note, .code { opacity: 0.72; }
+.code { font-size: 12px; }
+.reason {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; white-space: normal; overflow-wrap: anywhere;
+}
+.detail-head {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  margin: 0.15rem 0 0.85rem;
+}
+.detail-head .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+.check { padding: 2px 0 4px; }
+.mark { font-weight: 700; display: inline-block; width: 1.1em; }
+.mark-pass { color: light-dark(#1f7a4d, #6dcc8d); }
+.mark-fail { color: light-dark(#9d2c2c, #ff9a9a); }
+.tool-call { margin: 2px 0 6px; }
+#MainMenu, footer, div[data-testid="stToolbar"] { visibility: hidden; }
+</style>
+""",
     unsafe_allow_html=True,
 )
 
@@ -58,13 +100,7 @@ def main() -> None:
     live = mode == "live"
     _temp_releases(live)
     page = st.sidebar.radio("Screen", SCREENS)
-    if not key_set:
-        st.warning(REPLAY_NOTICE)
-    if mode == "replay":
-        st.info(REPLAY_BANNER)
-    used = mode_label(st.session_state.get("entries") or [])
-    if used:
-        st.caption(f"This run used {used}.")
+    st.caption(LIVE_LINE if live else REPLAY_LINE)
     entries = st.session_state.setdefault("entries", [])
     screens = {
         "Run or load": lambda: screen_run(mode),
@@ -141,8 +177,7 @@ def screen_run(mode: str) -> None:
             key="invoice_upload",
         )
         st.caption("Replay runs in this session share one temporary ledger.")
-        if not st.session_state.get("entries"):
-            st.caption(shared_ledger_note())
+        _batch_note()
     with right:
         st.subheader("Load")
         st.text_input("Run file", placeholder="output/runs/review_run.json", key="run_path")
@@ -176,13 +211,43 @@ def screen_run(mode: str) -> None:
     if summary["released"]["count"]:
         tally = f"{tally}, released after review {summary['released']['count']}"
     st.write(f"This session has {len(entries)} invoices ({tally}).")
-    if st.session_state.get("shared_ledger_batch"):
-        st.caption(shared_ledger_note(counts, summary["released"]["count"]))
     if st.button("Save run file"):
         st.success(f"Saved {save_run(DEFAULT_RUN, entries)}")
 
+def _batch_note() -> None:
+    """The ledger explanation, collapsed. A batch run fills in this session's counts.
+
+    A single invoice does not show it. That note is about a folder on one ledger.
+    """
+    entries = st.session_state.get("entries") or []
+    if entries and st.session_state.get("shared_ledger_batch"):
+        summary = summarize(entries)
+        note = shared_ledger_note(summary["counts"], summary["released"]["count"])
+    elif not entries:
+        note = shared_ledger_note()
+    else:
+        return
+    with st.expander("About batch runs"):
+        st.write(note)
+
+
+def _result_metrics(entries: list[dict]) -> None:
+    summary = summarize(entries)
+    columns = st.columns(3)
+    for column, (name, title) in zip(columns, _RESULT_TITLES):
+        column.metric(title, f"{summary['counts'][name]} · {format_amount(summary['dollars'][name], 'USD')}")
+    other = []
+    for currency, bucket in summary["other"].items():
+        for name, title in _RESULT_TITLES:
+            if bucket[name]:
+                other.append(f"{title} {format_amount(bucket[name], currency)}")
+    if other:
+        st.caption("Not in the dollar figures. Nothing is converted. " + ", ".join(other) + ".")
+
+
 def screen_results(entries: list[dict]) -> None:
     st.header("Results")
+    _result_metrics(entries)
     choice = st.segmented_control(
         "Outcome", ["all", *OUTCOMES], default="all",
         format_func=lambda value: "All" if value == "all" else value.upper(),
@@ -199,26 +264,25 @@ def screen_results(entries: list[dict]) -> None:
         outcome = row["outcome"] or ""
         number = f"<div class='sub'>{escape(row['invoice_number'])}</div>" if row.get("invoice_number") else ""
         reason = escape((row["reason"] or "").replace("\n", " "))
-        if released(row):
-            payment = _badge("approve", "Paid after review")
-        elif row["payment_status"] == "paid":
-            payment = _badge("approve", "Paid")
-        else:
-            payment = escape(payment_text(row["payment_status"]))
         body.append(
-            f"<tr><td><div class='file'>{escape(row['file'])}</div>{number}</td>"
-            f"<td>{_badge(outcome, outcome.upper())}</td><td>{escape(reason_code_text(row))}</td>"
-            f"<td>{escape(format_amount(row['amount'], row['currency']))}</td><td>{payment}</td>"
+            f"<tr><td><div class='file'>{_soft_name(row['file'])}</div>{number}</td>"
+            f"<td>{_outcome_badge(outcome)}</td><td>{_reason_cell(row)}</td>"
+            f"<td class='amt'>{escape(format_amount(row['amount'], row['currency']))}</td>"
+            f"<td>{_payment_badge(row)}</td>"
             f"<td><div class='reason' title='{reason}'>{reason}</div></td></tr>"
         )
-    _table(["Invoice", "Outcome", "Reason code", "Amount", "Payment", "Reason"], body)
+    _table(
+        ["Invoice", "Outcome", "Reason code", "Amount", "Payment", "Reason"],
+        body,
+        results=True,
+    )
 
 def _facts(titles, values) -> None:
     columns = st.columns(len(titles))
     for column, title, value in zip(columns, titles, values):
         column.caption(title)
-        if isinstance(value, tuple):
-            column.badge(value[0], color=value[1])
+        if isinstance(value, tuple) and value and value[0] == "html":
+            column.markdown(value[1], unsafe_allow_html=True)
         else:
             column.write(value)
 
@@ -226,20 +290,23 @@ def screen_detail(entries: list[dict]) -> None:
     st.header("Invoice detail")
     views = [invoice_view(entry) for entry in entries]
     names = [view["file"] for view in views]
-    view = views[names.index(st.selectbox("Invoice", names, index=detail_index(views), key="invoice_detail"))]
-    outcome, paid = view["outcome"] or "", view["payment_status"] == "paid"
+    chosen = names.index(st.selectbox("Invoice", names, index=detail_index(views), key="invoice_detail"))
+    entry, view = entries[chosen], _with_own_authorization(entries[chosen], views[chosen])
+    payable = _live_payable(entry, view)
+    action = display_action(view, payable)
+    _detail_head(view, action)
     _facts(
         ("Outcome", "Reason code", "Total", "Payment"),
         (
-            (outcome.upper(), BADGE.get(outcome, "gray")),
-            reason_code_text(view),
+            ("html", _outcome_badge(view["outcome"] or "")),
+            ("html", _reason_cell(view)),
             format_amount(view["amount"], view["currency"]),
-            (payment_text(view["payment_status"]), "green" if paid else "gray"),
+            ("html", _payment_badge(view)),
         ),
     )
     for caption, value in (
         ("Reason", view["reason"]),
-        ("Next action", action_text(view)),
+        ("Next action", action),
     ):
         if not blank(value):
             st.caption(caption)
@@ -248,6 +315,7 @@ def screen_detail(entries: list[dict]) -> None:
     if paid_detail:
         st.caption("Payment detail")
         st.write(paid_detail)
+    paid = view["payment_status"] == "paid"
     st.write("Payment happened." if paid else "Payment did not happen.")
     for title, block in (
         ("Extracted invoice", lambda: _invoice_block(view.get("invoice") or {})),
@@ -287,15 +355,21 @@ def screen_holds(entries: list[dict], live: bool) -> None:
             paid_amount = (view.get("payment") or {}).get("amount")
             if paid_amount not in (None, ""):
                 amount = paid_amount
-        view = {**view, "amount": amount}
+        view = _with_own_authorization(entry, {**view, "amount": amount})
         st.subheader(view["file"])
         _facts(
-            ("Reason code", "Amount", "Payment"),
-            (reason_code_text(view), format_amount(view["amount"], view["currency"]), payment_text(view["payment_status"])),
+            ("Outcome", "Reason code", "Amount", "Payment"),
+            (
+                ("html", _outcome_badge(view.get("outcome") or "")),
+                ("html", _reason_cell(view)),
+                format_amount(view["amount"], view["currency"]),
+                ("html", _payment_badge(view)),
+            ),
         )
-        if action_text(view):
+        next_action = display_action(view)
+        if next_action:
             st.caption("Next action")
-            st.write(action_text(view))
+            st.write(next_action)
         concerns = concern_text(view.get("critique_concerns"))
         if concerns:
             st.write(concerns)
@@ -320,7 +394,7 @@ def screen_holds(entries: list[dict], live: bool) -> None:
         elif paid_row is not None and not released(view):
             st.caption(already_paid_notice(view, paid_row))
         else:
-            st.caption(pay_block(view) or "This hold cannot be paid.")
+            st.caption(cannot_pay_text(view))
 
 def screen_metrics(entries: list[dict]) -> None:
     st.header("Metrics")
@@ -351,7 +425,7 @@ def _invoice_block(invoice: dict) -> None:
     if not invoice:
         st.write("No invoice was extracted.")
         return
-    fields = [{"Field": label(name), "Value": show_text(invoice[name])} for name in INVOICE_FIELDS if not blank(invoice.get(name))]
+    fields = [{"Field": label(name), "Value": value} for name, value in invoice_field_pairs(invoice)]
     if fields:
         st.dataframe(fields, hide_index=True, width="stretch")
     if invoice.get("warnings"):
@@ -437,13 +511,24 @@ def _tool_heading(call: dict) -> str:
 
 def _pass_list_block(view: dict) -> None:
     rows = pass_list_rows(view)
-    if rows:
-        st.subheader("Pass list")
-        st.caption("An invoice is paid only when all six are true.")
-        st.dataframe(rows, hide_index=True, width="stretch")
+    if not rows:
+        return
+    st.subheader("Pass list")
+    st.caption("An invoice is paid only when all six are true.")
+    lines = []
+    for row in rows:
+        ok = row.get("Result") == "Pass"
+        mark = "✓" if ok else "✗"
+        kind = "pass" if ok else "fail"
+        detail = row.get("Detail") or ""
+        extra = f" <span class='note'>{escape(str(detail))}</span>" if detail else ""
+        lines.append(
+            f"<div class='check'><span class='mark mark-{kind}'>{mark}</span> "
+            f"{escape(str(row.get('Check') or ''))}{extra}</div>"
+        )
+    st.markdown("".join(lines), unsafe_allow_html=True)
 
 def _trail_block(view: dict) -> None:
-    _pass_list_block(view)
     trail = agent_trail(view["logs"], view["amount"])
     if trail["rows"]:
         st.dataframe(
@@ -452,8 +537,10 @@ def _trail_block(view: dict) -> None:
         )
     if "critique" not in {row["stage"] for row in trail["rows"]}:
         st.caption(trail["critique"])
-    if trail["missing"]:
-        st.caption("Not in the logs: " + ", ".join(label(stage) for stage in trail["missing"]))
+    missing = shown_missing_stages(view, trail["missing"])
+    if missing:
+        st.caption("Not in the logs: " + ", ".join(label(stage) for stage in missing))
+    _pass_list_block(view)
     if view["raw_text"]:
         with st.expander("Raw text"):
             st.text(view["raw_text"])
@@ -701,8 +788,11 @@ def _remember_payment(entry: dict, result: dict) -> None:
     if not payment.get("currency"):
         payment["currency"] = invoice.get("currency")
     view = invoice_view({**entry, "state": {**state, "payment": payment}})
+    own = document_authorization(entry.get("ledger_path"), {**view, "authorization": payment.get("authorization") or ""})
+    if own and not payment.get("authorization"):
+        payment["authorization"] = own
     row = paid_ledger_row(entry.get("ledger_path"), view)
-    if row:
+    if row and _ledger_row_is_this_file(row, view):
         if row.get("authorization_key") and not payment.get("authorization"):
             payment["authorization"] = row["authorization_key"]
         if row.get("paid_at") and not payment.get("time"):
@@ -731,13 +821,105 @@ def _flash() -> None:
     if error:
         st.error(error)
 
+def _with_own_authorization(entry: dict, view: dict) -> dict:
+    key = document_authorization(entry.get("ledger_path"), view)
+    if not key or key == view.get("authorization"):
+        if key:
+            return view
+        current = str(view.get("authorization") or "")
+        file_name = str(view.get("file") or "")
+        path_name = Path(current.split(":")[0]).name if current else ""
+        if not (path_name and file_name and path_name != file_name):
+            return view
+        key = ""
+    payment = dict(view.get("payment") or {})
+    if key:
+        payment["authorization"] = key
+    else:
+        payment.pop("authorization", None)
+    return {**view, "authorization": key, "payment": payment}
+
+
+def _live_payable(entry: dict, view: dict):
+    ledger = entry.get("ledger_path") if isinstance(entry, dict) else None
+    if not ledger:
+        return view.get("amount")
+    try:
+        amount = payable_amount(saved_result(entry), ledger)
+    except (OSError, ValueError, TypeError):
+        return view.get("amount")
+    return view.get("amount") if amount is None else amount
+
+
+def _detail_head(view: dict, action: str) -> None:
+    invoice = view.get("invoice") if isinstance(view.get("invoice"), dict) else {}
+    vendor = "" if blank(invoice.get("vendor")) else str(invoice.get("vendor"))
+    amount = format_amount(view.get("amount"), view.get("currency"))
+    bits = [_outcome_badge(view.get("outcome") or "")]
+    if amount:
+        bits.append(f"<span class='amt'>{escape(amount)}</span>")
+    if vendor:
+        bits.append(f"<span>{escape(vendor)}</span>")
+    if action:
+        bits.append(f"<span class='note'>{escape(action)}</span>")
+    st.markdown(f"<div class='detail-head'>{''.join(bits)}</div>", unsafe_allow_html=True)
+
+
+def _outcome_badge(outcome: str) -> str:
+    if not outcome:
+        return ""
+    return _badge(outcome, outcome.upper())
+
+
+def _payment_badge(view: dict) -> str:
+    if released(view):
+        return _badge("released", "Paid after review")
+    if view.get("payment_status") == "paid":
+        return _badge("paid", "Paid")
+    text = payment_text(view.get("payment_status")) or "Not paid"
+    return _badge("unpaid", text)
+
+
+def _reason_cell(view: dict) -> str:
+    code = view.get("reason_code")
+    if blank(code):
+        return escape(reason_code_text(view))
+    return f"<div>{escape(reason_label(code))}</div><div class='code'>{escape(str(code))}</div>"
+
+
+def _ledger_row_is_this_file(row: dict, view: dict) -> bool:
+    from ledger.payments import raw_sha256
+    digest = raw_sha256(view.get("raw_text") or "")
+    if digest and row.get("raw_sha256") == digest:
+        return True
+    source = row.get("source_file") or ""
+    return bool(source) and source == (view.get("file") or "")
+
+
+def _soft_name(name: str) -> str:
+    """Let a long file name wrap at underscores and the extension, not mid-word."""
+    text = escape(name or "")
+    return text.replace("_", "_<wbr>").replace(".", "<wbr>.")
+
+
 def _badge(kind: str, text: str) -> str:
     return f"<span class='badge badge-{escape(kind)}'>{escape(text)}</span>"
 
-def _table(headers: list[str], body: list[str]) -> None:
-    head = "".join(f"<th>{escape(header)}</th>" for header in headers)
+def _table(headers: list[str], body: list[str], *, results: bool = False) -> None:
+    kind = "review-table results" if results else "review-table"
+    classes = ["", "", "", "amt", "", ""] if results else []
+    widths = ["22%", "11%", "16%", "13%", "15%", "23%"] if results else []
+    colgroup = ""
+    if widths:
+        colgroup = "<colgroup>" + "".join(f"<col style='width:{width}'>" for width in widths) + "</colgroup>"
+    head = []
+    for index, header in enumerate(headers):
+        klass = classes[index] if index < len(classes) else ""
+        attr = f" class='{klass}'" if klass else ""
+        head.append(f"<th{attr}>{escape(header)}</th>")
     st.markdown(
-        f"<table class='review-table'><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>",
+        f"<table class='{kind}'>{colgroup}<thead><tr>{''.join(head)}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table>",
         unsafe_allow_html=True,
     )
 

@@ -1,6 +1,7 @@
 """Read a serialized graph result and turn it into screen text."""
 
 import json
+import sqlite3
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -9,7 +10,8 @@ from decision.invoice_fields import normalize_invoice_number
 from decision.outcome import PAYABLE_HOLD_CODES, payment_status, review_release_block
 from decision.pass_list import pass_checks
 from decision.policy import APPROVAL_THRESHOLD_USD
-from ledger.payments import vendor_key
+from decision.wording import ACTION, KEY_REASON_TO_CODE, difference_action
+from ledger.payments import raw_sha256, vendor_key
 from parsers import SUFFIXES, parse_file
 from timestamps import STAMP_FORMAT
 from tool_loop import TOOL_CALL_CAP, TOOL_ROUND_CAP
@@ -120,7 +122,28 @@ def shared_ledger_note(batch_counts: dict | None = None, released: int = 0) -> s
 
 
 TRAIL_STAGES = ("ingestion", "validation", "fraud_review", "approval", "critique", "audit", "payment")
+# A reviewer release pays without these pipeline stages. They are not "missing".
+_RELEASE_SKIPS = frozenset({"approval", "audit", "payment"})
 APPROVED = "Approved, no action needed"
+
+
+def _plain_reasons() -> dict[str, str]:
+    """One label per code, from the answer-key map. Built once."""
+    labels: dict[str, str] = {}
+    for text, code in KEY_REASON_TO_CODE.items():
+        if code and code not in labels:
+            labels[code] = text
+    return labels
+
+
+PLAIN_REASON = _plain_reasons()
+
+
+def reason_label(code) -> str:
+    """Plain-English name for a reason code. The code itself when it has none."""
+    if blank(code):
+        return ""
+    return PLAIN_REASON.get(str(code), str(code))
 INVOICE_FIELDS = (
     "vendor", "vendor_address", "invoice_number", "invoice_number_raw", "revision",
     "invoice_date", "due_date", "currency", "subtotal", "tax_rate", "tax_amount",
@@ -183,10 +206,38 @@ def pass_list_rows(view: dict) -> list[dict]:
         if not view.get("invoice"):
             return []
         checks = pass_checks(view["invoice"], view.get("findings") or [], verdict)
-    return [
+    rows = [
         {"Check": item.get("check"), "Result": "Pass" if item.get("ok") else "Fail", "Detail": item.get("detail")}
         for item in checks if isinstance(item, dict)
     ]
+    if _fraud_review_held(view) and _audit_verdict_from_logs(view) is None:
+        for row in rows:
+            if row.get("Check") == "Audit passed" and row.get("Result") != "Pass":
+                row["Detail"] = "Fraud review held it."
+    return rows
+
+
+def _fraud_review_held(view: dict) -> bool:
+    """True when the fraud-review stage held this invoice."""
+    for row in view.get("logs") or []:
+        if not isinstance(row, dict) or row.get("stage") != "fraud_review":
+            continue
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        if result.get("fraud_verdict") == "hold":
+            return True
+        if result.get("outcome") == "hold" and result.get("reason_code") == "FRAUD_SUSPECTED":
+            return True
+    return False
+
+
+def _audit_verdict_from_logs(view: dict):
+    for row in view.get("logs") or []:
+        if not isinstance(row, dict) or row.get("stage") != "audit":
+            continue
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        if result.get("verdict"):
+            return result["verdict"]
+    return None
 def _place(view: dict, key: str) -> str:
     if view.get("outcome") == "approve" and blank(view.get(key)):
         return APPROVED
@@ -195,6 +246,125 @@ def reason_code_text(view: dict) -> str:
     return _place(view, "reason_code")
 def action_text(view: dict) -> str:
     return _place(view, "action")
+
+
+def display_action(view: dict, payable=None) -> str:
+    """Next action, including a difference that appeared after the original was paid.
+
+    The stored action is whatever the pipeline wrote when this invoice was run.
+    Paying the original later does not rewrite it. The payable amount does change,
+    and that is the amount a clerk would release.
+    """
+    sentence = _difference_sentence(view, payable)
+    if sentence:
+        return sentence
+    return action_text(view)
+
+
+def _difference_sentence(view: dict, payable) -> str:
+    if view.get("payment_status") == "paid":
+        return ""
+    revised = view.get("reason_code") == "REVISED_INVOICE" or any(
+        isinstance(item, dict) and item.get("code") == "REVISED_INVOICE"
+        for item in view.get("findings") or []
+    )
+    if not revised:
+        return ""
+    total = _decimal((view.get("invoice") or {}).get("total"))
+    live = _decimal(view.get("amount") if payable is None else payable)
+    currency = view.get("currency") or ""
+    if total is None or live is None or not currency:
+        return ""
+    if Decimal("0") < live < total:
+        return difference_action(live, currency)
+    return ""
+
+
+def shown_missing_stages(view: dict, missing: list[str]) -> list[str]:
+    """Stages to list as absent. A paid hold did not run approval, audit, or payment."""
+    if released(view):
+        return [stage for stage in missing if stage not in _RELEASE_SKIPS]
+    return list(missing)
+
+
+def cannot_pay_text(view: dict) -> str:
+    """One sentence for a hold the pay form will not offer."""
+    blocked = pay_block(view)
+    if blocked == "Already paid after review.":
+        return blocked
+    code = view.get("reason_code")
+    if isinstance(code, str) and code in ACTION:
+        return ACTION[code]
+    return blocked or "This hold cannot be paid."
+
+
+def invoice_field_pairs(invoice: dict) -> list[tuple[str, str]]:
+    """Extracted fields for the detail table. A raw number equal to the number is omitted."""
+    number = invoice.get("invoice_number")
+    raw = invoice.get("invoice_number_raw")
+    hide_raw = not blank(number) and not blank(raw) and str(number).strip() == str(raw).strip()
+    pairs = []
+    for name in INVOICE_FIELDS:
+        if blank(invoice.get(name)):
+            continue
+        if name == "invoice_number_raw" and hide_raw:
+            continue
+        pairs.append((name, show_text(invoice[name])))
+    return pairs
+
+
+def document_authorization(ledger_path, view: dict) -> str:
+    """This document's authorization, not another file of the same invoice number.
+
+    A revision difference is stored on the supplement row. The payments row is
+    the original invoice, and its key belongs to that file.
+    """
+    own = _supplement_authorization(ledger_path, view)
+    if own:
+        return own
+    current = str(view.get("authorization") or "")
+    if not current:
+        return ""
+    file_name = str(view.get("file") or "")
+    path_name = Path(current.split(":")[0]).name
+    if file_name and path_name and path_name != file_name:
+        return ""
+    return current
+
+
+def _supplement_authorization(ledger_path, view: dict) -> str:
+    if not ledger_path or not isinstance(view, dict):
+        return ""
+    path = Path(ledger_path)
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return ""
+    except OSError:
+        return ""
+    digest = raw_sha256(view.get("raw_text") or "")
+    if not digest:
+        return ""
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=5)
+        try:
+            present = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'payment_supplements'"
+            ).fetchone()
+            if present is None:
+                return ""
+            row = connection.execute(
+                "SELECT authorization_key FROM payment_supplements "
+                "WHERE raw_sha256 = ? AND status = 'paid' ORDER BY rowid DESC LIMIT 1",
+                (digest,),
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return ""
+    if not row or not row[0]:
+        return ""
+    return str(row[0])
 def payment_detail_text(view: dict) -> str:
     """Amount, reviewer, time, and authorization for a payment that happened.
 
@@ -375,7 +545,10 @@ def summarize(entries: list[dict]) -> dict:
         else:
             if outcome in counts:
                 counts[outcome] += 1
-            if amount is not None and outcome in dollars and currency:
+            # A second file of a bill that is already paid is not money still held.
+            # A revision with an unpaid difference still is.
+            skip_dollars = outcome == "hold" and _already_paid_elsewhere(entry, view)
+            if not skip_dollars and amount is not None and outcome in dollars and currency:
                 bucket = dollars if currency == "USD" else other.setdefault(currency, {name: Decimal("0") for name in OUTCOMES})
                 bucket[outcome] += amount
         if view["elapsed_seconds"] is not None:
@@ -387,6 +560,35 @@ def summarize(entries: list[dict]) -> dict:
         "average_seconds": sum(timed) / len(timed) if timed else None,
         "timed_invoices": len(timed), "invoices": len(entries), "timing": timing,
     }
+
+def _already_paid_elsewhere(entry: dict, view: dict) -> bool:
+    """True when this unpaid hold is the same bill as a payment already on its ledger.
+
+    A higher revision that still has a difference is money a reviewer can release.
+    """
+    ledger = entry.get("ledger_path") if isinstance(entry, dict) else None
+    if not ledger or view.get("payment_status") == "paid":
+        return False
+    from ui.runner import paid_ledger_row
+
+    if paid_ledger_row(ledger, view) is None:
+        return False
+    return not _difference_still_due(entry, view, ledger)
+
+
+def _difference_still_due(entry: dict, view: dict, ledger) -> bool:
+    revised = view.get("reason_code") == "REVISED_INVOICE" or any(
+        isinstance(item, dict) and item.get("code") == "REVISED_INVOICE"
+        for item in view.get("findings") or []
+    )
+    if not revised:
+        return False
+    from ui.pay import payable_amount, saved_result
+
+    owed = _decimal(payable_amount(saved_result(entry), ledger))
+    total = _decimal((view.get("invoice") or {}).get("total"))
+    return owed is not None and total is not None and Decimal("0") < owed < total
+
 
 def agent_trail(logs: list[dict], total=None) -> dict:
     rows, seen = [], []
@@ -437,11 +639,22 @@ def detail_index(views: list[dict]) -> int:
         paid = view["payment_status"] == "paid"
         return (warnings > 0 and paid, warnings, paid)
     return max(range(len(views)), key=lambda i: score(views[i])) if views else 0
+_CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£"}
+
+
 def format_amount(amount, currency: str | None) -> str:
+    """$5,000.00 for USD. Another currency keeps its symbol and code, as €9,800.00 EUR."""
     number = _decimal(amount)
     if number is None:
         return ""
-    return f"{number:,.2f} {currency}" if currency else f"{number:,.2f}"
+    text = f"{number:,.2f}"
+    code = "" if currency is None else str(currency).strip().upper()
+    if not code or code == "USD":
+        return f"${text}"
+    symbol = _CURRENCY_SYMBOLS.get(code, "")
+    if symbol:
+        return f"{symbol}{text} {code}"
+    return f"{text} {code}"
 def format_money(amount: Decimal) -> str:
     return f"{amount:,.2f}"
 def _first_amount(invoice, decision, payment):
