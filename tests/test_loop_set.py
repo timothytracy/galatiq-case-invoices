@@ -206,9 +206,12 @@ _2120 = (LOOP / "invoice_2120.txt").read_text(encoding="utf-8")
     "owed",
     [
         "Balance Due        $8,000.00",
+        "Balance Due\t$8,000.00",
         "Balance Due: USD 8,000.00",
         "Balance Due (USD): $8,000.00",
+        "Amount Due (USD): $8,000.00",
         "Remaining to pay: $8,000.00",
+        "Please remit: $8,000.00",
         "Total Due: $8,000.00",
     ],
 )
@@ -273,6 +276,19 @@ def _clean(extra: str) -> str:
     )
 
 
+def test_account_balance_credit_on_2117_is_still_paid(tmp_path, db_path):
+    text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip()
+    text += "\nAccount balance: $500.00 credit\n"
+    path = write_invoice(tmp_path, "c.txt", text)
+    handler, _ = scripted(_read("invoice_2117.txt"), critique={"concerns": [], "stricter": False})
+    result = _run(db_path, path, handler)
+    assert balances_due(text) == []
+    assert "BALANCE_DUE" not in _codes(result)
+    assert result["outcome"] == "approve"
+    assert result["payment"].status == "paid"
+    assert result["payment"].amount == Decimal("10625.00")
+
+
 def test_previous_balance_on_2117_is_still_paid(tmp_path, db_path):
     text = (LOOP / "invoice_2117.txt").read_text(encoding="utf-8").rstrip() + "\nPrevious balance: $0.00\n"
     path = write_invoice(tmp_path, "p.txt", text)
@@ -301,6 +317,9 @@ def test_balance_due_equal_to_the_2117_total_is_still_paid(tmp_path, db_path):
         "Previous balance: $40.00",
         "Prior balance: $40.00",
         "Balance forward: $40.00",
+        "Account balance: $40.00",
+        "Balance Due: $40.00 credit",
+        "Credit balance: $40.00",
     ],
 )
 def test_a_zero_or_carried_balance_on_a_clean_invoice_is_paid(tmp_path, db_path, extra):
